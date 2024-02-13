@@ -22,7 +22,10 @@ class HoverSim():
         new_pose = self.pose + action * 0.1 # simulate reaction after 0.5 secs
         new_pose += np.random.normal(0.0, 0.1, (3,))
         return new_pose
-
+    
+    def eval(self, pose, desired_pose):
+        l2_distance = np.linalg.norm((pose - desired_pose), ord=2)
+        return l2_distance
 
 if __name__ == '__main__':
 
