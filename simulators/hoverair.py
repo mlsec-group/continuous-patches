@@ -18,7 +18,8 @@ class HoverSim():
         # These parameters could later be used to calculate the realtive pose of the image as in the flying_adversarial_patch paper.
 
         action = np.array([(1 - scale_factor), ty, tx])
-        new_pose = self.pose + action * 0.5 # simulate reaction after 0.5 secs
+        # print(action)
+        new_pose = self.pose + action * 0.1 # simulate reaction after 0.5 secs
         new_pose += np.random.normal(0.0, 0.1, (3,))
         return new_pose
 
@@ -28,15 +29,20 @@ if __name__ == '__main__':
     hover = HoverSim()
     all_poses = []
     all_poses.append(hover.pose)
+
+    # check for random parameters
     for _ in range(1000):
-        scale_factor = np.random.uniform(0.01, 2.5)
-        tx = np.random.normal() * 10.
-        ty = np.random.normal() * 10.
+        scale_factor = np.random.uniform(0.01, 1.5)
+        tx = np.random.normal()
+        ty = np.random.normal()
         hover.pose = hover.sim_new_pose(scale_factor, tx, ty)
         all_poses.append(hover.pose)
     
     all_poses = np.array(all_poses)
+    colors = np.linspace(0, 1, len(all_poses))
 
     fig, ax = plt.subplots(1,1)
-    ax.scatter(all_poses.T[0], all_poses.T[1])
+    ax.scatter(all_poses.T[1], all_poses.T[0], c=colors, cmap='Spectral')
+    ax.set_xlabel('y')
+    ax.set_ylabel('x')
     plt.show()
