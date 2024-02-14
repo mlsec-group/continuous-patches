@@ -1,3 +1,0 @@
-[submodule "uav_trajectories"]
-	path = uav_trajectories
-	url = git@github.com:whoenig/uav_trajectories.git
