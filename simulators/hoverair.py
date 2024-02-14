@@ -23,9 +23,9 @@ class HoverSim():
         new_pose += np.random.normal(0.0, 0.1, (3,))
         return new_pose
     
-    def eval(self, pose, desired_pose):
-        l2_distance = np.linalg.norm((pose - desired_pose), ord=2)
-        return l2_distance
+    def eval(self, candidates, desired_pose):
+        l2_distances = np.linalg.norm((candidates - desired_pose), ord=2, axis=1)
+        return l2_distances
 
 if __name__ == '__main__':
 
