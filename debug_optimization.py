@@ -52,7 +52,7 @@ es_params = strategy.default_params
 state = strategy.initialize(rng)
 
 fit_shaper = FitnessShaper(centered_rank=False,
-                           w_decay=0.1,
+                           w_decay=0.0,
                            maximize=False)
 
 for i in range(1000):
@@ -76,10 +76,39 @@ for i in range(1000):
 
     if (i+1) % 50 == 0:
         print("best fitness: ", state.best_fitness)
-    best_params = param_reshaper.reshape_single(state.best_member)
+    best_params = param_reshaper.reshape_single(state.mean)
     out = network.apply(best_params, desired_vector)
     new_pose = hover_sim.sim_new_pose(out)
     hover_sim.update(new_pose)
+
+# eval
+optimized_trajectory = []
+hover_sim.reset()
+current_best_params = param_reshaper.reshape_single(state.best_member)
+
+for desired_pose in hover_sim.target_trajectory:
+    rng, rng_eval = jax.random.split(rng, 2)
+    desired_vector = desired_pose - hover_sim.pose
+    out = network.apply(best_params, desired_vector)
+    new_pose = hover_sim.sim_new_pose(out)
+    optimized_trajectory.append(new_pose)
+
+optimized_trajectory = np.array(optimized_trajectory)
+
+print("Final Tracking error: ", np.linalg.norm(optimized_trajectory-target_trajectory, ord=2))
+
+import matplotlib.pyplot as plt
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+ax.plot(target_trajectory[:, 0], target_trajectory[:, 1], target_trajectory[:, 2], label='Desired Trajectory')
+ax.plot(optimized_trajectory[:, 0], optimized_trajectory[:, 1], optimized_trajectory[:, 2], label='optimized')
+ax.set_xlabel('x')
+ax.set_ylabel('y')
+ax.set_zlabel('z')
+ax.legend()
+# pdf.savefig(fig)
+plt.show()
+# plt.close(fig)
 
 
 # class Evaluator():
