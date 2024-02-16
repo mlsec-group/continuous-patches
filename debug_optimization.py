@@ -9,8 +9,10 @@ from simulators.hoverair import HoverSim
 
 from util import bezier_curve
 
-control_points_bezier = jnp.array([[0, 0, 0], [1, 3, 0.2], [2, -1, 0.6], [3, 2, 1]])
-target_trajectory = bezier_curve(control_points_bezier, 20)
+import numpy as np
+
+control_points_bezier = jnp.array([[0, 0, 0.1], [1, 3, 0.4], [2, -1, 0.8], [3, 2, 1]])
+target_trajectory = jnp.array(bezier_curve(control_points_bezier, 20))
 
 class Evaluator():
     def __init__(self, simulator):
@@ -60,11 +62,16 @@ class Evaluator():
     ) -> chex.ArrayTree:
         """Evaluate a network on a supervised learning task."""
         rng_net, rng_sample = jax.random.split(rng_input)
-        current_waypoint = self.simulator.target_trajectory[self.simulator.current_idx]
-        desired_vector = current_waypoint - self.simulator.pose
+        current_waypoint = self.simulator.target_trajectory[jax.random.randint(rng_sample, (1,), minval=0, maxval=len(self.simulator.target_trajectory)-1)]
+        # print("curr_pose: ", self.simulator.pose, self.simulator.pose.dtype)
+        # print("curr desired waypoit: ", current_waypoint, current_waypoint.dtype)
+        # print(self.simulator.target_trajectory)
+        desired_vector = jnp.subtract(current_waypoint, self.simulator.pose)
+
         sf, tx, ty = self.network(network_params, desired_vector, rng_net)
         new_pose = self.simulator.sim_new_pose(sf, tx, ty)
         loss = self.simulator.eval(new_pose, current_waypoint)
+        # self.simulator.update(new_pose)
 
         # X, y = self.dataloader.sample(rng_sample)
         # y_pred = self.network(network_params, X, rng_net)
@@ -99,7 +106,7 @@ params = network.init(
 )
 
 param_reshaper = ParameterReshaper(params)
-fit_shaper = FitnessShaper(centered_rank=True, w_decay=0.1)
+fit_shaper = FitnessShaper(centered_rank=False, w_decay=0.1)
 
 hover_sim = HoverSim(target_trajectory)
 evaluator = Evaluator(hover_sim)
@@ -111,7 +118,7 @@ es_params = strategy.default_params
 
 state = strategy.initialize(rng, es_params)
 
-for epoch in range(500):
+for epoch in range(10):
     rng, rng_ask, rng_eval, rng_update = jax.random.split(rng, 4)
     x, state = strategy.ask(rng_ask, state, es_params)
     # print(x.shape)
@@ -120,11 +127,11 @@ for epoch in range(500):
     # pred = network.apply(reshaped_x, pholder, rng_eval)
     loss, opt_params = evaluator.rollout(rng_eval, reshaped_x)
     # print(loss, opt_params)
-    fitness_reshaped = fit_shaper.apply(x, loss)
+    fitness_reshaped = fit_shaper.apply(x, loss.mean(axis=1))
     # print(fitness_reshaped)
     state = strategy.tell(x, fitness_reshaped, state)
 
-    current_best_params = param_reshaper.reshape(state.best_member.reshape(1, -1))
+    current_best_params = param_reshaper.reshape(state.mean.reshape(1, -1))
     _, opt_params = evaluator.rollout(rng_update, current_best_params)
     # current_waypoint = evaluator.simulator.target_trajectory[evaluator.simulator.current_idx]
     # desired_vector = current_waypoint - evaluator.simulator.pose
@@ -133,6 +140,37 @@ for epoch in range(500):
     #                                desired_vector, rng_update)
     new_pose = evaluator.simulator.sim_new_pose(*opt_params[0])
     evaluator.simulator.update(new_pose)
+    print(new_pose)
+    print(evaluator.simulator.pose)
+    # print(evaluator.simulator.pose, evaluator.simulator.current_idx)
 
-    if (epoch + 1) % 50 == 0:
+    if (epoch + 1) % 1 == 0:
         print(f"OpenES - # GEN: {epoch+1} | Fitness: {state.best_fitness}")
+
+# eval
+optimized_trajectory = []
+evaluator.simulator.reset()
+current_best_params = param_reshaper.reshape(state.best_member.reshape(1, -1))
+
+for desired_pose in evaluator.simulator.target_trajectory:
+    rng, rng_eval = jax.random.split(rng, 2)
+    _, opt_params = evaluator.rollout(rng_update, current_best_params)
+    new_pose = evaluator.simulator.sim_new_pose(*opt_params[0])
+    optimized_trajectory.append(new_pose)
+
+optimized_trajectory = np.array(optimized_trajectory)
+
+print("Final Tracking error: ", np.linalg.norm(optimized_trajectory-target_trajectory, ord=2))
+
+import matplotlib.pyplot as plt
+fig = plt.figure()
+ax = fig.add_subplot(111, projection='3d')
+ax.plot(target_trajectory[:, 0], target_trajectory[:, 1], target_trajectory[:, 2], label='Desired Trajectory')
+ax.plot(optimized_trajectory[:, 0], optimized_trajectory[:, 1], optimized_trajectory[:, 2], label='optimized')
+ax.set_xlabel('x')
+ax.set_ylabel('y')
+ax.set_zlabel('z')
+ax.legend()
+# pdf.savefig(fig)
+plt.show()
+# plt.close(fig)
