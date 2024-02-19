@@ -14,10 +14,14 @@ import numpy as np
 control_points_bezier = np.array([[0, 0, 0.1], [1, 3, 0.4], [2, -1, 0.8], [3, 2, 1]])
 target_trajectory = np.array(bezier_curve(control_points_bezier, 20))
 
+# def calc_tracking_error(params, ):
+#     sim = HoverSim(target_trajectory)
+
+
 rng = jax.random.PRNGKey(0)
 
 network = NetworkMapper["MLP"](
-            num_hidden_units = 5,
+            num_hidden_units = 32,
             num_hidden_layers = 1,
             num_output_units = 3,
             hidden_activation = "relu"
@@ -52,7 +56,7 @@ es_params = strategy.default_params
 state = strategy.initialize(rng)
 
 fit_shaper = FitnessShaper(centered_rank=False,
-                           w_decay=0.0,
+                           w_decay=0.1,
                            maximize=False)
 
 for i in range(1000):
@@ -84,7 +88,7 @@ for i in range(1000):
 # eval
 optimized_trajectory = []
 hover_sim.reset()
-current_best_params = param_reshaper.reshape_single(state.best_member)
+current_best_params = param_reshaper.reshape_single(state.mean)
 
 for desired_pose in hover_sim.target_trajectory:
     rng, rng_eval = jax.random.split(rng, 2)
@@ -107,6 +111,7 @@ ax.set_ylabel('y')
 ax.set_zlabel('z')
 ax.legend()
 # pdf.savefig(fig)
+plt.savefig("results/debugging_4.jpg", dpi=120)
 plt.show()
 # plt.close(fig)
 
