@@ -24,14 +24,14 @@ class HoverSim():
         action = jnp.array([(1 - scale_factor), ty, tx])
         # print(action)
         new_pose = self.pose + action * 0.5 # simulate reaction after 0.5 secs
-        new_pose += np.random.normal(0.0, 0.1, (3,))
+        # new_pose += np.random.normal(0.0, 0.1, (3,))
         return new_pose
     
     def update(self, pose):
         self.pose = pose
         self.current_idx += 1
-        if self.current_idx >= len(self.target_trajectory):
-            self.reset()
+        # if self.current_idx >= len(self.target_trajectory):
+        #     self.reset()
 
     def reset(self):
         self.pose = jnp.array([0., 0., 0.])

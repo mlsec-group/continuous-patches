@@ -1,7 +1,8 @@
 import jax
 import jax.numpy as jnp
 
-from evosax import OpenES, CMA_ES, ParameterReshaper, NetworkMapper, FitnessShaper
+from evosax import OpenES, CMA_ES, PGPE, ParameterReshaper, NetworkMapper, FitnessShaper
+from evosax.utils import ESLog
 # from evosax.problems import VisionFitness
 
 import chex
@@ -11,30 +12,53 @@ from util import bezier_curve
 
 import numpy as np
 
-control_points_bezier = np.array([[0, 0, 0.1], [1, 3, 0.4], [2, -1, 0.8], [3, 2, 1]])
+control_points_bezier = np.array([[0, 0, 0.0], [1, 3, 0.4], [2, -1, 0.8], [3, 2, 1]])
 target_trajectory = np.array(bezier_curve(control_points_bezier, 20))
 
-# def calc_tracking_error(params, ):
-#     sim = HoverSim(target_trajectory)
+def calc_tracking_error(params_unshaped):
+    sim = HoverSim(target_trajectory)
+    rng = jax.random.PRNGKey(0)
+    # optimized_trajectory = []
+    params = param_reshaper.reshape_single(params_unshaped)
+    distances = []
 
+    for desired_pose in sim.target_trajectory:
+        rng, rng_eval = jax.random.split(rng, 2)
+        # desired_vector = desired_pose - sim.pose
+        out = network.apply(params, jnp.array([*sim.pose, *desired_pose]))
+        # out = network.apply(params, desired_vector)
+        new_pose = sim.sim_new_pose(out)
+        # print(new_pose)
+        distances.append(jnp.linalg.norm(new_pose-desired_pose, ord=2))
+        sim.update(new_pose)
+        # print(sim.pose)
+        # optimized_trajectory.append(new_pose)
+
+    distances = jnp.array(distances)
+    # print(distances.shape)
+    tracking_error = jnp.sum(distances)
+    loss = tracking_error + jnp.max(distances)
+    return loss
+
+    # optimized_trajectory = np.array(optimized_trajectory)
 
 rng = jax.random.PRNGKey(0)
 
 network = NetworkMapper["MLP"](
-            num_hidden_units = 32,
-            num_hidden_layers = 1,
+            num_hidden_units = 5,
+            num_hidden_layers = 2,
             num_output_units = 3,
             hidden_activation = "relu"
         )
 
-pholder = jnp.zeros((3,))
+pholder = jnp.zeros((6,))
 params = network.init(
     rng,
     x=pholder,
     rng=rng,
 )
 
-print(params)
+# print(params)
 param_reshaper = ParameterReshaper(params)
 # flattened_params = param_reshaper.flatten_single(params)
 # reshaped_params = param_reshaper.reshape_single(flattened_params)
@@ -48,9 +72,13 @@ hover_sim = HoverSim(target_trajectory)
 
 vmap_network_apply = jax.vmap(network.apply, in_axes=(0, None))
 vmap_new_poses = jax.vmap(hover_sim.sim_new_pose, in_axes=0)
-vmap_loss = jax.vmap(hover_sim.eval, in_axes=(0, None))
+vmap_loss = jax.vmap(calc_tracking_error, in_axes=0)
 
-strategy = OpenES(popsize=100, num_dims=param_reshaper.total_params, opt_name="adam")
+# strategy = CMA_ES(popsize=10, num_dims=param_reshaper.total_params, elite_ratio=0.1, mean_decay=0.1)
+strategy = OpenES(popsize=100, num_dims=param_reshaper.total_params, opt_name="adam", lrate_init=0.1)
+# strategy = PGPE(popsize=100, num_dims=param_reshaper.total_params,
+#                 elite_ratio=0.1, opt_name="adam")
+
 es_params = strategy.default_params
 
 state = strategy.initialize(rng)
@@ -59,9 +87,16 @@ fit_shaper = FitnessShaper(centered_rank=False,
                            w_decay=0.1,
                            maximize=False)
 
-for i in range(1000):
+es_logging = ESLog(param_reshaper.total_params,
+                   num_generations=500,
+                   top_k=5,
+                   maximize=False)
+log = es_logging.initialize()
+
+for i in range(500):
     rng, rng_ask = jax.random.split(rng, 2)
     params, state = strategy.ask(rng_ask, state, es_params)
+    # print(params.shape)
     reshaped_params = param_reshaper.reshape(params)
     # print(reshaped_params.)
     desired_vector = hover_sim.target_trajectory[hover_sim.current_idx] - hover_sim.pose
@@ -69,32 +104,43 @@ for i in range(1000):
     # out = [network.apply(reshaped_param, desired_vector) for reshaped_param in reshaped_params]
 
 
-    outputs_batch = vmap_network_apply(reshaped_params, desired_vector)
+    #outputs_batch = vmap_network_apply(reshaped_params, desired_vector)
     # print(outputs_batch.shape)
-    new_poses_batch = vmap_new_poses(outputs_batch)
+    #new_poses_batch = vmap_new_poses(outputs_batch)
     # print(new_poses_batch.shape)
-    losses = vmap_loss(new_poses_batch, hover_sim.target_trajectory[hover_sim.current_idx])
+    #losses = vmap_loss(new_poses_batch, hover_sim.target_trajectory[hover_sim.current_idx])
+    # print(reshaped_params)
+    losses = vmap_loss(params)#jnp.array([calc_tracking_error(param_set) for param_set in params])
+    # print(losses)
     fitness_reshaped = fit_shaper.apply(params, losses)
     # print(fitness_reshaped.shape)
     state = strategy.tell(params, fitness_reshaped, state)
+    log = es_logging.update(log, params, losses)
 
-    if (i+1) % 50 == 0:
-        print("best fitness: ", state.best_fitness)
-    best_params = param_reshaper.reshape_single(state.mean)
-    out = network.apply(best_params, desired_vector)
-    new_pose = hover_sim.sim_new_pose(out)
-    hover_sim.update(new_pose)
+    if (i+1) % 10 == 0:
+        # print("best fitness: ", state.best_fitness)
+        print("Generation: ", i+1, "Performance: ", log["log_top_1"][i])
+    # best_params = param_reshaper.reshape_single(state.best_member)
+    # out = network.apply(best_params, desired_vector)
+    # new_pose = hover_sim.sim_new_pose(out)
+    # hover_sim.update(new_pose)
+
+
+logger_fig, logger_ax = es_logging.plot(log, "Train loss")
+logger_fig.savefig("results/openes_losses.jpg", dpi=120)
 
 # eval
 optimized_trajectory = []
 hover_sim.reset()
-current_best_params = param_reshaper.reshape_single(state.mean)
+current_best_params = param_reshaper.reshape_single(state.best_member)
 
 for desired_pose in hover_sim.target_trajectory:
     rng, rng_eval = jax.random.split(rng, 2)
-    desired_vector = desired_pose - hover_sim.pose
-    out = network.apply(best_params, desired_vector)
+    # desired_vector = desired_pose - hover_sim.pose
+    out = network.apply(current_best_params, jnp.array([*hover_sim.pose, *desired_pose]))
+    # out = network.apply(current_best_params, desired_vector)
     new_pose = hover_sim.sim_new_pose(out)
+    hover_sim.update(new_pose)
     optimized_trajectory.append(new_pose)
 
 optimized_trajectory = np.array(optimized_trajectory)
@@ -111,7 +157,7 @@ ax.set_ylabel('y')
 ax.set_zlabel('z')
 ax.legend()
 # pdf.savefig(fig)
-plt.savefig("results/debugging_4.jpg", dpi=120)
+plt.savefig("results/debugging_openes.jpg", dpi=120)
 plt.show()
 # plt.close(fig)
 
