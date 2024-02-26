@@ -24,7 +24,7 @@ class HoverSim():
         action = jnp.array([(1 - scale_factor), ty, tx])
         # print(action)
         new_pose = self.pose + action * 0.5 # simulate reaction after 0.5 secs
-        # new_pose += np.random.normal(0.0, 0.1, (3,))
+        new_pose += np.random.normal(scale=0.01, size=(3,)) # add a tiny bit of noise to the new pose
         return new_pose
     
     def update(self, pose):
