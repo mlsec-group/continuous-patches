@@ -2,6 +2,8 @@ import torch
 import os, sys
 import cv2
 import numpy as np
+import jax
+import jax.numpy as jnp
 
 sys.path.append('simulators/pulp-frontnet/PyTorch/Frontnet')
 
@@ -22,9 +24,14 @@ class CFSim():
         self.current_idx = 0
         self.target_trajectory = target_trajectory
 
+        # might be deleted later, the dataset is only loaded to get a suitable background image
         dataset, _ = self.load_dataset(dataset_path)
         base_img, gt = dataset.dataset.__getitem__(0)
         self.base_img = base_img.squeeze(0).numpy()
+
+        # patch stays random for now and inside the simulator for compatibility with current
+        # optimize script
+        self.patch = np.random.rand(10, 10) * 255. # load one of the optimized FAPs instead!
 
     def load_model(self, path, device, config="160x32"):
         """
@@ -80,34 +87,48 @@ class CFSim():
 
         return train_loader, test_loader
     
+    # additional wrapper to hand over parameters easily
+    def _warp_perspective_wrapper(self, patch, T, width, height, flags):
+        return cv2.warpPerspective(patch, T, (int(height), int(width)), flags=int(flags)).astype(patch.dtype)
+    
+    # needed to work with the intermediate values stored in T
+    # this is necessary due to:
+    # https://jax.readthedocs.io/en/latest/faq.html#how-can-i-convert-a-jax-tracer-to-a-numpy-array
+    # https://jax.readthedocs.io/en/latest/notebooks/thinking_in_jax.html#jit-mechanics-tracing-and-static-variables
+    def warp_perspective_callback(self, patch, T, shape):
+        result_shape_dtype = jax.core.ShapedArray(shape, patch.dtype)
+        mod_img = jax.pure_callback(self._warp_perspective_wrapper, result_shape_dtype, patch, T, *shape, cv2.INTER_NEAREST)
+        return mod_img
+    
     def project_patch(self, patch, T, image):
         # using cv2 to project the patch instead of FAP place_patch() function,
         # since we don't need to calculate gradients
-        height, width = image.shape[:2]
+        width, height = image.shape[:2]
+        # print(height, width)
         mask = np.ones_like(patch)
-        warped_patch = cv2.warpPerspective(patch, T, (width, height), flags=cv2.INTER_NEAREST)
-        mask = cv2.warpPerspective(mask, T, (width, height), flags=cv2.INTER_NEAREST)
+        # warped_patch = cv2.warpPerspective(patch, jnp.asarray(T.copy(), dtype=np.float64), (width, height), flags=cv2.INTER_NEAREST)
+        # mask = cv2.warpPerspective(mask, jnp.asarray(T.copy()), (width, height), flags=cv2.INTER_NEAREST)
+        warped_patch = self.warp_perspective_callback(patch, T, (width, height))#cv2.warpPerspective(patch, np.array(T.copy()), (width, height), flags=cv2.INTER_NEAREST)
+        mask = self.warp_perspective_callback(mask, T, (width, height))#cv2.warpPerspective(mask, np.array(T.copy()), (width, height), flags=cv2.INTER_NEAREST)
         mod_img = image * ~mask.astype(bool)
         mod_img += warped_patch
 
-        return mod_img
+        return np.array(mod_img, dtype=np.float32) # return a np array instead of jnp array and convert to double
     
-    def sim_new_pose(self, patch, T):
-        mod_img = self.project_patch(patch, T, self.base_img)
+    def sim_new_pose(self, params):
+        scale_factor, tx, ty = params
+        T = jnp.array([[scale_factor, 0, tx],
+                 [0, scale_factor, ty],
+                 [0, 0, 1.]])
+        
+        mod_img = self.project_patch(self.patch, T, self.base_img)
         mod_img_t = torch.tensor(mod_img).unsqueeze(0).unsqueeze(0).to(self.device)
         prediction = self.pose_estimator(mod_img_t)
         predicted_pose = self._pred_to_numpy(prediction)
         
         new_setpoint = self._controller_setpoint(predicted_pose)
-        
-        # TODO: this is probably not correct, check how the new setpoint is reached in CF firmware code!
-        action = new_setpoint - self.pose
-        new_pose = self.pose + action * 0.5 # simulate reaction after 0.5 secs
 
-
-        new_pose += np.random.normal(scale=0.01, size=(4,)) # add a tiny bit of noise to the new pose
-        
-        return new_pose
+        return new_setpoint
 
     def _controller_setpoint(self, predicted_pose):
         quats = rowan.from_euler(0., 0., self.pose[3], convention='xyz') # returns qw, qx, qy, qz
@@ -150,7 +171,7 @@ class CFSim():
 
 
 if __name__ == '__main__':
-    
+    jax.config.update("jax_enable_x64", True)
     model_path = "simulators/pulp-frontnet/PyTorch/Models/Frontnet160x32.pt"
     dataset_path = "simulators/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"
 
@@ -162,7 +183,7 @@ if __name__ == '__main__':
 
     cf_sim = CFSim(target_trajectory, model_path)
 
-    patch = np.random.rand(10, 10) * 255.
+    # patch = np.random.rand(10, 10) * 255.
 
     sf = 5.
     tx = 80.
@@ -173,10 +194,10 @@ if __name__ == '__main__':
                  [0, 0, 1.]])
     
     import matplotlib.pyplot as plt
-    mod_img = cf_sim.project_patch(patch, T, cf_sim.base_img)
+    mod_img = cf_sim.project_patch(cf_sim.patch, T, cf_sim.base_img)
     plt.imshow(mod_img, cmap='gray')
 
-    new_pose = cf_sim.sim_new_pose(patch, T)
+    new_pose = cf_sim.sim_new_pose([sf, tx, ty])
     print(new_pose)
 
     plt.show()

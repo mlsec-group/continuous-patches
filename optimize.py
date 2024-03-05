@@ -1,11 +1,13 @@
 import jax
+jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 
 from evosax import Strategies, ParameterReshaper, NetworkMapper, FitnessShaper
 from evosax.utils import ESLog
 # from evosax.problems import VisionFitness
 
-from simulators.hoverair import HoverSim
+#from simulators.hoverair import BBSimulator as BBSimulator
+from simulators.cf_frontnet import CFSim as BBSimulator
 
 from util import bezier_curve
 
@@ -74,8 +76,8 @@ class BBOptimizer():
         return self.param_reshaper.reshape_single(state.best_member), self.es_logging, self.log  # return best parameter set and logger for bookkeeping
 
     def calc_tracking_error(self, params_unshaped):
-        sim = HoverSim(self.target_trajectory)                               # initialize new simulator for each parameter candidate
-        sim.pose = target_trajectory[0]
+        sim = BBSimulator(self.target_trajectory)                               # initialize new simulator for each parameter candidate
+        sim.pose = self.target_trajectory[0]
         rng = jax.random.PRNGKey(0)
 
         params = self.param_reshaper.reshape_single(params_unshaped)    # get parameter candidate in correct shape so that they can be used as NN parameters
@@ -99,7 +101,7 @@ class BBOptimizer():
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
     from pathlib import Path
-    path = Path('results/')
+    path = Path('results/cfsim/')
     path.mkdir(parents=True, exist_ok=True)
 
     rng = jax.random.PRNGKey(0)                         # set rng key
@@ -128,7 +130,7 @@ if __name__ == '__main__':
     optimized_trajectory = []
     distances = []
 
-    hover_sim = HoverSim(target_trajectory)
+    hover_sim = BBSimulator(target_trajectory)
     hover_sim.reset()
 
     for desired_pose in hover_sim.target_trajectory:
