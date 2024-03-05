@@ -5,6 +5,11 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
+from copy import deepcopy
+
+from dlpack import asdlpack
+
+
 sys.path.append('simulators/pulp-frontnet/PyTorch/Frontnet')
 
 from Frontnet import FrontnetModel
@@ -31,7 +36,7 @@ class CFSim():
 
         # patch stays random for now and inside the simulator for compatibility with current
         # optimize script
-        self.patch = np.random.rand(10, 10) * 255. # load one of the optimized FAPs instead!
+        self.patch = np.random.rand(10, 10).astype(np.float32) * 255. # load one of the optimized FAPs instead!
 
     def load_model(self, path, device, config="160x32"):
         """
@@ -106,14 +111,20 @@ class CFSim():
         width, height = image.shape[:2]
         # print(height, width)
         mask = np.ones_like(patch)
+        copied_t = deepcopy(T)
         # warped_patch = cv2.warpPerspective(patch, jnp.asarray(T.copy(), dtype=np.float64), (width, height), flags=cv2.INTER_NEAREST)
         # mask = cv2.warpPerspective(mask, jnp.asarray(T.copy()), (width, height), flags=cv2.INTER_NEAREST)
-        warped_patch = self.warp_perspective_callback(patch, T, (width, height))#cv2.warpPerspective(patch, np.array(T.copy()), (width, height), flags=cv2.INTER_NEAREST)
-        mask = self.warp_perspective_callback(mask, T, (width, height))#cv2.warpPerspective(mask, np.array(T.copy()), (width, height), flags=cv2.INTER_NEAREST)
+        # print(T, T.shape)
+        # warped_patch = transforms.apply_transform(patch, T, mask_value=jnp.array([255]), bilinear=False).squeeze(2)
+        # mask = transforms.apply_transform(mask, T, mask_value=jnp.array([255]), bilinear=False).squeeze(2)
+
+        warped_patch = self.warp_perspective_callback(patch, copied_t, (width, height))
+        mask = self.warp_perspective_callback(mask, copied_t, (width, height))
+
         mod_img = image * ~mask.astype(bool)
         mod_img += warped_patch
 
-        return np.array(mod_img, dtype=np.float32) # return a np array instead of jnp array and convert to double
+        return mod_img # return a np array instead of jnp array and convert to double
     
     def sim_new_pose(self, params):
         scale_factor, tx, ty = params
@@ -121,8 +132,9 @@ class CFSim():
                  [0, scale_factor, ty],
                  [0, 0, 1.]])
         
-        mod_img = self.project_patch(self.patch, T, self.base_img)
-        mod_img_t = torch.tensor(mod_img).unsqueeze(0).unsqueeze(0).to(self.device)
+        mod_img = asdlpack(self.project_patch(self.patch, T, self.base_img))
+
+        mod_img_t = torch.from_dlpack(mod_img).unsqueeze(0).unsqueeze(0).to(self.device)
         prediction = self.pose_estimator(mod_img_t)
         predicted_pose = self._pred_to_numpy(prediction)
         
@@ -171,7 +183,7 @@ class CFSim():
 
 
 if __name__ == '__main__':
-    jax.config.update("jax_enable_x64", True)
+    jax.config.update("jax_enable_x64", False)
     model_path = "simulators/pulp-frontnet/PyTorch/Models/Frontnet160x32.pt"
     dataset_path = "simulators/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"
 
@@ -189,7 +201,7 @@ if __name__ == '__main__':
     tx = 80.
     ty = 40.
 
-    T = np.array([[sf, 0, tx],
+    T = jnp.array([[sf, 0, tx],
                  [0, sf, ty],
                  [0, 0, 1.]])
     
