@@ -17,12 +17,19 @@ from DataProcessor import DataProcessor
 from Dataset import Dataset
 from torch.utils import data
 
+# from torch2jax import t2j
+# from imax import transforms
+
+# import jax.lax as lax
+
 import rowan
 
 class CFSim():
     def __init__(self, target_trajectory, model_path="simulators/pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", dataset_path="simulators/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.pose_estimator = self.load_model(model_path, self.device)
+        
+        pytorch_model = self.load_model(model_path, self.device)
+        self.pose_estimator = pytorch_model
         
         self.pose = np.array([0., 0., 0., 0.]) # x, y, z, yaw
         
@@ -36,7 +43,7 @@ class CFSim():
 
         # patch stays random for now and inside the simulator for compatibility with current
         # optimize script
-        self.patch = np.random.rand(10, 10).astype(np.float32) * 255. # load one of the optimized FAPs instead!
+        self.patch = np.random.rand(10, 10, 1).astype(np.float32) * 255. # load one of the optimized FAPs instead!
 
     def load_model(self, path, device, config="160x32"):
         """
@@ -110,16 +117,20 @@ class CFSim():
         # since we don't need to calculate gradients
         width, height = image.shape[:2]
         # print(height, width)
-        mask = np.ones_like(patch)
-        copied_t = deepcopy(T)
+        mask = jnp.ones_like(patch)
+        # print(jnp.asarray(T.copy(), dtype=np.float64), jnp.asarray(T.copy(), dtype=np.float64).dtype)
+        # copied_t = deepcopy(T)
         # warped_patch = cv2.warpPerspective(patch, jnp.asarray(T.copy(), dtype=np.float64), (width, height), flags=cv2.INTER_NEAREST)
         # mask = cv2.warpPerspective(mask, jnp.asarray(T.copy()), (width, height), flags=cv2.INTER_NEAREST)
         # print(T, T.shape)
         # warped_patch = transforms.apply_transform(patch, T, mask_value=jnp.array([255]), bilinear=False).squeeze(2)
         # mask = transforms.apply_transform(mask, T, mask_value=jnp.array([255]), bilinear=False).squeeze(2)
 
-        warped_patch = self.warp_perspective_callback(patch, copied_t, (width, height))
-        mask = self.warp_perspective_callback(mask, copied_t, (width, height))
+        #warped_patch = self.warp_perspective_callback(patch, T, (width, height))
+        #mask = self.warp_perspective_callback(mask, T, (width, height))
+
+        warped_patch = self.warpPerspective(patch, T, (height, width))
+        mask = self.warpPerspective(mask, T, (height, width))
 
         mod_img = image * ~mask.astype(bool)
         mod_img += warped_patch
@@ -183,7 +194,9 @@ class CFSim():
 
 
 if __name__ == '__main__':
-    jax.config.update("jax_enable_x64", False)
+    jax.config.update("jax_enable_x64", True)
+    # jax.config.update('jax_disable_jit', True)
+
     model_path = "simulators/pulp-frontnet/PyTorch/Models/Frontnet160x32.pt"
     dataset_path = "simulators/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"
 
@@ -195,21 +208,56 @@ if __name__ == '__main__':
 
     cf_sim = CFSim(target_trajectory, model_path)
 
-    # patch = np.random.rand(10, 10) * 255.
+    # print(cf_sim.pose_estimator.state_dict().keys())
 
-    sf = 5.
-    tx = 80.
-    ty = 40.
+    frontnet_jax = {}
 
-    T = jnp.array([[sf, 0, tx],
-                 [0, sf, ty],
-                 [0, 0, 1.]])
+    for key, tensor in zip(cf_sim.pose_estimator.state_dict().keys(), cf_sim.pose_estimator.state_dict().values()):
+
+        if 'conv' in key:
+            # [outC, inC, kH, kW] -> [kH, kW, inC, outC]
+            conv_kernel = jnp.transpose(tensor.detach().cpu().numpy(), (2, 3, 1, 0))
+            frontnet_jax[key] = conv_kernel
+
+        if 'bn' in key:
+            if 'num_batches tracked' in key:
+                continue
+            else:
+                bn = jnp.array(tensor.detach().cpu().numpy())
+                frontnet_jax[key] = bn
+
+        if 'fc' in key:
+            if 'weight' in key:
+                # [outC, inC] -> [inC, outC]
+                fc = jnp.transpose(tensor.detach().cpu().numpy(), (1, 0))
+            if 'bias' in key:
+                fc = jnp.array(tensor.detach().cpu().numpy())
+
+            
+            frontnet_jax[key] = fc
+
+    print(frontnet_jax.keys())
+
+    # print(frontnet_jax)
+        # match key:
+        #     case 'conv':
+        #         print(key)
+
+    # # patch = np.random.rand(10, 10) * 255.
+
+    # sf = 5.
+    # tx = 80.
+    # ty = 40.
+
+    # T = jnp.array([[sf, 0, tx],
+    #              [0, sf, ty],
+    #              [0, 0, 1.]])
     
-    import matplotlib.pyplot as plt
-    mod_img = cf_sim.project_patch(cf_sim.patch, T, cf_sim.base_img)
-    plt.imshow(mod_img, cmap='gray')
+    # import matplotlib.pyplot as plt
+    # mod_img = cf_sim.project_patch(cf_sim.patch, T, cf_sim.base_img)
+    # plt.imshow(mod_img, cmap='gray')
 
-    new_pose = cf_sim.sim_new_pose([sf, tx, ty])
-    print(new_pose)
+    # new_pose = cf_sim.sim_new_pose([sf, tx, ty])
+    # print(new_pose)
 
-    plt.show()
+    # plt.show()
