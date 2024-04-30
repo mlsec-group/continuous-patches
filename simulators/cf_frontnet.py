@@ -191,7 +191,50 @@ class CFSim():
     def eval(self, pose, desired_pose):
         l2_distances = np.linalg.norm((pose - desired_pose), ord=2)#, axis=1)
         return l2_distances
+    
+from flax import linen as nn
+class JModel(nn.Module):
+  
+  def setup(self, state_dict):
+    self.state_dict = state_dict
+    self.conv_0 = nn.Conv(features=32, kernel_size=5, strides=2, padding=((2,2), (2,2)), use_bias=False)
+    self.bn_0 = nn.BatchNorm(momentum=0.9, use_running_average=True)
+    # relu
+    # maxpool
 
+
+    # conv block 1
+    self.conv_1_1 = nn.Conv(features=32, kernel_size=3, strides=2, padding=((1,1), (1,1)), use_bias=False)
+    self.bn_1_1 = nn.BatchNorm(momentum=0.9, use_running_average=True)
+    # relu
+    self.conv_1_2 = nn.Conv(32, kernel_size=3, strides=1, padding=((1,1), (1,1)), use_bias=False)
+    self.bn_1_2 = nn.BatchNorm(momentum=0.9, use_running_average=True)
+    # relu
+
+    # conv block 2
+    self.conv_2_1 = nn.Conv(features=32*2, kernel_size=3, strides=2, padding=((1,1), (1,1)), use_bias=False)
+    self.bn_2_1 = nn.BatchNorm(momentum=0.9, use_running_average=True)
+    # relu
+    self.conv_2_2 = nn.Conv(32*2, kernel_size=3, strides=1, padding=((1,1), (1,1)), use_bias=False)
+    self.bn_2_2 = nn.BatchNorm(momentum=0.9, use_running_average=True)
+    # relu
+
+    # conv block 3
+    self.conv_3_1 = nn.Conv(features=32*4, kernel_size=3, strides=2, padding=((1,1), (1,1)), use_bias=False)
+    self.bn_3_1 = nn.BatchNorm(momentum=0.9, use_running_average=True)
+    # relu
+    self.conv_3_2 = nn.Conv(32*4, kernel_size=3, strides=1, padding=((1,1), (1,1)), use_bias=False)
+    self.bn_3_2 = nn.BatchNorm(momentum=0.9, use_running_average=True)
+    # relu
+
+    self.fc = nn.Dense(features=4)
+
+  @nn.compact
+  def __call__(self, x):
+    conv5x5 = self.conv_0(x)
+    bn_0 = self.bn_0(conv5x5)
+    relu_0 = nn.relu(bn_0)
+    max_pool = nn.max_pool(relu_0, window_shape=(2,2), strides=(2,2), padding=((0,0), (0, 0)))
 
 if __name__ == '__main__':
     jax.config.update("jax_enable_x64", True)
@@ -210,21 +253,25 @@ if __name__ == '__main__':
 
     # print(cf_sim.pose_estimator.state_dict().keys())
 
-    frontnet_jax = {}
+    frontnet_jax = {'params': {},
+                    'batch_stats': {}}
 
     for key, tensor in zip(cf_sim.pose_estimator.state_dict().keys(), cf_sim.pose_estimator.state_dict().values()):
 
         if 'conv' in key:
             # [outC, inC, kH, kW] -> [kH, kW, inC, outC]
             conv_kernel = jnp.transpose(tensor.detach().cpu().numpy(), (2, 3, 1, 0))
-            frontnet_jax[key] = conv_kernel
+            
 
         if 'bn' in key:
             if 'num_batches tracked' in key:
                 continue
+            if 'mean' in key or 'var' in key:
+                bn = jnp.array(tensor.detach().cpu().numpy())
+                frontnet_jax['batch_stats'][key] = bn
             else:
                 bn = jnp.array(tensor.detach().cpu().numpy())
-                frontnet_jax[key] = bn
+                frontnet_jax['params'][key] = bn
 
         if 'fc' in key:
             if 'weight' in key:
@@ -234,9 +281,9 @@ if __name__ == '__main__':
                 fc = jnp.array(tensor.detach().cpu().numpy())
 
             
-            frontnet_jax[key] = fc
+            frontnet_jax['params'][key] = fc
 
-    print(frontnet_jax.keys())
+    print(frontnet_jax['params'].keys())
 
     # print(frontnet_jax)
         # match key:
