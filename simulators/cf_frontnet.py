@@ -200,45 +200,79 @@ class JModel(nn.Module):
     self.conv_0 = nn.Conv(features=32, kernel_size=(5,5), strides=(2,2), 
                           padding=((2,2), (2,2)), use_bias=False, name='conv_0')
     self.bn_0 = nn.BatchNorm(momentum=0.9, use_running_average=True, name='bn_0')
-    # # relu
-    # # maxpool
+    # relu
+    # maxpool
 
 
-    # # conv block 1
+    # conv block 1
     self.conv_1 = nn.Conv(features=32, kernel_size=(3, 3), strides=(2,2), 
                           padding=((1,1), (1,1)), use_bias=False, name='conv_1')
     self.bn_1 = nn.BatchNorm(momentum=0.9, use_running_average=True, name='bn_1')
-    # # relu
+    # relu
     self.conv_2 = nn.Conv(32, kernel_size=(3, 3), strides=(1,1), 
                           padding=((1,1), (1,1)), use_bias=False, name='conv_2')
     self.bn_2 = nn.BatchNorm(momentum=0.9, use_running_average=True, name='bn_2')
-    # # relu
+    # relu
 
-    # # conv block 2
-    # self.conv_2_1 = nn.Conv(features=32*2, kernel_size=3, strides=2, padding=((1,1), (1,1)), use_bias=False)
-    # self.bn_2_1 = nn.BatchNorm(momentum=0.9, use_running_average=True)
-    # # relu
-    # self.conv_2_2 = nn.Conv(32*2, kernel_size=3, strides=1, padding=((1,1), (1,1)), use_bias=False)
-    # self.bn_2_2 = nn.BatchNorm(momentum=0.9, use_running_average=True)
-    # # relu
+    # conv block 2
+    self.conv_3 = nn.Conv(features=32*2, kernel_size=(3,3), strides=(2,2), 
+                          padding=((1,1), (1,1)), use_bias=False, name='conv_3')
+    self.bn_3 = nn.BatchNorm(momentum=0.9, use_running_average=True, name='bn_3')
+    # relu
+    self.conv_4 = nn.Conv(32*2, kernel_size=(3,3), strides=(1,1), 
+                          padding=((1,1), (1,1)), use_bias=False, name='conv_4')
+    self.bn_4 = nn.BatchNorm(momentum=0.9, use_running_average=True, name='bn_4')
+    # relu
 
-    # # conv block 3
-    # self.conv_3_1 = nn.Conv(features=32*4, kernel_size=3, strides=2, padding=((1,1), (1,1)), use_bias=False)
-    # self.bn_3_1 = nn.BatchNorm(momentum=0.9, use_running_average=True)
-    # # relu
-    # self.conv_3_2 = nn.Conv(32*4, kernel_size=3, strides=1, padding=((1,1), (1,1)), use_bias=False)
-    # self.bn_3_2 = nn.BatchNorm(momentum=0.9, use_running_average=True)
-    # # relu
+    # conv block 3
+    self.conv_5 = nn.Conv(features=32*4, kernel_size=(3,3), strides=(2,2), 
+                          padding=((1,1), (1,1)), use_bias=False, name='conv_5')
+    self.bn_5 = nn.BatchNorm(momentum=0.9, use_running_average=True, name='bn_5')
+    # relu
+    self.conv_6 = nn.Conv(32*4, kernel_size=(3,3), strides=(1,1), 
+                          padding=((1,1), (1,1)), use_bias=False, name='conv_6')
+    self.bn_6 = nn.BatchNorm(momentum=0.9, use_running_average=True, name='bn_6')
+    # relu
 
-    # self.fc = nn.Dense(features=4)
+    self.fc = nn.Dense(features=4, name='fc_0')
 
   @nn.compact
   def __call__(self, x):
-    conv5x5 = self.conv_0(x)
-    bn_0 = self.bn_0(conv5x5)
+    conv_0 = self.conv_0(x)
+    bn_0 = self.bn_0(conv_0)
     relu_0 = nn.relu(bn_0)
     max_pool = nn.max_pool(relu_0, window_shape=(2,2), strides=(2,2), padding=((0,0), (0, 0)))
-    return max_pool
+    
+    # conv block 1
+    conv_1 = self.conv_1(max_pool)
+    bn_1 = self.bn_1(conv_1)
+    relu_1 = nn.relu(bn_1)
+    conv_2 = self.conv_2(relu_1)
+    bn_2 = self.bn_2(conv_2)
+    relu_2 = nn.relu(bn_2)
+
+    # conv block 2
+    conv_3 = self.conv_3(relu_2)
+    bn_3 = self.bn_3(conv_3)
+    relu_3 = nn.relu(bn_3)
+    conv_4 = self.conv_4(relu_3)
+    bn_4 = self.bn_4(conv_4)
+    relu_4 = nn.relu(bn_4)
+
+    # conv block 3
+    conv_5 = self.conv_5(relu_4)
+    bn_5 = self.bn_5(conv_5)
+    relu_5 = nn.relu(bn_5)
+    conv_6 = self.conv_6(relu_5)
+    bn_6 = self.bn_6(conv_6)
+    relu_6 = nn.relu(bn_6)
+
+    # [N, H, W, C] -> [N, C, H, W]
+    x = jnp.transpose(relu_6, (0, 3, 1, 2))
+    x = jnp.reshape(x, (x.shape[0], -1))
+    out = self.fc(x)
+
+    return out
 
 if __name__ == '__main__':
     jax.config.update("jax_enable_x64", True)
@@ -284,13 +318,14 @@ if __name__ == '__main__':
                 frontnet_jax['batch_stats'][f'bn_{bn_counter}'].update({'var': bn})
                 bn_counter += 1
         if 'fc' in key:
+            print(key)
             if 'weight' in key:
                 # [outC, inC] -> [inC, outC]
                 fc_weight = jnp.transpose(tensor.detach().cpu().numpy(), (1, 0))
                 frontnet_jax['params'][f'fc_{fc_counter}'] = {'kernel': fc_weight}
             if 'bias' in key:
                 fc_bias = jnp.array(tensor.detach().cpu().numpy())
-                frontnet_jax['params'][f'fc_{fc_counter}'] = {'bias': fc_bias}
+                frontnet_jax['params'][f'fc_{fc_counter}'].update({'bias': fc_bias})
                 fc_counter += 1
 
 
@@ -304,8 +339,8 @@ if __name__ == '__main__':
     # print(cf_sim.base_img.shape)
     base_img = cf_sim.base_img.unsqueeze(0)
     # t_conv.shape
-    out_pytorch = cf_sim.pose_estimator.maxpool(cf_sim.pose_estimator.relu1(cf_sim.pose_estimator.bn(cf_sim.pose_estimator.conv(base_img))))
-    print(out_pytorch.shape)
+    out_pytorch = torch.stack(cf_sim.pose_estimator(base_img)).squeeze(1).mT
+    print(out_pytorch)
 
     # # # base_img = jnp.array(base_img.detach().cpu().numpy())
     # # # print(base_img.shape)
@@ -317,8 +352,8 @@ if __name__ == '__main__':
     # print(base_img.shape)
     j_model = JModel()
     out = j_model.apply(frontnet_jax, base_img)
-    out = out.transpose(0, 3, 1, 2)
-    print(out.shape)
+    # out = out.transpose(0, 3, 1, 2)
+    print(out)
     np.testing.assert_almost_equal(out, out_pytorch.detach().cpu().numpy(), decimal=6)
     # out = j_conv.apply(frontnet_jax, base_img)
     # print(out.shape)
