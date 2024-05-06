@@ -39,7 +39,7 @@ class CFSim():
         # might be deleted later, the dataset is only loaded to get a suitable background image
         dataset, _ = self.load_dataset(dataset_path)
         base_img, gt = dataset.dataset.__getitem__(0)
-        self.base_img = base_img.squeeze(0).numpy()
+        self.base_img = base_img#.squeeze(0).numpy()
 
         # patch stays random for now and inside the simulator for compatibility with current
         # optimize script
@@ -197,44 +197,45 @@ class JModel(nn.Module):
   
   def setup(self, state_dict):
     self.state_dict = state_dict
-    self.conv_0 = nn.Conv(features=32, kernel_size=5, strides=2, padding=((2,2), (2,2)), use_bias=False)
-    self.bn_0 = nn.BatchNorm(momentum=0.9, use_running_average=True)
-    # relu
-    # maxpool
+    self.conv_0 = nn.Conv(features=32, kernel_size=5, strides=2, padding=((2,2), (2,2)), use_bias=False, name='conv_0')
+    # self.bn_0 = nn.BatchNorm(momentum=0.9, use_running_average=True)
+    # # relu
+    # # maxpool
 
 
-    # conv block 1
-    self.conv_1_1 = nn.Conv(features=32, kernel_size=3, strides=2, padding=((1,1), (1,1)), use_bias=False)
-    self.bn_1_1 = nn.BatchNorm(momentum=0.9, use_running_average=True)
-    # relu
-    self.conv_1_2 = nn.Conv(32, kernel_size=3, strides=1, padding=((1,1), (1,1)), use_bias=False)
-    self.bn_1_2 = nn.BatchNorm(momentum=0.9, use_running_average=True)
-    # relu
+    # # conv block 1
+    # self.conv_1_1 = nn.Conv(features=32, kernel_size=3, strides=2, padding=((1,1), (1,1)), use_bias=False)
+    # self.bn_1_1 = nn.BatchNorm(momentum=0.9, use_running_average=True)
+    # # relu
+    # self.conv_1_2 = nn.Conv(32, kernel_size=3, strides=1, padding=((1,1), (1,1)), use_bias=False)
+    # self.bn_1_2 = nn.BatchNorm(momentum=0.9, use_running_average=True)
+    # # relu
 
-    # conv block 2
-    self.conv_2_1 = nn.Conv(features=32*2, kernel_size=3, strides=2, padding=((1,1), (1,1)), use_bias=False)
-    self.bn_2_1 = nn.BatchNorm(momentum=0.9, use_running_average=True)
-    # relu
-    self.conv_2_2 = nn.Conv(32*2, kernel_size=3, strides=1, padding=((1,1), (1,1)), use_bias=False)
-    self.bn_2_2 = nn.BatchNorm(momentum=0.9, use_running_average=True)
-    # relu
+    # # conv block 2
+    # self.conv_2_1 = nn.Conv(features=32*2, kernel_size=3, strides=2, padding=((1,1), (1,1)), use_bias=False)
+    # self.bn_2_1 = nn.BatchNorm(momentum=0.9, use_running_average=True)
+    # # relu
+    # self.conv_2_2 = nn.Conv(32*2, kernel_size=3, strides=1, padding=((1,1), (1,1)), use_bias=False)
+    # self.bn_2_2 = nn.BatchNorm(momentum=0.9, use_running_average=True)
+    # # relu
 
-    # conv block 3
-    self.conv_3_1 = nn.Conv(features=32*4, kernel_size=3, strides=2, padding=((1,1), (1,1)), use_bias=False)
-    self.bn_3_1 = nn.BatchNorm(momentum=0.9, use_running_average=True)
-    # relu
-    self.conv_3_2 = nn.Conv(32*4, kernel_size=3, strides=1, padding=((1,1), (1,1)), use_bias=False)
-    self.bn_3_2 = nn.BatchNorm(momentum=0.9, use_running_average=True)
-    # relu
+    # # conv block 3
+    # self.conv_3_1 = nn.Conv(features=32*4, kernel_size=3, strides=2, padding=((1,1), (1,1)), use_bias=False)
+    # self.bn_3_1 = nn.BatchNorm(momentum=0.9, use_running_average=True)
+    # # relu
+    # self.conv_3_2 = nn.Conv(32*4, kernel_size=3, strides=1, padding=((1,1), (1,1)), use_bias=False)
+    # self.bn_3_2 = nn.BatchNorm(momentum=0.9, use_running_average=True)
+    # # relu
 
-    self.fc = nn.Dense(features=4)
+    # self.fc = nn.Dense(features=4)
 
   @nn.compact
   def __call__(self, x):
     conv5x5 = self.conv_0(x)
-    bn_0 = self.bn_0(conv5x5)
-    relu_0 = nn.relu(bn_0)
-    max_pool = nn.max_pool(relu_0, window_shape=(2,2), strides=(2,2), padding=((0,0), (0, 0)))
+    return conv5x5
+    # bn_0 = self.bn_0(conv5x5)
+    # relu_0 = nn.relu(bn_0)
+    # max_pool = nn.max_pool(relu_0, window_shape=(2,2), strides=(2,2), padding=((0,0), (0, 0)))
 
 if __name__ == '__main__':
     jax.config.update("jax_enable_x64", True)
@@ -253,37 +254,88 @@ if __name__ == '__main__':
 
     # print(cf_sim.pose_estimator.state_dict().keys())
 
-    frontnet_jax = {'params': {},
-                    'batch_stats': {}}
-
+    # DEBUGGING: load single conv layer params
+    conv_counter = 0
+    frontnet_jax = {'params': {}}
     for key, tensor in zip(cf_sim.pose_estimator.state_dict().keys(), cf_sim.pose_estimator.state_dict().values()):
-
         if 'conv' in key:
             # [outC, inC, kH, kW] -> [kH, kW, inC, outC]
             conv_kernel = jnp.transpose(tensor.detach().cpu().numpy(), (2, 3, 1, 0))
+            print("pytorch kernel shape: ", tensor.shape)
+            print("jnp kernel shape: ", conv_kernel.shape)
+            frontnet_jax['params'] = {'kernel': conv_kernel}
+            break
+    
+    # print(frontnet_jax['params']['kernel'].shape)
+    j_conv = nn.Conv(features=32, kernel_size=(5,5), strides=(2,2), padding=
+                     (2,2), use_bias=False, name='conv_0', input_dilation=(1,1), kernel_dilation=(1,1))
+    
+    # print(cf_sim.base_img.shape)
+    base_img = cf_sim.base_img.unsqueeze(0)
+    t_conv = cf_sim.pose_estimator.conv
+    # t_conv.shape
+    out_pytorch_conv = t_conv(base_img)
+    print(out_pytorch_conv.shape)
+
+    
+
+
+    from jax import lax
+    # base_img = jnp.array(base_img.detach().cpu().numpy())
+    # print(base_img.shape)
+    # out = lax.conv_with_general_padding(lhs=base_img, rhs=frontnet_jax['params']['kernel'].transpose(3, 2, 0, 1), window_strides=(2,2), padding=((2,2), (2,2)), lhs_dilation=None, rhs_dilation=None)
+    # print(out.shape)
+
+
+    base_img = jnp.array(base_img.detach().cpu().numpy()).transpose(0, 2, 3, 1)
+    print(base_img.shape)
+    out = j_conv.apply(frontnet_jax, base_img)
+    out = out.reshape(out_pytorch_conv.shape)
+    print(out.shape)
+
+    np.testing.assert_almost_equal(out, out_pytorch_conv.detach().cpu().numpy(), decimal=6)
+    
+    # frontnet_jax = {'params': {},
+    #                 'batch_stats': {}}
+    
+    # conv_counter = 0
+    # bn_counter = 0
+    # fc_counter = 0
+
+    # for key, tensor in zip(cf_sim.pose_estimator.state_dict().keys(), cf_sim.pose_estimator.state_dict().values()):
+        
+
+    #     if 'conv' in key:
+    #         # [outC, inC, kH, kW] -> [kH, kW, inC, outC]
+    #         conv_kernel = jnp.transpose(tensor.detach().cpu().numpy(), (2, 3, 1, 0))
+    #         frontnet_jax['params'][f'conv_{conv_counter}'] = {'kernel': conv_kernel, 'bias': None}
+    #         conv_counter += 1
+    #     # if 'bn' in key:
+    #     #     bn = jnp.array(tensor.detach().cpu().numpy())
+            
+    #     #     if 'mean' in key:
+    #     #         frontnet_jax['batch_stats'][key]
+                
+    #     #     if 'var' in key:
+                
+            
+    #     if 'fc' in key:
+    #         if 'weight' in key:
+    #             # [outC, inC] -> [inC, outC]
+    #             fc_weight = jnp.transpose(tensor.detach().cpu().numpy(), (1, 0))
+    #             frontnet_jax['params'][f'fc_{fc_counter}'] = {'kernel': fc_weight}
+    #         if 'bias' in key:
+    #             fc_bias = jnp.array(tensor.detach().cpu().numpy())
+    #             frontnet_jax['params'][f'fc_{fc_counter}'] = {'bias': fc_bias}
+    #             fc_counter += 1
+
+            
             
 
-        if 'bn' in key:
-            if 'num_batches tracked' in key:
-                continue
-            if 'mean' in key or 'var' in key:
-                bn = jnp.array(tensor.detach().cpu().numpy())
-                frontnet_jax['batch_stats'][key] = bn
-            else:
-                bn = jnp.array(tensor.detach().cpu().numpy())
-                frontnet_jax['params'][key] = bn
+    # print(frontnet_jax['params']['conv_0'])
 
-        if 'fc' in key:
-            if 'weight' in key:
-                # [outC, inC] -> [inC, outC]
-                fc = jnp.transpose(tensor.detach().cpu().numpy(), (1, 0))
-            if 'bias' in key:
-                fc = jnp.array(tensor.detach().cpu().numpy())
+    
 
-            
-            frontnet_jax['params'][key] = fc
-
-    print(frontnet_jax['params'].keys())
 
     # print(frontnet_jax)
         # match key:
