@@ -195,9 +195,10 @@ class CFSim():
 from flax import linen as nn
 class JModel(nn.Module):
   
-  def setup(self, state_dict):
-    self.state_dict = state_dict
-    self.conv_0 = nn.Conv(features=32, kernel_size=5, strides=2, padding=((2,2), (2,2)), use_bias=False, name='conv_0')
+  def setup(self):
+    # self.state_dict = state_dict
+    self.conv_0 = nn.Conv(features=32, kernel_size=(5,5), strides=(2,2), padding=
+                        ((2,2), (2,2)), use_bias=False, name='conv_0')
     self.bn_0 = nn.BatchNorm(momentum=0.9, use_running_average=True)
     # # relu
     # # maxpool
@@ -287,12 +288,11 @@ if __name__ == '__main__':
     # j_conv = nn.Conv(features=32, kernel_size=(5,5), strides=(2,2), padding=
     #                  ((2,2), (2,2)), use_bias=False, name='conv_0')
     
-    # # print(cf_sim.base_img.shape)
-    # base_img = cf_sim.base_img.unsqueeze(0)
-    # t_conv = cf_sim.pose_estimator.conv
-    # # t_conv.shape
-    # out_pytorch_conv = t_conv(base_img)
-    # print(out_pytorch_conv.shape)
+    # print(cf_sim.base_img.shape)
+    base_img = cf_sim.base_img.unsqueeze(0)
+    # t_conv.shape
+    out_pytorch = cf_sim.pose_estimator.bn(cf_sim.pose_estimator.conv(base_img))
+    print(out_pytorch.shape)
 
     # # base_img = jnp.array(base_img.detach().cpu().numpy())
     # # print(base_img.shape)
@@ -300,11 +300,16 @@ if __name__ == '__main__':
     # # print(out.shape)
 
 
-    # base_img = jnp.array(base_img.detach().cpu().numpy()).transpose(0, 2, 3, 1)
+    base_img = jnp.array(base_img.detach().cpu().numpy()).transpose(0, 2, 3, 1)
     # print(base_img.shape)
+    j_model = JModel()
+    out = j_model.apply(frontnet_jax, base_img)
+    out = out.transpose(0, 3, 1, 2)
+    print(out.shape)
+    np.testing.assert_almost_equal(out, out_pytorch.detach().cpu().numpy(), decimal=6)
     # out = j_conv.apply(frontnet_jax, base_img)
     # print(out.shape)
-    # out = out.transpose(0, 3, 1, 2)
+    
     # print(out.shape)
 
     # np.testing.assert_almost_equal(out, out_pytorch_conv.detach().cpu().numpy(), decimal=6)
