@@ -193,7 +193,7 @@ class CFSim():
         return l2_distances
     
 from flax import linen as nn
-class JModel(nn.Module):
+class FrontnetJax(nn.Module):
   
   def setup(self):
     # self.state_dict = state_dict
@@ -289,9 +289,7 @@ if __name__ == '__main__':
 
     cf_sim = CFSim(target_trajectory, model_path)
 
-    # print(cf_sim.pose_estimator.state_dict().keys())
 
-    # DEBUGGING: load single conv layer + single batch_norm params
     conv_counter = 0
     bn_counter = 0
     fc_counter = 0
@@ -328,86 +326,17 @@ if __name__ == '__main__':
                 frontnet_jax['params'][f'fc_{fc_counter}'].update({'bias': fc_bias})
                 fc_counter += 1
 
-
-
-    # print(frontnet_jax['params'].keys())
-
-    # # print(frontnet_jax['params']['kernel'].shape)
-    # j_conv = nn.Conv(features=32, kernel_size=(5,5), strides=(2,2), padding=
-    #                  ((2,2), (2,2)), use_bias=False, name='conv_0')
-    
-    # print(cf_sim.base_img.shape)
     base_img = cf_sim.base_img.unsqueeze(0)
-    # t_conv.shape
     out_pytorch = torch.stack(cf_sim.pose_estimator(base_img)).squeeze(1).mT
-    print(out_pytorch)
-
-    # # # base_img = jnp.array(base_img.detach().cpu().numpy())
-    # # # print(base_img.shape)
-    # # # out = lax.conv_with_general_padding(lhs=base_img, rhs=frontnet_jax['params']['kernel'].transpose(3, 2, 0, 1), window_strides=(2,2), padding=((2,2), (2,2)), lhs_dilation=None, rhs_dilation=None)
-    # # # print(out.shape)
+    print("Output pytorch: ", out_pytorch)
 
 
     base_img = jnp.array(base_img.detach().cpu().numpy()).transpose(0, 2, 3, 1)
-    # print(base_img.shape)
-    j_model = JModel()
+    j_model = FrontnetJax()
     out = j_model.apply(frontnet_jax, base_img)
-    # out = out.transpose(0, 3, 1, 2)
-    print(out)
+    print("Output jax:", out)
+
     np.testing.assert_almost_equal(out, out_pytorch.detach().cpu().numpy(), decimal=6)
-    # out = j_conv.apply(frontnet_jax, base_img)
-    # print(out.shape)
-    
-    # print(out.shape)
-
-    # np.testing.assert_almost_equal(out, out_pytorch_conv.detach().cpu().numpy(), decimal=6)
-    
-    # frontnet_jax = {'params': {},
-    #                 'batch_stats': {}}
-    
-    # conv_counter = 0
-    # bn_counter = 0
-    # fc_counter = 0
-
-    # for key, tensor in zip(cf_sim.pose_estimator.state_dict().keys(), cf_sim.pose_estimator.state_dict().values()):
-        
-
-    #     if 'conv' in key:
-    #         # [outC, inC, kH, kW] -> [kH, kW, inC, outC]
-    #         conv_kernel = jnp.transpose(tensor.detach().cpu().numpy(), (2, 3, 1, 0))
-    #         frontnet_jax['params'][f'conv_{conv_counter}'] = {'kernel': conv_kernel, 'bias': None}
-    #         conv_counter += 1
-    #     # if 'bn' in key:
-    #     #     bn = jnp.array(tensor.detach().cpu().numpy())
-            
-    #     #     if 'mean' in key:
-    #     #         frontnet_jax['batch_stats'][key]
-                
-    #     #     if 'var' in key:
-                
-            
-    #     if 'fc' in key:
-    #         if 'weight' in key:
-    #             # [outC, inC] -> [inC, outC]
-    #             fc_weight = jnp.transpose(tensor.detach().cpu().numpy(), (1, 0))
-    #             frontnet_jax['params'][f'fc_{fc_counter}'] = {'kernel': fc_weight}
-    #         if 'bias' in key:
-    #             fc_bias = jnp.array(tensor.detach().cpu().numpy())
-    #             frontnet_jax['params'][f'fc_{fc_counter}'] = {'bias': fc_bias}
-    #             fc_counter += 1
-
-            
-            
-
-    # print(frontnet_jax['params']['conv_0'])
-
-    
-
-
-    # print(frontnet_jax)
-        # match key:
-        #     case 'conv':
-        #         print(key)
 
     # # patch = np.random.rand(10, 10) * 255.
 
