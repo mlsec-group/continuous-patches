@@ -268,7 +268,7 @@ if __name__ == '__main__':
     
     # print(frontnet_jax['params']['kernel'].shape)
     j_conv = nn.Conv(features=32, kernel_size=(5,5), strides=(2,2), padding=
-                     (2,2), use_bias=False, name='conv_0', input_dilation=(1,1), kernel_dilation=(1,1))
+                     ((2,2), (2,2)), use_bias=False, name='conv_0')
     
     # print(cf_sim.base_img.shape)
     base_img = cf_sim.base_img.unsqueeze(0)
@@ -290,7 +290,8 @@ if __name__ == '__main__':
     base_img = jnp.array(base_img.detach().cpu().numpy()).transpose(0, 2, 3, 1)
     print(base_img.shape)
     out = j_conv.apply(frontnet_jax, base_img)
-    out = out.reshape(out_pytorch_conv.shape)
+    print(out.shape)
+    out = out.transpose(0, 3, 1, 2)
     print(out.shape)
 
     np.testing.assert_almost_equal(out, out_pytorch_conv.detach().cpu().numpy(), decimal=6)
