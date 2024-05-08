@@ -220,6 +220,21 @@ if __name__ == '__main__':
 
     np.testing.assert_almost_equal(out, out_pytorch.detach().cpu().numpy(), decimal=6)
 
+
+    # test with batch
+    print("Test with batch")
+    base_imgs = cf_sim.base_img.repeat(32, 1, 1, 1)
+    out_pytorch = torch.stack(cf_sim.pose_estimator(base_imgs)).squeeze(2).mT
+    # print("Output pytorch: ", out_pytorch)
+
+    base_imgs = jnp.array(base_imgs.detach().cpu().numpy()).transpose(0, 2, 3, 1)
+    out = frontnet_model.apply(frontnet_weights, base_imgs)
+    # print("Output jax:", out)
+
+    np.testing.assert_almost_equal(out, out_pytorch.detach().cpu().numpy(), decimal=6)
+
+
+
     # # patch = np.random.rand(10, 10) * 255.
 
     # sf = 5.
