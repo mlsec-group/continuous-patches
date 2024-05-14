@@ -56,6 +56,68 @@ def opencv_perspective_coeffs(startpoints, endpoints):
         
     return np.linalg.lstsq(a, b)[0].flatten()
 
+def opencv_warp_perspective(img, M, output_shape):
+    # nearest neighbor only
+    output_img = np.zeros((output_shape[1], output_shape[0]))
+
+    for x in range(output_shape[0]):
+        for y in range(output_shape[1]):
+            coords = np.linalg.inv(M) @ np.array([x, y, 1])
+            coords = coords / coords[2]  # normalize homogeneous coords
+
+            src_x, src_y = int(round(coords[0])), int(round(coords[1]))
+
+            # copy valid pixels from source img to output img
+            if 0 <= src_x < img.shape[1] and 0 <= src_y < img.shape[0]:
+                output_img[y, x] = img[src_y, src_x]
+
+    return output_img
+
+    # coords_x = np.linspace(0, img.shape[1]-1, output_shape[1])
+    # coords_y = np.linspace(0, img.shape[0]-1, output_shape[0])
+    # x_grid, y_grid  = np.meshgrid(coords_x, coords_y)
+    # coords = np.array([x_grid.flatten(), y_grid.flatten(), np.ones_like(x_grid).flatten()])
+
+    # # print(coords)
+
+    # nominator = M @ coords
+    # denominator = M[2] @ coords
+
+    # homogeneous = nominator / denominator
+    # normalized = homogeneous / homogeneous[2]
+
+    # # Round to nearest integer
+    # src_x = np.round(normalized[0, :]).astype(int)
+    # src_y = np.round(normalized[1, :]).astype(int)
+
+    # # Mask for points within bounds of original image
+    # mask = (src_x >= 0) & (src_x < img.shape[1]) & (src_y >= 0) & (src_y < img.shape[0])
+
+    # # Copy pixel values from original image to output image
+    # output_img[y_grid.flatten()[mask], x_grid.flatten()[mask]] = img[src_y[mask], src_x[mask]]
+
+    # return output_img
+    
+    # print(coords.shape)
+    # img_coords = np.array([coords_x, coords_y, np.])
+    # # [ [0, 0, 1]
+    # #   [0, 1, 1] ...
+    # print(grid[:3], grid.shape)
+    # coeffs = M.flatten()
+
+
+    # x_out = (coeffs[0] * coords_x + coeffs[1] * coords_y + coeffs[2]) / (coeffs[6] * coords_x + coeffs[7] * coords_y + 1)
+    # y_out = (coeffs[3] * coords_x + coeffs[4] * coords_y + coeffs[5]) / (coeffs[6] * coords_x + coeffs[7] * coords_y + 1)
+
+    # print(np.array())
+
+    # warped_coords = np.linalg.inv(M) @ 
+
+
+
+# the pytorch implementation seems to be actually closer to https://web.archive.org/web/20150222120106/xenia.media.mit.edu/~cwren/interpolator/
+# but somehow, the perspective transformation matrix doesn't look right
+
 def _get_perspective_coeffs(startpoints, endpoints):
     """Helper function to get the coefficients (a, b, c, d, e, f, g, h) for the perspective transforms.
 
@@ -119,6 +181,40 @@ def _perspective_grid(coeffs, ow: int, oh: int):
     return output_grid.view(1, oh, ow, 2)
 
 
+# def _apply_grid_transform(img, grid, mode, fill):
+
+#     # img, need_cast, need_squeeze, out_dtype = _cast_squeeze_in(img, [grid.dtype])
+
+#     if img.shape[0] > 1:
+#         # Apply same grid to a batch of images
+#         grid = grid.expand(img.shape[0], grid.shape[1], grid.shape[2], grid.shape[3])
+
+#     # Append a dummy mask for customized fill colors, should be faster than grid_sample() twice
+#     if fill is not None:
+#         mask = torch.ones((img.shape[0], 1, img.shape[2], img.shape[3]), dtype=img.dtype, device=img.device)
+#         img = torch.cat((img, mask), dim=1)
+
+#     img = grid_sample(img, grid, mode=mode, padding_mode="zeros", align_corners=False)
+
+#     # Fill with required color
+#     if fill is not None:
+#         mask = img[:, -1:, :, :]  # N * 1 * H * W
+#         img = img[:, :-1, :, :]  # N * C * H * W
+#         mask = mask.expand_as(img)
+#         fill_list, len_fill = (fill, len(fill)) if isinstance(fill, (tuple, list)) else ([float(fill)], 1)
+#         fill_img = torch.tensor(fill_list, dtype=img.dtype, device=img.device).view(1, len_fill, 1, 1).expand_as(img)
+#         if mode == "nearest":
+#             mask = mask < 0.5
+#             img[mask] = fill_img[mask]
+#         else:  # 'bilinear'
+#             img = img * mask + (1.0 - mask) * fill_img
+
+#     # img = _cast_squeeze_out(img, need_cast, need_squeeze, out_dtype)
+#     return img
+
+
+
+
 start = np.array([[0., 0.], [0., 5.], [5., 5.], [5., 0.]], dtype=np.float32)  # 5x5 patch in top left corner  
 end = np.array([[0., 10.], [0., 15.], [5., 15.], [5., 10.]], dtype=np.float32) # translation by ty + 10
 
@@ -159,23 +255,28 @@ M[:-1] = cv_coeffs
 M[-1] = 1.
 M = np.float64(np.reshape(M, (3,3)))
 
+self_warp = opencv_warp_perspective(np.ones((5,5)), M, (20, 10))
+
+
 
 from matplotlib import pyplot as plt
-image = np.zeros((20, 20))
+image = np.zeros((20, 10))
+# # plt.imshow(image, cmap='gray')
+# # plt.show()
+
+# image[:5, :5] = 1.
 # plt.imshow(image, cmap='gray')
 # plt.show()
 
-image[:5, :5] = 1.
-plt.imshow(image, cmap='gray')
-plt.show()
-
-cv_warp = cv2.warpPerspective(np.ones((5, 5)), M, (20, 20), flags=cv2.INTER_NEAREST)
+cv_warp = cv2.warpPerspective(np.ones((5, 5)), M, (20, 10), flags=cv2.INTER_NEAREST)
 
 plt.imshow(cv_warp, cmap='gray')
 plt.show()
 
+plt.imshow(self_warp, cmap='gray')
+plt.show()
 
-pt_warp = _perspective_grid(cv_coeffs, 20, 20)
+# pt_warp = _perspective_grid(cv_coeffs, 20, 20)
 
 # pt_a, pt_b, coeffs = _get_perspective_coeffs(start, end)
 # print(pt_a)
