@@ -35,8 +35,8 @@ import cv2
 # }
 
 def opencv_perspective_coeffs(startpoints, endpoints):
-    a = np.zeros((8, 8))
-    b = np.zeros((8, 1))
+    a = np.zeros((8, 8), dtype=np.float64)
+    b = np.zeros((8, 1), dtype=np.float64)
 
     for i in range(4):
         a[i][0] = a[i+4][3] = startpoints[i][0]
@@ -52,8 +52,9 @@ def opencv_perspective_coeffs(startpoints, endpoints):
 
     # print(a)
     # print(b)
+    
         
-    return a, b
+    return np.linalg.lstsq(a, b)[0].flatten()
 
 def _get_perspective_coeffs(startpoints, endpoints):
     """Helper function to get the coefficients (a, b, c, d, e, f, g, h) for the perspective transforms.
@@ -87,7 +88,7 @@ def _get_perspective_coeffs(startpoints, endpoints):
     res = torch.linalg.lstsq(a_matrix, b_matrix, driver="gelss").solution.to(torch.float32)
 
     # output: List[float] = res.tolist()
-    return a_matrix, b_matrix, res.tolist()
+    return res.tolist()
 
 def _perspective_grid(coeffs, ow: int, oh: int):
     # https://github.com/python-pillow/Pillow/blob/4634eafe3c695a014267eefdce830b4a825beed7/
@@ -142,8 +143,8 @@ end = np.array([[0., 10.], [0., 15.], [5., 15.], [5., 10.]], dtype=np.float32) #
 #  [ 0.  1. -10.]
 #  [ 0.  0.  1.]]
 
-start = np.array([[0., 0.], [0., 5.], [5., 5.], [5., 0.]], dtype=np.float32)  # 5x5 patch in top left corner  
-end = np.array([[10, 7], [7, 10], [10, 12], [14, 8]], dtype=np.float32)
+start = np.array([[0., 0.], [0., 5.], [5., 5.], [5., 0.]], dtype=np.float64)  # 5x5 patch in top left corner  
+end = np.array([[10, 7], [7, 10], [10, 12], [14, 8]], dtype=np.float64)
 
 # print(np.round(cv2.getPerspectiveTransform(start, end), 2))
 # returns
@@ -151,13 +152,30 @@ end = np.array([[10, 7], [7, 10], [10, 12], [14, 8]], dtype=np.float32)
 #  [-0.2   0.6   7.  ]
 #  [-0.05  0.    1.  ]]
 
-cv_a, cv_b = opencv_perspective_coeffs(start, end)
-coeffs = np.linalg.lstsq(cv_a, cv_b)[0]
-matrix = np.zeros(9)
-matrix[:-1] = coeffs.flatten()
-matrix[-1] = 1.
-matrix = np.round(matrix.reshape(3,3), 2)
-print(matrix)
+cv_coeffs = opencv_perspective_coeffs(start, end)
+print(cv_coeffs)
+M = np.zeros(9)
+M[:-1] = cv_coeffs
+M[-1] = 1.
+M = np.float64(np.reshape(M, (3,3)))
+
+
+from matplotlib import pyplot as plt
+image = np.zeros((20, 20))
+# plt.imshow(image, cmap='gray')
+# plt.show()
+
+image[:5, :5] = 1.
+plt.imshow(image, cmap='gray')
+plt.show()
+
+cv_warp = cv2.warpPerspective(np.ones((5, 5)), M, (20, 20), flags=cv2.INTER_NEAREST)
+
+plt.imshow(cv_warp, cmap='gray')
+plt.show()
+
+
+pt_warp = _perspective_grid(cv_coeffs, 20, 20)
 
 # pt_a, pt_b, coeffs = _get_perspective_coeffs(start, end)
 # print(pt_a)
