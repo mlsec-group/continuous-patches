@@ -2,6 +2,8 @@ import numpy as np
 import torch
 import cv2
 
+import jax.numpy as jnp
+
 
 
 # opencv function:
@@ -35,41 +37,49 @@ import cv2
 # }
 
 def opencv_perspective_coeffs(startpoints, endpoints):
-    a = np.zeros((8, 8), dtype=np.float64)
-    b = np.zeros((8, 1), dtype=np.float64)
+    a = jnp.zeros((8, 8))
+    b = jnp.zeros((8, 1))
 
     for i in range(4):
-        a[i][0] = a[i+4][3] = startpoints[i][0]
-        a[i][1] = a[i+4][4] = startpoints[i][1]
-        a[i][2] = a[i+4][5] = 1
-        a[i][3:6] = a[i+4][:3] = 0
-        a[i][6] = -startpoints[i][0]*endpoints[i][0]
-        a[i][7] = -startpoints[i][1]*endpoints[i][0]
-        a[i+4][6] = -startpoints[i][0]*endpoints[i][1]
-        a[i+4][7] = -startpoints[i][1]*endpoints[i][1]
-        b[i] = endpoints[i][0]
-        b[i+4] = endpoints[i][1]
+        a = a.at[i,0].set(startpoints[i, 0])
+        a = a.at[i+4, 3].set(startpoints[i, 0])
 
-    # print(a)
-    # print(b)
-    
+        a = a.at[i, 1].set(startpoints[i, 1])
+        a = a.at[i+4, 4].set(startpoints[i, 1])
+
+        a = a.at[i, 2].set(1.)
+        a = a.at[i+4, 5].set(1.)
+
+        a = a.at[i, 3:6].set(0.)
+        a = a.at[i+4, :3].set(0.)
         
-    return np.linalg.lstsq(a, b)[0].flatten()
+        a = a.at[i, 6].set(-startpoints[i, 0]*endpoints[i, 0])
+
+        a = a.at[i, 7].set(-startpoints[i, 1]*endpoints[i, 0])
+
+        a = a.at[i+4, 6].set(-startpoints[i, 0]*endpoints[i, 1])
+
+        a = a.at[i+4, 7].set(-startpoints[i, 1]*endpoints[i, 1])
+
+        b = b.at[i].set(endpoints[i, 0])
+        b = b.at[i+4].set(endpoints[i, 1])
+        
+    return jnp.linalg.lstsq(a, b)[0].flatten()
 
 def opencv_warp_perspective(img, M, output_shape):
     # nearest neighbor only
-    output_img = np.zeros((output_shape[1], output_shape[0]))
+    output_img = jnp.zeros((output_shape[1], output_shape[0]))
 
     for x in range(output_shape[0]):
         for y in range(output_shape[1]):
-            coords = np.linalg.inv(M) @ np.array([x, y, 1])
+            coords = np.linalg.inv(M) @ jnp.array([x, y, 1])
             coords = coords / coords[2]  # normalize homogeneous coords
 
             src_x, src_y = int(round(coords[0])), int(round(coords[1]))
 
             # copy valid pixels from source img to output img
             if 0 <= src_x < img.shape[1] and 0 <= src_y < img.shape[0]:
-                output_img[y, x] = img[src_y, src_x]
+                output_img = output_img.at[y, x].set(img[src_y, src_x])
 
     return output_img
 
@@ -215,8 +225,8 @@ def _perspective_grid(coeffs, ow: int, oh: int):
 
 
 
-start = np.array([[0., 0.], [0., 5.], [5., 5.], [5., 0.]], dtype=np.float32)  # 5x5 patch in top left corner  
-end = np.array([[0., 10.], [0., 15.], [5., 15.], [5., 10.]], dtype=np.float32) # translation by ty + 10
+start = jnp.array(np.array([[0., 0.], [0., 5.], [5., 5.], [5., 0.]]))  # 5x5 patch in top left corner  
+end = jnp.array([[0., 10.], [0., 15.], [5., 15.], [5., 10.]]) # translation by ty + 10
 
 # transformation matrix should look like
 # [[ 1.  0.  0.]
@@ -239,8 +249,8 @@ end = np.array([[0., 10.], [0., 15.], [5., 15.], [5., 10.]], dtype=np.float32) #
 #  [ 0.  1. -10.]
 #  [ 0.  0.  1.]]
 
-start = np.array([[0., 0.], [0., 5.], [5., 5.], [5., 0.]], dtype=np.float64)  # 5x5 patch in top left corner  
-end = np.array([[10, 7], [7, 10], [10, 12], [14, 8]], dtype=np.float64)
+start = jnp.array([[0., 0.], [0., 5.], [5., 5.], [5., 0.]])  # 5x5 patch in top left corner  
+end = jnp.array([[10., 7.], [7., 10.], [10., 12.], [14., 8.]])
 
 # print(np.round(cv2.getPerspectiveTransform(start, end), 2))
 # returns
@@ -255,12 +265,12 @@ M[:-1] = cv_coeffs
 M[-1] = 1.
 M = np.float64(np.reshape(M, (3,3)))
 
-self_warp = opencv_warp_perspective(np.ones((5,5)), M, (20, 10))
-
+own_warp = opencv_warp_perspective(jnp.ones((5,5)), jnp.array(M), (20, 10))
+own_warp = np.array(own_warp)
 
 
 from matplotlib import pyplot as plt
-image = np.zeros((20, 10))
+image = jnp.zeros((20, 10))
 # # plt.imshow(image, cmap='gray')
 # # plt.show()
 
@@ -273,7 +283,7 @@ cv_warp = cv2.warpPerspective(np.ones((5, 5)), M, (20, 10), flags=cv2.INTER_NEAR
 plt.imshow(cv_warp, cmap='gray')
 plt.show()
 
-plt.imshow(self_warp, cmap='gray')
+plt.imshow(own_warp, cmap='gray')
 plt.show()
 
 # pt_warp = _perspective_grid(cv_coeffs, 20, 20)
