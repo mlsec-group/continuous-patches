@@ -5,7 +5,8 @@ from evosax import Strategies, ParameterReshaper, NetworkMapper, FitnessShaper
 from evosax.utils import ESLog
 # from evosax.problems import VisionFitness
 
-from simulators.hoverair import HoverSim
+#from simulators.hoverair import BBSimulator as BBSimulator
+from simulators.cf_frontnet import CFSim as BBSimulator
 
 from util import bezier_curve
 
@@ -23,6 +24,14 @@ class BBOptimizer():
             x=pholder,
             rng=rng,
         )
+
+        # random trajectory
+        # control_points_bezier = np.random.uniform(-3., 3., (4,3))#np.array([[0, 0, 0.0], [1, 3, 0.4], [2, -1, 0.8], [3, 2, 1]])
+        # target_trajectory = np.array(bezier_curve(control_points_bezier, 20))
+        
+        # single tranjectory
+        control_points_bezier = np.array([[0, 0, 0.0], [1, 3, 0.4], [2, -1, 0.8], [3, 2, 1]])
+        self.target_trajectory = np.array(bezier_curve(control_points_bezier, 5))
         
         self.param_reshaper = ParameterReshaper(params)
 
@@ -66,16 +75,8 @@ class BBOptimizer():
         return self.param_reshaper.reshape_single(state.best_member), self.es_logging, self.log  # return best parameter set and logger for bookkeeping
 
     def calc_tracking_error(self, params_unshaped):
-        # random trajectory
-        # control_points_bezier = np.random.uniform(-3., 3., (4,3))#np.array([[0, 0, 0.0], [1, 3, 0.4], [2, -1, 0.8], [3, 2, 1]])
-        # target_trajectory = np.array(bezier_curve(control_points_bezier, 20))
-        
-        # single tranjectory
-        control_points_bezier = np.array([[0, 0, 0.0], [1, 3, 0.4], [2, -1, 0.8], [3, 2, 1]])
-        target_trajectory = np.array(bezier_curve(control_points_bezier, 20))
-        
-        sim = HoverSim(target_trajectory)                               # initialize new simulator for each parameter candidate
-        sim.pose = target_trajectory[0]
+        sim = BBSimulator(self.target_trajectory)                               # initialize new simulator for each parameter candidate
+        sim.pose = self.target_trajectory[0]
         rng = jax.random.PRNGKey(0)
 
         params = self.param_reshaper.reshape_single(params_unshaped)    # get parameter candidate in correct shape so that they can be used as NN parameters
@@ -99,7 +100,7 @@ class BBOptimizer():
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
     from pathlib import Path
-    path = Path('results/')
+    path = Path('results/cfsim/')
     path.mkdir(parents=True, exist_ok=True)
 
     rng = jax.random.PRNGKey(0)                         # set rng key
@@ -123,12 +124,12 @@ if __name__ == '__main__':
 
     # eval
     control_points_bezier = np.array([[0, 0, 0.0], [1, 3, 0.4], [2, -1, 0.8], [3, 2, 1]])
-    target_trajectory = np.array(bezier_curve(control_points_bezier, 20))
+    target_trajectory = np.array(bezier_curve(control_points_bezier, 100))
 
     optimized_trajectory = []
     distances = []
 
-    hover_sim = HoverSim(target_trajectory)
+    hover_sim = BBSimulator(target_trajectory)
     hover_sim.reset()
 
     for desired_pose in hover_sim.target_trajectory:
