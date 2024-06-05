@@ -106,7 +106,7 @@ def sample(model: nn.Module, patch_size: int=3*3, n_samples: int = 50, n_steps: 
 # plt.scatter(x, y)
 # plt.show()
 
-patch_size = (5,5)
+patch_size = (8,8)
 
 data = np.random.rand(*patch_size)
 # plt.figure(figsize=(5, 5))
@@ -123,7 +123,7 @@ model = Net(patch_size=np.multiply(*patch_size))
 model.to(device)
 
 # training
-trained_model, all_losses = train(model, 60_000)
+trained_model, all_losses = train(model, 80_000)
 trained_model = trained_model.eval()
 
 # fig, ax = plt.subplots(1,1)
@@ -145,5 +145,5 @@ for i, sample in enumerate(samples):
   axs[i+1].imshow(sample.reshape(*patch_size), cmap='gray')
 # plt.scatter(x, y)
 # plt.scatter(*(samples.T))
-fig.savefig('samples_5x5.png', dpi=200)
+fig.savefig(f'samples_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
 plt.show()
