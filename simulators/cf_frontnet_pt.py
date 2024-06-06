@@ -130,7 +130,6 @@ class CFSim():
     def _controller_setpoint(self, predicted_poses):
         setpoints = []
         for predicted_pose in predicted_poses:
-            print(predicted_pose)
             quats = rowan.from_euler(0., 0., self.pose[3], convention='xyz') # returns qw, qx, qy, qz
             rotated_desired = rowan.rotate(quats, predicted_pose[:3])
             target_pos = predicted_pose[:3] + rotated_desired
@@ -141,6 +140,7 @@ class CFSim():
 
             new_setpoint = target_pos + self._calc_heading_vec(1., target_yaw)
             setpoints.append([*new_setpoint, target_yaw])
+        
         return np.array(setpoints)
 
     def _calc_heading_vec(self, radius, angle):
@@ -183,6 +183,7 @@ if __name__ == '__main__':
 
     cf_sim = CFSim(model_path, dataset_path)
 
+    # test with single image
     base_img = cf_sim.base_img.unsqueeze(0).to(cf_sim.device)
     out_pytorch = torch.hstack(cf_sim.pose_estimator(base_img))
     print("Output frontnet: ", out_pytorch)
@@ -190,9 +191,10 @@ if __name__ == '__main__':
     print("Output controller: ", new_pose)
 
     # test with batch
-    # print("Test with batch")
-    # print("repeat")
-    # base_imgs = cf_sim.base_img.repeat(5, 1, 1, 1).to(cf_sim.device)
-    # print("stack")
-    # out_pytorch = torch.stack(cf_sim.pose_estimator(base_imgs)).squeeze(2).mT
-    # print("Output frontnet: ", out_pytorch)
+    print("Test with batch")
+    base_imgs = cf_sim.base_img.repeat(2, 1, 1, 1).to(cf_sim.device)
+    x, y, z, yaw = cf_sim.pose_estimator(base_imgs)
+    out_pytorch = torch.hstack(cf_sim.pose_estimator(base_imgs))
+    print("Output frontnet: ", out_pytorch)
+    new_pose = cf_sim.sim_new_pose(base_imgs)
+    print("Output controller: ", new_pose)
