@@ -183,18 +183,44 @@ if __name__ == '__main__':
 
     cf_sim = CFSim(model_path, dataset_path)
 
-    # test with single image
-    base_img = cf_sim.base_img.unsqueeze(0).to(cf_sim.device)
-    out_pytorch = torch.hstack(cf_sim.pose_estimator(base_img))
-    print("Output frontnet: ", out_pytorch)
-    new_pose = cf_sim.sim_new_pose(cf_sim.base_img)
-    print("Output controller: ", new_pose)
+    # # test with single image
+    # base_img = cf_sim.base_img.unsqueeze(0).to(cf_sim.device)
+    # out_pytorch = torch.hstack(cf_sim.pose_estimator(base_img))
+    # print("Output frontnet: ", out_pytorch)
+    # new_pose = cf_sim.sim_new_pose(cf_sim.base_img)
+    # print("Output controller: ", new_pose)
 
-    # test with batch
-    print("Test with batch")
-    base_imgs = cf_sim.base_img.repeat(2, 1, 1, 1).to(cf_sim.device)
-    x, y, z, yaw = cf_sim.pose_estimator(base_imgs)
-    out_pytorch = torch.hstack(cf_sim.pose_estimator(base_imgs))
-    print("Output frontnet: ", out_pytorch)
-    new_pose = cf_sim.sim_new_pose(base_imgs)
-    print("Output controller: ", new_pose)
+    # # test with batch
+    # print("Test with batch")
+    # base_imgs = cf_sim.base_img.repeat(2, 1, 1, 1).to(cf_sim.device)
+    # x, y, z, yaw = cf_sim.pose_estimator(base_imgs)
+    # out_pytorch = torch.hstack(cf_sim.pose_estimator(base_imgs))
+    # print("Output frontnet: ", out_pytorch)
+    # new_pose = cf_sim.sim_new_pose(base_imgs)
+    # print("Output controller: ", new_pose)
+
+    patch = np.random.rand(3,3) * 255.
+    base_img = cf_sim.base_img[0]
+
+    print(patch.shape)
+    print(base_img.shape)
+
+    T = np.eye(3,3)   # basic transformation matrix
+    T[0, 0] = T[1, 1] = 10. # scale factor
+    # patch upper left corner at center of image
+    T[0, 2] = 80.
+    T[1, 2] = 48.
+
+    mod_img = cf_sim.project_patch(patch, T, base_img).to(cf_sim.device)
+    mod_img = mod_img.unsqueeze(0).unsqueeze(0)
+    print(mod_img.shape, mod_img.dtype)
+
+    print(cf_sim.pose_estimator(mod_img))
+    # out_pytorch = torch.hstack(cf_sim.pose_estimator(mod_img.unsqueeze(0).unsqueeze(0)))
+    # print("Output frontnet: ", out_pytorch)
+    # new_pose = cf_sim.sim_new_pose(mod_img)
+    # print("Output controller: ", new_pose)
+
+    # from matplotlib import pyplot as plt
+    # plt.imshow(mod_img, cmap='gray')
+    # plt.show()
