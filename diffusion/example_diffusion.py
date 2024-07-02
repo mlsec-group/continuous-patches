@@ -10,9 +10,9 @@ from tqdm import trange
 
 # Define net
 class Net(nn.Module):
-  def __init__(self, patch_size: int=3*3, nhidden: int = 256):
+  def __init__(self, patch_size: int=3*3, nhidden: int = 512):
     super().__init__()
-    layers = [nn.Linear(patch_size+1, nhidden)] # Change this to 6 if you want to use the fourier embeddings of t
+    layers = [nn.Linear(patch_size+4, nhidden)] # # input size + 1 for standard training, + 4 for Fourier feature embeddings
     for _ in range(5):
       layers.append(nn.Linear(nhidden, nhidden))
     layers.append(nn.Linear(nhidden, patch_size))
@@ -24,7 +24,7 @@ class Net(nn.Module):
 
   def forward(self, x, t):
     # Optional: Use Fourier feature embeddings for t, cf. transformers
-    #t = torch.concat([t - 0.5, torch.cos(2*torch.pi*t), torch.sin(2*torch.pi*t), -torch.cos(4*torch.pi*t)], axis=1)
+    t = torch.concat([t - 0.5, torch.cos(2*torch.pi*t), torch.sin(2*torch.pi*t), -torch.cos(4*torch.pi*t)], axis=1)
     x = torch.concat([x, t], axis=-1)
     for l in self.linears[:-1]:
       x = nn.ReLU()(l(x))
@@ -39,8 +39,8 @@ def get_alpha_betas(N: int):
   """
   beta_min = 0.1
   beta_max = 20.
-  betas = np.array([beta_min/N + i/(N*(N-1))*(beta_max-beta_min) for i in range(N)])
-  #betas = np.random.uniform(10e-4, .02, N)  # schedule from the 2020 paper
+  #betas = np.array([beta_min/N + i/(N*(N-1))*(beta_max-beta_min) for i in range(N)])
+  betas = np.random.uniform(10e-4, .02, N)  # schedule from the 2020 paper
   alpha_bars = np.cumprod(1 - betas)
   return alpha_bars, betas
 
@@ -106,7 +106,7 @@ def sample(model: nn.Module, patch_size: int=3*3, n_samples: int = 50, n_steps: 
 # plt.scatter(x, y)
 # plt.show()
 
-patch_size = (3,3)
+patch_size = (10,10)
 
 gt_patches = np.random.rand(2, np.multiply(*patch_size))
 data = []
@@ -127,7 +127,7 @@ model = Net(patch_size=np.multiply(*patch_size))
 model.to(device)
 
 # training
-trained_model, all_losses = train(model, 40_000)
+trained_model, all_losses = train(model, 10_000)
 trained_model = trained_model.eval()
 
 # fig, ax = plt.subplots(1,1)
