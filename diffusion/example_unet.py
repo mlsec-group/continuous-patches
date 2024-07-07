@@ -1,6 +1,9 @@
+import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Callable, Optional
+
+from tqdm import trange
 
 class ConvBlock(nn.Module):
     """Simple convolutional block: Conv2D -> BatchNorm -> Activation."""
@@ -20,6 +23,7 @@ class ConvBlock(nn.Module):
         self.act = activation(inplace=True)
 
     def forward(self, x: Tensor) -> Tensor:
+        # print("conv block x shape: ", x.shape)
         x = self.conv(x)
         x = self.bn(x)
         x = self.act(x)
@@ -59,6 +63,7 @@ class PositionalEncoding(nn.Module):
         Returns:
             Tensor: Returned position embedding.
         """
+        # print("t in embedding shape: ", t.shape, t.dtype)
         return self.pos_embeddings[t, :]
 
 
@@ -170,8 +175,10 @@ class ResNetBlock(nn.Module):
 
         # Inject positional encoding in hidden state.
         if t_emb is not None and self.t_proj is not None:
-            t_emb = self.t_proj(t_emb)
-            x = t_emb.unsqueeze(2).unsqueeze(2) + x #rearrange(t_emb, "b c -> b c 1 1") + x
+            t_emb = self.t_proj(t_emb).unsqueeze(2).unsqueeze(2) # shape was (b, 128), now is (b, 128, 1, 1)
+            # print(t_emb.shape)
+            # print(x.shape)
+            x = t_emb + x #rearrange(t_emb, "b c -> b c 1 1") + x
 
         # Second hidden layer.
         x = self.conv2(x)
@@ -223,8 +230,11 @@ class UNet(nn.Module):
     def forward(self, x: Tensor, t: Tensor = None) -> Tensor:
         if t is not None:
             # Create time embedding using positional encoding.
-            t_emb = self.t_embedding(t)
+            # t = torch.concat([t - 0.5, torch.cos(2*torch.pi*t), torch.sin(2*torch.pi*t), -torch.cos(4*torch.pi*t)], axis=1)
+            # print(t.shape)
+            t_emb = self.t_embedding(t) # shape was (b, 1, 512), now is (b, 512)
 
+        # print("unet forward x", x.shape)
         x = self.conv_in(x)
 
         # Store hidden states for U-net skip connections.
@@ -242,8 +252,7 @@ class UNet(nn.Module):
 
         return out
 
-
-def train(model: nn.Module, data_loader: torch.utils.data.DataLoader, nepochs: int = 10, denoising_steps: int = 100):
+def train(model: nn.Module, data_loader: torch.utils.data.DataLoader, device: torch.device, nepochs: int = 10, denoising_steps: int = 100):
   """Alg 1 from the DDPM paper"""
   optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
   alpha_bars, _ = get_alpha_betas(denoising_steps)      # Precompute alphas
@@ -254,18 +263,24 @@ def train(model: nn.Module, data_loader: torch.utils.data.DataLoader, nepochs: i
   print("Start training...")
   for epoch in trange(nepochs):
     for [data] in data_loader:
-    #   data = data.to(device)
+      # data = data.to(device)
       optimizer.zero_grad()
       # print("batch", data.shape)
       # Fwd pass
       t = torch.randint(denoising_steps, size=(data.shape[0],))  # sample timesteps - 1 per datapoint
       # print("t", t.shape)
-      alpha_t = torch.index_select(torch.Tensor(alpha_bars), 0, t).unsqueeze(1).to(device)    # Get the alphas for each timestep
+      alpha_t = torch.index_select(torch.Tensor(alpha_bars), 0, t).unsqueeze(1).unsqueeze(1).unsqueeze(1).to(device)    # Get the alphas for each timestep
       # print("alpha_t", alpha_t**0.5, (alpha_t**.5).shape)
 
       noise = torch.randn(*data.shape, device=device)   # Sample DIFFERENT random noise for each datapoint
+      
+      # print("data shape: ", data.shape)
+      # print("alpha t shape: ", alpha_t.shape)
+      # print("noise shape: ", noise.shape)
+      # print("t shape: ", t.shape)
       model_in = alpha_t**.5 * data + noise*(1-alpha_t)**.5   # Noise corrupt the data (eq14)
-      out = model(model_in, t.unsqueeze(1).to(device))
+      # print("model_in shape: ", model_in.shape)
+      out = model(model_in, t.to(device))
       loss = torch.mean((noise - out)**2)     # Compute loss on prediction (eq14)
       losses.append(loss.detach().cpu().numpy())
       all_losses.append(loss.detach().cpu().numpy())
@@ -274,7 +289,7 @@ def train(model: nn.Module, data_loader: torch.utils.data.DataLoader, nepochs: i
       loss.backward()
       optimizer.step()
 
-    if (epoch+1) % 500 == 0:
+    if (epoch+1) % 10 == 0:
         mean_loss = np.mean(np.array(losses))
         losses = []
         print("Epoch %d,\t Loss %f " % (epoch+1, mean_loss))
@@ -282,25 +297,33 @@ def train(model: nn.Module, data_loader: torch.utils.data.DataLoader, nepochs: i
   return model, all_losses
 
 
-def sample(model: nn.Module, patch_size: int=3*3, n_samples: int = 50, n_steps: int=100):
+def sample(model: nn.Module, device: torch.device, patch_size: (int, int), n_samples: int = 50, n_steps: int=100):
     """Alg 2 from the DDPM paper."""
-    x_t = torch.randn((n_samples, patch_size)).to(device)
+    x_t = torch.randn((n_samples, 1, *patch_size)).to(device)
     alpha_bars, betas = get_alpha_betas(n_steps)
     alphas = 1 - betas
     for t in range(len(alphas))[::-1]:
-        ts = t * torch.ones((n_samples, 1)).to(device)
-        ab_t = alpha_bars[t] * torch.ones((n_samples, 1)).to(device)  # Tile the alpha to the number of samples
-        z = (torch.randn((n_samples, patch_size)) if t > 1 else torch.zeros((n_samples, patch_size))).to(device)
-        model_prediction = model(x_t, ts)
-        x_t = 1 / alphas[t]**.5 * (x_t - betas[t]/(1-ab_t)**.5 * model_prediction)
+        ts = t * torch.ones((n_samples, 1), dtype=torch.int64).to(device)
+        # print("ts shape: ", ts.shape)
+        ab_t = alpha_bars[t] * torch.ones((n_samples, 1), dtype=torch.int64).to(device)  # Tile the alpha to the number of samples
+        # print("ab t shape: ", ab_t.shape)
+        z = (torch.randn((n_samples, 1, *patch_size)) if t > 1 else torch.zeros((n_samples, 1, *patch_size))).to(device)
+        model_prediction = model(x_t, ts.squeeze(1))
+        # print((x_t - betas[t]/(1-ab_t).shape))
+        # print((x_t - betas[t]/(1-ab_t)**.5 * model_prediction).shape)
+        x_t = 1 / alphas[t]**.5 * (x_t - (betas[t]/(1-ab_t)**.5).unsqueeze(2).unsqueeze(2) * model_prediction)
         x_t += betas[t]**0.5 * z
 
     return x_t
 
+
 if __name__ == '__main__':
     import pickle
     import numpy as np
-    import torch
+    import matplotlib.pyplot as plt
+
+    from example_diffusion import get_alpha_betas
+
 
     with open('/home/hanfeld/flying_adversarial_patch/80x80patches.pickle', 'rb') as f:
         data = pickle.load(f)
@@ -312,12 +335,12 @@ if __name__ == '__main__':
     # # print(data.shape)
     data = np.array(data)
     data_t = torch.Tensor(data).unsqueeze(1)
-    print(data_t.shape)
+    print("data shape: ", data_t.shape)
 
     # Define dataset
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     dataset = torch.utils.data.TensorDataset(data_t.to(device))
-    loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True)
+    loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True, drop_last=True)
 
 
     model = UNet(in_size=1, out_size=1)
@@ -326,7 +349,23 @@ if __name__ == '__main__':
     [batch] = next(iter(loader))
     print(batch.shape)
 
-    t = torch.randint(100, size=(batch.shape[0],))
+    # t = torch.randint(100, size=(batch.shape[0],))
 
-    out = model(batch, t)
-    print(out.shape)
+    # out = model(batch, t)
+    # print(out.shape)
+
+    # training
+    trained_model, all_losses = train(model, loader, device, 10)
+    trained_model = trained_model.eval()
+
+    samples = sample(trained_model, device, n_samples=3, patch_size=patch_size).detach().cpu().numpy()
+    print(samples.shape)
+    print(np.min(samples), np.max(samples))
+
+    fig = plt.figure(constrained_layout=True)
+    axs_samples = fig.subplots(1, 3)
+    for i, sample in enumerate(samples):
+        axs_samples[i].imshow(sample[0], cmap='gray')
+        axs_samples[i].set_title(f'sample {i}')
+    fig.savefig(f'unet_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
+    plt.show()
