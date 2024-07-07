@@ -355,8 +355,9 @@ if __name__ == '__main__':
     # print(out.shape)
 
     # training
-    trained_model, all_losses = train(model, loader, device, 10)
+    trained_model, all_losses = train(model, loader, device, 1_000)
     trained_model = trained_model.eval()
+    torch.save(trained_model.state_dict(), f'unet_{patch_size[0]}x{patch_size[1]}_{1_000}.pth')
 
     samples = sample(trained_model, device, n_samples=3, patch_size=patch_size).detach().cpu().numpy()
     print(samples.shape)
