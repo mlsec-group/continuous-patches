@@ -26,9 +26,9 @@ class CFSim():
         # self.target_trajectory = target_trajectory
 
         # might be deleted later, the dataset is only loaded to get a suitable background image
-        self.dataset, _ = self.load_dataset(dataset_path)
-        base_img, gt = self.dataset.dataset.__getitem__(0)
-        self.base_img = base_img#.squeeze(0).numpy()
+        # self.dataset, _ = self.load_dataset(dataset_path)
+        # base_img, gt = self.dataset.dataset.__getitem__(0)
+        # self.base_img = base_img#.squeeze(0).numpy()
 
         # patch stays random for now and inside the simulator for compatibility with current
         # optimize script
@@ -81,14 +81,58 @@ class CFSim():
         split_idx = int(len(images) * train_set_size)
 
         train_set = Dataset(images[indices[:split_idx]], labels[indices[:split_idx]])
-        test_set = Dataset(images[indices[split_idx:]], labels[split_idx:])
+        # test_set = Dataset(images[indices[split_idx:]], labels[split_idx:])
 
         # for quick and convinient access, create a torch DataLoader with the given parameters
         data_params = {'batch_size': batch_size, 'shuffle': shuffle, 'drop_last':drop_last, 'num_workers': num_workers}
         train_loader = data.DataLoader(train_set, **data_params)
-        test_loader = data.DataLoader(test_set, **data_params)
+        # test_loader = data.DataLoader(test_set, **data_params)
 
-        return train_loader, test_loader
+        return train_loader#, test_loader
+
+
+    def _perspective_grid(self,
+    coeffs: [float], 
+    w: int, h: int, 
+    ow: int, oh: int, 
+    dtype: torch.dtype, 
+    device: torch.device,
+    center = None,
+    ) -> torch.Tensor:
+        # source: https://github.com/pytorch/pytorch/issues/100526#issuecomment-1610226058
+        # https://github.com/python-pillow/Pillow/blob/4634eafe3c695a014267eefdce830b4a825beed7/
+        # src/libImaging/Geometry.c#L394
+
+        #
+        # x_out = (coeffs[0] * x + coeffs[1] * y + coeffs[2]) / (coeffs[6] * x + coeffs[7] * y + 1)
+        # y_out = (coeffs[3] * x + coeffs[4] * y + coeffs[5]) / (coeffs[6] * x + coeffs[7] * y + 1)
+        #
+        batch_size = coeffs.shape[0]
+        theta1 = coeffs[..., :6].reshape(batch_size, 2, 3)
+
+        theta2 = coeffs[..., 6:].repeat_interleave(2, dim=0) # theta2 is a matrix of shape [2, 3], it is the last row of the original transformation matrix repeated 2x
+        theta2 = theta2.reshape(batch_size, 2, 3) # reshape from [batch_size*2, 3] to [batch_size, 2, 3] 
+
+        d = 0.5
+        base_grid = torch.empty(batch_size, oh, ow, 3, dtype=dtype, device=device)
+        x_grid = torch.linspace(d, ow + d - 1.0, steps=ow, device=device, dtype=dtype)
+        base_grid[..., 0].copy_(x_grid)
+        y_grid = torch.linspace(d, oh + d - 1.0, steps=oh, device=device, dtype=dtype).unsqueeze_(-1)
+        base_grid[..., 1].copy_(y_grid)
+        base_grid[..., 2].fill_(1)
+
+        rescaled_theta1 = theta1.transpose(1, 2).div_(torch.tensor([0.5 * w, 0.5 * h], dtype=dtype, device=device))
+        shape = (batch_size, oh * ow, 3)
+        output_grid1 = base_grid.view(shape).bmm(rescaled_theta1)
+        output_grid2 = base_grid.view(shape).bmm(theta2.transpose(1, 2))
+
+        if center is not None:
+            center = torch.tensor(center, dtype=dtype, device=device)
+        else:
+            center = 1.0
+
+        output_grid = output_grid1.div_(output_grid2).sub_(center)
+        return output_grid.view(batch_size, oh, ow, 2)
         
     def project_patch(self, patch, T, image):
         # using cv2 to project the patch instead of FAP place_patch() function,
@@ -104,6 +148,29 @@ class CFSim():
         mod_img += warped_patch
 
         return mod_img # return a np array instead of jnp array and convert to double
+
+        # sanity check with torch perspective grid
+    def pt_project_patch(self, patch, T, base_img):
+        patch_t = torch.tensor(patch, dtype=torch.float64).unsqueeze(0).unsqueeze(0)
+        img = torch.tensor(base_img).unsqueeze(0)
+
+        p_height, p_width = patch.shape[-2:]
+        i_height, i_width = img.shape[-2:]
+
+        mask = torch.ones_like(patch_t, dtype=torch.float64)
+
+        inv_t = np.linalg.inv(T)
+        coeffs = torch.tensor(np.array([inv_t.flatten()]), dtype=torch.double)
+        
+        grid = self._perspective_grid(coeffs, w=p_width, h=p_height, dtype=torch.float64, ow=i_width, oh=i_height, device=torch.device('cpu'), center = [1., 1.])
+
+        bit_mask = torch.nn.functional.grid_sample(mask, grid, mode='bilinear', align_corners=False, padding_mode='zeros').bool()
+        transformed_patch = torch.nn.functional.grid_sample(patch_t, grid, mode='bilinear', align_corners=False, padding_mode='zeros')
+
+        modified_image = img * ~bit_mask.bool()
+        modified_image += transformed_patch
+
+        return modified_image
     
     def sim_new_pose(self, image: np.ndarray):
         # make sure images (plural if working with batches) are of correct shape
