@@ -334,6 +334,7 @@ if __name__ == '__main__':
     # # data = data.reshape(data.shape[0], -1)
     # # print(data.shape)
     data = np.array(data)
+    data = (data - np.min(data)) / (np.max(data) - np.min(data))
     data_t = torch.Tensor(data).unsqueeze(1)
     print("data shape: ", data_t.shape)
 
