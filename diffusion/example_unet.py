@@ -5,6 +5,8 @@ from typing import Callable, Optional
 
 from tqdm import trange
 
+from .example_diffusion import get_alpha_betas
+
 # source for UNet: https://github.com/jbergq/simple-diffusion-model/
 
 class ConvBlock(nn.Module):
@@ -234,7 +236,7 @@ class UNet(nn.Module):
             # Create time embedding using positional encoding.
             # t = torch.concat([t - 0.5, torch.cos(2*torch.pi*t), torch.sin(2*torch.pi*t), -torch.cos(4*torch.pi*t)], axis=1)
             # print(t.shape)
-            t_emb = self.t_embedding(t) # shape was (b, 1, 512), now is (b, 512)
+            t_emb = self.t_embedding(t) # shape is (b, 512)
 
         # print("unet forward x", x.shape)
         x = self.conv_in(x)
@@ -315,6 +317,7 @@ def sample(model: nn.Module, device: torch.device, patch_size: (int, int), n_sam
         # print((x_t - betas[t]/(1-ab_t)**.5 * model_prediction).shape)
         x_t = 1 / alphas[t]**.5 * (x_t - (betas[t]/(1-ab_t)**.5).unsqueeze(2).unsqueeze(2) * model_prediction)
         x_t += betas[t]**0.5 * z
+        x_t.clamp_(0., 1.)   # keeping pixel values in range 0,1
 
     return x_t
 
@@ -323,8 +326,6 @@ if __name__ == '__main__':
     import pickle
     import numpy as np
     import matplotlib.pyplot as plt
-
-    from example_diffusion import get_alpha_betas
 
 
     with open('/home/hanfeld/flying_adversarial_patch/80x80patches.pickle', 'rb') as f:
