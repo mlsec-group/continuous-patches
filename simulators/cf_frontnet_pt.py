@@ -81,14 +81,14 @@ class CFSim():
         split_idx = int(len(images) * train_set_size)
 
         train_set = Dataset(images[indices[:split_idx]], labels[indices[:split_idx]])
-        # test_set = Dataset(images[indices[split_idx:]], labels[split_idx:])
+        test_set = Dataset(images[indices[split_idx:]], labels[split_idx:])
 
         # for quick and convinient access, create a torch DataLoader with the given parameters
         data_params = {'batch_size': batch_size, 'shuffle': shuffle, 'drop_last':drop_last, 'num_workers': num_workers}
         train_loader = data.DataLoader(train_set, **data_params)
-        # test_loader = data.DataLoader(test_set, **data_params)
+        test_loader = data.DataLoader(test_set, **data_params)
 
-        return train_loader#, test_loader
+        return train_loader, test_loader
 
 
     def _perspective_grid(self,
@@ -152,7 +152,7 @@ class CFSim():
         # sanity check with torch perspective grid
     def pt_project_patch(self, patch, T, base_img):
         patch_t = torch.tensor(patch, dtype=torch.float64, device=self.device).unsqueeze(0).unsqueeze(0)
-        img = torch.tensor(base_img, device=self.device).unsqueeze(0)
+        img = torch.tensor(base_img, device=self.device)
 
         p_height, p_width = patch.shape[-2:]
         i_height, i_width = img.shape[-2:]
