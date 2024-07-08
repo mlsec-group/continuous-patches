@@ -151,18 +151,18 @@ class CFSim():
 
         # sanity check with torch perspective grid
     def pt_project_patch(self, patch, T, base_img):
-        patch_t = torch.tensor(patch, dtype=torch.float64).unsqueeze(0).unsqueeze(0)
-        img = torch.tensor(base_img).unsqueeze(0)
+        patch_t = torch.tensor(patch, dtype=torch.float64, device=self.device).unsqueeze(0).unsqueeze(0)
+        img = torch.tensor(base_img, device=self.device).unsqueeze(0)
 
         p_height, p_width = patch.shape[-2:]
         i_height, i_width = img.shape[-2:]
 
-        mask = torch.ones_like(patch_t, dtype=torch.float64)
+        mask = torch.ones_like(patch_t, dtype=torch.float64, device=self.device)
 
         inv_t = np.linalg.inv(T)
-        coeffs = torch.tensor(np.array([inv_t.flatten()]), dtype=torch.double)
+        coeffs = torch.tensor(np.array([inv_t.flatten()]), dtype=torch.float64, device=self.device)
         
-        grid = self._perspective_grid(coeffs, w=p_width, h=p_height, dtype=torch.float64, ow=i_width, oh=i_height, device=torch.device('cpu'), center = [1., 1.])
+        grid = self._perspective_grid(coeffs, w=p_width, h=p_height, dtype=torch.float64, ow=i_width, oh=i_height, device=self.device, center = [1., 1.])
 
         bit_mask = torch.nn.functional.grid_sample(mask, grid, mode='bilinear', align_corners=False, padding_mode='zeros').bool()
         transformed_patch = torch.nn.functional.grid_sample(patch_t, grid, mode='bilinear', align_corners=False, padding_mode='zeros')
