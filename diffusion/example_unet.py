@@ -5,6 +5,8 @@ from typing import Callable, Optional
 
 from tqdm import trange
 
+# source for UNet: https://github.com/jbergq/simple-diffusion-model/
+
 class ConvBlock(nn.Module):
     """Simple convolutional block: Conv2D -> BatchNorm -> Activation."""
 
