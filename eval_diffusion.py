@@ -29,13 +29,14 @@ if __name__ == '__main__':
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    n_samples = 3
 
     model = UNet(in_size=1, out_size=1)
     model.to(device)
 
     model.load_state_dict(torch.load('unet_80x80_1000_v2.pth', map_location=device))
 
-    samples = sample(model, device, [80, 80], n_samples=3).detach().cpu()
+    samples = sample(model, device, [80, 80], n_samples=n_samples).detach().cpu() * 255.
     del model  # running into memory issues, hence have to delete the diffusion model
 
     print(samples.shape)
@@ -43,13 +44,13 @@ if __name__ == '__main__':
     sim = CFSim()
 
     # generate random patches
-    random_patches = torch.rand_like(samples)
+    random_patches = torch.rand_like(samples) * 255.
 
     # load 3 patches
     path = Path(f'/home/hanfeld/flying_adversarial_patch/results/dataset80x80/')
     patches_paths = list(path.glob('[0-9]*/patches.npy'))
     patches_paths.sort(key=lambda path: int(path.parent.name))
-    patches = np.array([np.load(file_path)[-1][0][0]*255. for file_path in patches_paths[:3]])
+    patches = np.array([np.load(file_path)[-1][0][0]*255. for file_path in patches_paths[:n_samples]])
 
 
 
@@ -73,8 +74,30 @@ if __name__ == '__main__':
     print(all_diffusion.shape)
     print(all_random.shape)
 
+    np.save('eval/comparison_gt.npy', all_gt)
+    np.save('eval/comparison_diffusion.npy', all_diffusion)
+    np.save('eval/comparison_random.npy', all_random)
 
+    print(f"Ground truth patches mean loss: {np.mean(all_gt)}, std: {np.std(all_gt)}")
+    print(f"Per patch, mean: {np.mean(all_gt, axis=1)}, std: {np.std(all_gt, axis=1)}")
+    print()
+    print(f"Random patches mean loss: {np.mean(all_random)}, std: {np.std(all_random)}")
+    print(f"Per patch, mean: {np.mean(all_random, axis=1)}, std: {np.std(all_random, axis=1)}")
+    print()
+    print(f"Diffusion patches mean loss: {np.mean(all_diffusion)}, std: {np.std(all_diffusion)}")
+    print(f"Per patch, mean: {np.mean(all_diffusion, axis=1)}, std: {np.std(all_diffusion, axis=1)}")
+    print()
 
-    # fig.savefig('eval/eval_boxplot_FAPs.png', dpi=200)
+    import matplotlib.pyplot as plt
+
+    fig, axs = plt.subplots(1, 3, layout='constrained')
+    axs[0].boxplot(all_gt.T, tick_labels=[f'gt {i}' for i in range(len(all_gt))]) 
+    axs[0].set_ylabel('MSE(target, prediction)')
+
+    axs[1].boxplot(all_random.T, tick_labels=[f'rnd {i}' for i in range(len(all_random))]) 
+
+    axs[2].boxplot(all_diffusion.T, tick_labels=[f'dif {i}' for i in range(len(all_diffusion))]) 
+
+    fig.savefig('eval/eval_boxplot_all.png', dpi=200)
     
     
