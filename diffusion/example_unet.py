@@ -334,50 +334,50 @@ if __name__ == '__main__':
     # print(patch_size)
     # # data = data.reshape(data.shape[0], -1)
     # # print(data.shape)
-    data = np.array(data[:2])
-    gt_patches = (data - np.min(data)) / (np.max(data) - np.min(data))
-    print(np.min(gt_patches), np.max(gt_patches))
-    print(gt_patches.shape)
-    # gt_patches = torch.Tensor(data).unsqueeze(1)
-    # print("data shape: ", data_t.shape)
+    data = np.array(data)[:500]
+    data = (data - np.min(data)) / (np.max(data) - np.min(data))
+    # print(np.min(gt_patches), np.max(gt_patches))
+    # print(gt_patches.shape)
+    data_t = torch.Tensor(data).unsqueeze(1)
+    print("data shape: ", data_t.shape)
 
-    data = []
-    for _ in range(512):
-        data.append(gt_patches[0]+np.random.normal(loc=0.0, scale=0.05, size=(1, *patch_size)))
-        data.append(gt_patches[1]+np.random.normal(loc=0.0, scale=0.05, size=(1, *patch_size)))
+    # data = []
+    # for _ in range(512):
+    #     data.append(gt_patches[0]+np.random.normal(loc=0.0, scale=0.05, size=(1, *patch_size)))
+    #     data.append(gt_patches[1]+np.random.normal(loc=0.0, scale=0.05, size=(1, *patch_size)))
 
-    data = torch.Tensor(np.array(data))
-    print(data.shape)
+    # data = torch.Tensor(np.array(data))
+    # print(data.shape)
     
 
     # Define dataset
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    dataset = torch.utils.data.TensorDataset(data)
+    dataset = torch.utils.data.TensorDataset(data_t)
     loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True, drop_last=True)
 
     
-    # [batch] = next(iter(loader))
+    # # [batch] = next(iter(loader))
     model = UNet(in_size=1, out_size=1, device=device)
     model.to(device)
-    # # t = torch.randint(100, size=(batch.shape[0],))
-    # # [batch] = next(iter(loader))
-    # # print(batch.shape)
-
     # # # t = torch.randint(100, size=(batch.shape[0],))
-    # # out = model(batch, t)
+    # # # [batch] = next(iter(loader))
+    # # # print(batch.shape)
+
+    # # # # t = torch.randint(100, size=(batch.shape[0],))
     # # # out = model(batch, t)
-    # # # print(out.shape)
-    # torch.save(trained_model.state_dict(), f'unet_{patch_size[0]}x{patch_size[1]}_{1_000}.pth')
-    # training
-    all_losses = train(model, loader, device, 40, denoising_steps=1_000)
+    # # # # out = model(batch, t)
+    # # # # print(out.shape)
+    # # torch.save(trained_model.state_dict(), f'unet_{patch_size[0]}x{patch_size[1]}_{1_000}.pth')
+    # # training
+    all_losses = train(model, loader, device, 1_000, denoising_steps=1_000)
     model.eval()
 
-    del loader
-    # torch.save(trained_model.state_dict(), f'unet_{patch_size[0]}x{patch_size[1]}_{1_000}.pth')
+    # del loader
+    torch.save(trained_model.state_dict(), f'unet_{patch_size[0]}x{patch_size[1]}_{1_000}_v3.pth')
 
-    # device = torch.device('cpu')
-    # model.to(device)
-    # model.t_embedding[0].pos_embeddings = model.t_embedding[0].pos_embeddings.to(device)
+    # # device = torch.device('cpu')
+    # # model.to(device)
+    # # model.t_embedding[0].pos_embeddings = model.t_embedding[0].pos_embeddings.to(device)
 
 
     
@@ -388,16 +388,17 @@ if __name__ == '__main__':
     print(samples.shape)
     print(np.min(samples), np.max(samples))
 
-    fig = plt.figure(constrained_layout=True)
-    subfigs = fig.subfigures(2, 1)
-    axs_gt = subfigs[0].subplots(1, 2)
-    for i, gt_patch in enumerate(gt_patches):
-        axs_gt[i].imshow(gt_patch, cmap='gray')
-        axs_gt[i].set_title(f'ground truth {i}')
+    # fig = plt.figure(constrained_layout=True)
+    # subfigs = fig.subfigures(2, 1)
+    # axs_gt = subfigs[0].subplots(1, 2)
+    # for i, gt_patch in enumerate(gt_patches):
+    #     axs_gt[i].imshow(gt_patch, cmap='gray')
+    #     axs_gt[i].set_title(f'ground truth {i}')
 
-    axs_samples = subfigs[1].subplots(1, n_samples)
+    fig = plt.figure(constrained_layout=True)
+    axs_samples = fig.subplots(1, n_samples)
     for i, sample in enumerate(samples):
         axs_samples[i].imshow(sample[0], cmap='gray')
         axs_samples[i].set_title(f'sample {i}')
-    fig.savefig(f'debug_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
+    fig.savefig(f'samples_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
     plt.show()
