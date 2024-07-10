@@ -72,6 +72,25 @@ class PositionalEncoding(nn.Module):
         # print("t in embedding shape: ", t.shape, t.dtype)
         return self.pos_embeddings[t, :]
 
+
+class TargetEncoding(nn.Module):
+    def __init__(self, patch_size: [int, int], embed_channels: int = 1):
+        super().__init__()
+
+        # the whole purpose of this is to learn to encode the target 
+        # and bring it into a shape that is easy to concatenate with the
+        # image before processing it
+
+        self.embed_channels = embed_channels
+        self.h, self.w = patch_size
+        self.linear = nn.Linear(3, 512)
+        self.conv = nn.Conv2d(512, 64, kernel_size=2, stride=1, padding=5)
+
+    def forward(self, target: Tensor) -> Tensor:
+        out = self.linear(target).unsqueeze(2).unsqueeze(2)
+        out = self.conv(out).view(target.shape[0], self.embed_channels, self.h, self.w)
+        return out
+
 def conv3x3(
     in_size: int,
     out_size: int,
@@ -322,83 +341,96 @@ def sample(model: nn.Module, device: torch.device, patch_size: (int, int), n_sam
     return x_t
 
 if __name__ == '__main__':
-    import pickle
-    import numpy as np
-    import matplotlib.pyplot as plt
 
-    with open('/home/hanfeld/flying_adversarial_patch/80x80patches.pickle', 'rb') as f:
-        data = pickle.load(f)
 
-    print(data.shape)
-    patch_size = data.shape[1:]
-    # print(patch_size)
-    # # data = data.reshape(data.shape[0], -1)
-    # # print(data.shape)
-    data = np.array(data)[:500]
-    data = (data - np.min(data)) / (np.max(data) - np.min(data))
-    # print(np.min(gt_patches), np.max(gt_patches))
-    # print(gt_patches.shape)
-    data_t = torch.Tensor(data).unsqueeze(1)
-    print("data shape: ", data_t.shape)
+    bs = 1
+    channels = 1
+    w = 80
+    h = 80
 
-    # data = []
-    # for _ in range(512):
-    #     data.append(gt_patches[0]+np.random.normal(loc=0.0, scale=0.05, size=(1, *patch_size)))
-    #     data.append(gt_patches[1]+np.random.normal(loc=0.0, scale=0.05, size=(1, *patch_size)))
+    target = torch.tensor((1., 0., 0.)).unsqueeze(0)
+    
+    target_embed = TargetEncoding([h, w])
+    embedded = target_embed(target)
+    print(embedded.shape)
 
-    # data = torch.Tensor(np.array(data))
+    # import pickle
+    # import numpy as np
+    # import matplotlib.pyplot as plt
+
+    # with open('/home/hanfeld/flying_adversarial_patch/80x80patches.pickle', 'rb') as f:
+    #     data = pickle.load(f)
+
     # print(data.shape)
+    # patch_size = data.shape[1:]
+    # # print(patch_size)
+    # # # data = data.reshape(data.shape[0], -1)
+    # # # print(data.shape)
+    # data = np.array(data)[:500]
+    # data = (data - np.min(data)) / (np.max(data) - np.min(data))
+    # # print(np.min(gt_patches), np.max(gt_patches))
+    # # print(gt_patches.shape)
+    # data_t = torch.Tensor(data).unsqueeze(1)
+    # print("data shape: ", data_t.shape)
+
+    # # data = []
+    # # for _ in range(512):
+    # #     data.append(gt_patches[0]+np.random.normal(loc=0.0, scale=0.05, size=(1, *patch_size)))
+    # #     data.append(gt_patches[1]+np.random.normal(loc=0.0, scale=0.05, size=(1, *patch_size)))
+
+    # # data = torch.Tensor(np.array(data))
+    # # print(data.shape)
     
 
-    # Define dataset
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    dataset = torch.utils.data.TensorDataset(data_t)
-    loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True, drop_last=True)
+    # # Define dataset
+    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # dataset = torch.utils.data.TensorDataset(data_t)
+    # loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True, drop_last=True)
 
     
-    # # [batch] = next(iter(loader))
-    model = UNet(in_size=1, out_size=1, device=device)
-    model.to(device)
-    # # # t = torch.randint(100, size=(batch.shape[0],))
     # # # [batch] = next(iter(loader))
-    # # # print(batch.shape)
-
+    # model = UNet(in_size=1, out_size=1, device=device)
+    # model.to(device)
     # # # # t = torch.randint(100, size=(batch.shape[0],))
-    # # # out = model(batch, t)
+    # # # # [batch] = next(iter(loader))
+    # # # # print(batch.shape)
+
+    # # # # # t = torch.randint(100, size=(batch.shape[0],))
     # # # # out = model(batch, t)
-    # # # # print(out.shape)
-    # # torch.save(trained_model.state_dict(), f'unet_{patch_size[0]}x{patch_size[1]}_{1_000}.pth')
-    # # training
-    all_losses = train(model, loader, device, 1_000, denoising_steps=1_000)
-    model.eval()
+    # # # # # out = model(batch, t)
+    # # # # # print(out.shape)
+    # # # torch.save(trained_model.state_dict(), f'unet_{patch_size[0]}x{patch_size[1]}_{1_000}.pth')
+    # # # training
+    # all_losses = train(model, loader, device, 1_000, denoising_steps=1_000)
+    # model.eval()
 
-    # del loader
-    torch.save(trained_model.state_dict(), f'unet_{patch_size[0]}x{patch_size[1]}_{1_000}_v3.pth')
+    # # del loader
+    # torch.save(trained_model.state_dict(), f'unet_{patch_size[0]}x{patch_size[1]}_{1_000}_v3.pth')
 
-    # # device = torch.device('cpu')
-    # # model.to(device)
-    # # model.t_embedding[0].pos_embeddings = model.t_embedding[0].pos_embeddings.to(device)
+    # # # device = torch.device('cpu')
+    # # # model.to(device)
+    # # # model.t_embedding[0].pos_embeddings = model.t_embedding[0].pos_embeddings.to(device)
 
 
     
-    n_samples = 5
-    # running into memory issues with this sample function! fix: don't compute gradients
-    with torch.no_grad():
-        samples = sample(model, device, n_samples=n_samples, patch_size=patch_size, n_steps=1_000).detach().cpu().numpy()
-    print(samples.shape)
-    print(np.min(samples), np.max(samples))
+    # n_samples = 5
+    # # running into memory issues with this sample function! fix: don't compute gradients
+    # with torch.no_grad():
+    #     samples = sample(model, device, n_samples=n_samples, patch_size=patch_size, n_steps=1_000).detach().cpu().numpy()
+    # print(samples.shape)
+    # print(np.min(samples), np.max(samples))
+
+    # # fig = plt.figure(constrained_layout=True)
+    # # subfigs = fig.subfigures(2, 1)
+    # # axs_gt = subfigs[0].subplots(1, 2)
+    # # for i, gt_patch in enumerate(gt_patches):
+    # #     axs_gt[i].imshow(gt_patch, cmap='gray')
+    # #     axs_gt[i].set_title(f'ground truth {i}')
 
     # fig = plt.figure(constrained_layout=True)
-    # subfigs = fig.subfigures(2, 1)
-    # axs_gt = subfigs[0].subplots(1, 2)
-    # for i, gt_patch in enumerate(gt_patches):
-    #     axs_gt[i].imshow(gt_patch, cmap='gray')
-    #     axs_gt[i].set_title(f'ground truth {i}')
-
-    fig = plt.figure(constrained_layout=True)
-    axs_samples = fig.subplots(1, n_samples)
-    for i, sample in enumerate(samples):
-        axs_samples[i].imshow(sample[0], cmap='gray')
-        axs_samples[i].set_title(f'sample {i}')
-    fig.savefig(f'samples_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
-    plt.show()
+    # axs_samples = fig.subplots(1, n_samples)
+    # for i, sample in enumerate(samples):
+    #     axs_samples[i].imshow(sample[0], cmap='gray')
+    #     axs_samples[i].set_title(f'sample {i}')
+    # fig.savefig(f'samples_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
+    # plt.show()
