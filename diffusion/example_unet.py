@@ -359,7 +359,7 @@ if __name__ == '__main__':
     import numpy as np
     import matplotlib.pyplot as plt
 
-    with open('data/FAP_gt.pickle', 'rb') as f:
+    with open('/home/hanfeld/flying_adversarial_patch/80x80patches_all_2.pickle', 'rb') as f:
         data = pickle.load(f)    
 
 
@@ -390,59 +390,7 @@ if __name__ == '__main__':
     all_losses = train(model, loader, device, 1_000, denoising_steps=1_000)
     model.eval()
 
-    torch.save(model.state_dict(), f'conditioned_unet_{patch_size[0]}x{patch_size[1]}_{1_000}_v1.pth')
-
-    # p_batch, t_batch = next(iter(loader))
-    # print(p_batch.shape, t_batch.shape)
-
-    # t = torch.randint(100, size=(p_batch.shape[0],))
-    # out = model(p_batch.to(device), t_batch.to(device), t.to(device))
-    # print(out.shape)
-
-    # patch_size = data.shape[1:]
-    # # print(patch_size)
-    # # # data = data.reshape(data.shape[0], -1)
-    # # # print(data.shape)
-    # data = np.array(data)[:500]
-    # data = (data - np.min(data)) / (np.max(data) - np.min(data))
-    # # print(np.min(gt_patches), np.max(gt_patches))
-    # # print(gt_patches.shape)
-    # data_t = torch.Tensor(data).unsqueeze(1)
-    # print("data shape: ", data_t.shape)
-
-    # # data = []
-    # # for _ in range(512):
-    # #     data.append(gt_patches[0]+np.random.normal(loc=0.0, scale=0.05, size=(1, *patch_size)))
-    # #     data.append(gt_patches[1]+np.random.normal(loc=0.0, scale=0.05, size=(1, *patch_size)))
-
-    # # data = torch.Tensor(np.array(data))
-    # # print(data.shape)
-    
-
-   
-
-    
-    # # # [batch] = next(iter(loader))
-
-    # # # # t = torch.randint(100, size=(batch.shape[0],))
-    # # # # [batch] = next(iter(loader))
-    # # # # print(batch.shape)
-
-    # # # # # t = torch.randint(100, size=(batch.shape[0],))
-    # # # # out = model(batch, t)
-    # # # # # out = model(batch, t)
-    # # # # # print(out.shape)
-    # # # torch.save(trained_model.state_dict(), f'unet_{patch_size[0]}x{patch_size[1]}_{1_000}.pth')
-   
-
-    # # del loader
-    # torch.save(trained_model.state_dict(), f'unet_{patch_size[0]}x{patch_size[1]}_{1_000}_v3.pth')
-
-    # # # device = torch.device('cpu')
-    # # # model.to(device)
-    # # # model.t_embedding[0].pos_embeddings = model.t_embedding[0].pos_embeddings.to(device)
-
-
+    torch.save(model.state_dict(), f'conditioned_unet_{patch_size[0]}x{patch_size[1]}_{1_000}_3256i.pth')
     
     n_samples = 5
     x = np.random.uniform(0,2,n_samples)
@@ -470,5 +418,5 @@ if __name__ == '__main__':
     for i, sample in enumerate(samples):
         axs_samples[i].imshow(sample[0], cmap='gray')
         axs_samples[i].set_title(f'sample {i}')
-    fig.savefig(f'samples_conditioning_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
+    fig.savefig(f'samples_conditioning_3_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
     plt.show()
