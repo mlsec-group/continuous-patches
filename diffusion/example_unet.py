@@ -226,6 +226,7 @@ class UNet(nn.Module):
         features_start: int = 64,
         t_emb_size: int = 512,
         max_time_steps: int = 1000,
+        target_emb : bool = True
     ) -> None:
         super().__init__()
 
@@ -233,11 +234,17 @@ class UNet(nn.Module):
             PositionalEncoding(max_time_steps, t_emb_size, device), nn.Linear(t_emb_size, t_emb_size)
         )
 
+        if target_emb:
+            self.target_embedding = TargetEncoding([80, 80])
+
         if num_layers < 1:
             raise ValueError(f"num_layers = {num_layers}, expected: num_layers > 0")
         self.num_layers = num_layers
 
-        self.conv_in = nn.Sequential(ConvBlock(in_size, features_start), ConvBlock(features_start, features_start))
+        if target_emb:
+            self.conv_in = nn.Sequential(ConvBlock(in_size + 1, features_start), ConvBlock(features_start, features_start))
+        else:
+            self.conv_in = nn.Sequential(ConvBlock(in_size, features_start), ConvBlock(features_start, features_start))
 
         # Create encoder and decoder stages.
         layers = []
@@ -252,12 +259,16 @@ class UNet(nn.Module):
 
         self.conv_out = nn.Conv2d(feats, out_size, kernel_size=1)
 
-    def forward(self, x: Tensor, t: Tensor = None) -> Tensor:
+    def forward(self, x: Tensor, target: Tensor = None, t: Tensor = None) -> Tensor:
         if t is not None:
             # Create time embedding using positional encoding.
             # t = torch.concat([t - 0.5, torch.cos(2*torch.pi*t), torch.sin(2*torch.pi*t), -torch.cos(4*torch.pi*t)], axis=1)
             # print(t.shape)
             t_emb = self.t_embedding(t) # shape is (b, 512)
+
+        if target is not None:
+            target_emb = self.target_embedding(target)
+            x = torch.concat((x, target_emb), dim=1)
 
         x = self.conv_in(x)
 
@@ -342,26 +353,45 @@ def sample(model: nn.Module, device: torch.device, patch_size: (int, int), n_sam
 
 if __name__ == '__main__':
 
-
-    bs = 1
-    channels = 1
-    w = 80
-    h = 80
-
-    target = torch.tensor((1., 0., 0.)).unsqueeze(0)
-    
-    target_embed = TargetEncoding([h, w])
-    embedded = target_embed(target)
-    print(embedded.shape)
-
-    # import pickle
-    # import numpy as np
-    # import matplotlib.pyplot as plt
+    import pickle
+    import numpy as np
+    import matplotlib.pyplot as plt
 
     # with open('/home/hanfeld/flying_adversarial_patch/80x80patches.pickle', 'rb') as f:
     #     data = pickle.load(f)
 
-    # print(data.shape)
+    with open('data/FAP_gt.pickle', 'rb') as f:
+        data = pickle.load(f)    
+
+    patches = []
+    targets = []
+    for i in range(len(data)):
+        patches.append(data[i][0])
+        targets.append(data[i][1])
+    
+    patches = np.array(patches)
+    targets = np.array(targets)
+
+
+    patches = (patches - np.min(patches)) / (np.max(patches) - np.min(patches)) # normalize
+    patches = torch.tensor(patches).unsqueeze(1)
+    targets = torch.tensor(targets)
+
+    # Define dataset
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    dataset = torch.utils.data.TensorDataset(patches, targets)
+    loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True, drop_last=True)
+
+    p_batch, t_batch = next(iter(loader))
+    print(p_batch.shape, t_batch.shape)
+
+    model = UNet(in_size=1, out_size=1, device=device)
+    model.to(device)
+
+    t = torch.randint(100, size=(p_batch.shape[0],))
+    out = model(p_batch.to(device), t_batch.to(device), t.to(device))
+    print(out.shape)
+
     # patch_size = data.shape[1:]
     # # print(patch_size)
     # # # data = data.reshape(data.shape[0], -1)
@@ -382,15 +412,11 @@ if __name__ == '__main__':
     # # print(data.shape)
     
 
-    # # Define dataset
-    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    # dataset = torch.utils.data.TensorDataset(data_t)
-    # loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True, drop_last=True)
+   
 
     
     # # # [batch] = next(iter(loader))
-    # model = UNet(in_size=1, out_size=1, device=device)
-    # model.to(device)
+
     # # # # t = torch.randint(100, size=(batch.shape[0],))
     # # # # [batch] = next(iter(loader))
     # # # # print(batch.shape)
