@@ -297,25 +297,26 @@ def train(model: nn.Module, data_loader: torch.utils.data.DataLoader, device: to
   losses = []
   print("Start training...")
   for epoch in trange(nepochs):
-    for [data] in data_loader:
-      data = data.to(device)
+    for [patches, targets] in data_loader:
+      patches = patches.to(device)
+      targets = targets.to(device)
       optimizer.zero_grad()
       # print("batch", data.shape)
       # Fwd pass
-      t = torch.randint(denoising_steps, size=(data.shape[0],))  # sample timesteps - 1 per datapoint
+      t = torch.randint(denoising_steps, size=(patches.shape[0],))  # sample timesteps - 1 per datapoint
       # print("t", t.shape)
       alpha_t = torch.index_select(torch.Tensor(alpha_bars), 0, t).unsqueeze(1).unsqueeze(1).unsqueeze(1).to(device)    # Get the alphas for each timestep
       # print("alpha_t", alpha_t**0.5, (alpha_t**.5).shape)
 
-      noise = torch.randn(*data.shape, device=device)   # Sample DIFFERENT random noise for each datapoint
+      noise = torch.randn(*patches.shape, device=device)   # Sample DIFFERENT random noise for each datapoint
       
       # print("data shape: ", data.shape)
       # print("alpha t shape: ", alpha_t.shape)
       # print("noise shape: ", noise.shape)
       # print("t shape: ", t.shape)
-      model_in = alpha_t**.5 * data + noise*(1-alpha_t)**.5   # Noise corrupt the data (eq14)
+      model_in = alpha_t**.5 * patches + noise*(1-alpha_t)**.5   # Noise corrupt the data (eq14)
       # print("model_in shape: ", model_in.shape)
-      out = model(model_in, t.to(device))
+      out = model(model_in, targets, t)
       loss = torch.mean((noise - out)**2)     # Compute loss on prediction (eq14)
       losses.append(loss.detach().cpu().numpy())
       all_losses.append(loss.detach().cpu().numpy())
@@ -332,9 +333,10 @@ def train(model: nn.Module, data_loader: torch.utils.data.DataLoader, device: to
   return all_losses
 
 
-def sample(model: nn.Module, device: torch.device, patch_size: (int, int), n_samples: int = 50, n_steps: int=100):
+def sample(model: nn.Module, targets: torch.tensor, device: torch.device, patch_size: (int, int), n_samples: int = 50, n_steps: int=100):
     """Alg 2 from the DDPM paper."""
     x_t = torch.randn((n_samples, 1, *patch_size)).to(device)
+    targets = targets.to(device)
     alpha_bars, betas = get_alpha_betas(n_steps)
     alphas = 1 - betas
     for t in range(len(alphas))[::-1]:
@@ -344,7 +346,7 @@ def sample(model: nn.Module, device: torch.device, patch_size: (int, int), n_sam
         # print("ab t shape: ", ab_t.shape)
         z = (torch.randn((n_samples, 1, *patch_size)) if t > 1 else torch.zeros((n_samples, 1, *patch_size))).to(device)
         # print(x_t.device, ts.device)
-        model_prediction = model(x_t, ts.squeeze(1))
+        model_prediction = model(x_t, targets, ts.squeeze(1))
         x_t = 1 / alphas[t]**.5 * (x_t - (betas[t]/(1-ab_t)**.5).unsqueeze(2).unsqueeze(2) * model_prediction)
         x_t += betas[t]**0.5 * z
         x_t.clamp_(0., 1.)
@@ -357,11 +359,9 @@ if __name__ == '__main__':
     import numpy as np
     import matplotlib.pyplot as plt
 
-    # with open('/home/hanfeld/flying_adversarial_patch/80x80patches.pickle', 'rb') as f:
-    #     data = pickle.load(f)
-
     with open('data/FAP_gt.pickle', 'rb') as f:
         data = pickle.load(f)    
+
 
     patches = []
     targets = []
@@ -372,6 +372,7 @@ if __name__ == '__main__':
     patches = np.array(patches)
     targets = np.array(targets)
 
+    patch_size = patches.shape[-2:]
 
     patches = (patches - np.min(patches)) / (np.max(patches) - np.min(patches)) # normalize
     patches = torch.tensor(patches).unsqueeze(1)
@@ -382,15 +383,21 @@ if __name__ == '__main__':
     dataset = torch.utils.data.TensorDataset(patches, targets)
     loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True, drop_last=True)
 
-    p_batch, t_batch = next(iter(loader))
-    print(p_batch.shape, t_batch.shape)
-
     model = UNet(in_size=1, out_size=1, device=device)
     model.to(device)
 
-    t = torch.randint(100, size=(p_batch.shape[0],))
-    out = model(p_batch.to(device), t_batch.to(device), t.to(device))
-    print(out.shape)
+    # training
+    all_losses = train(model, loader, device, 1_000, denoising_steps=1_000)
+    model.eval()
+
+    torch.save(model.state_dict(), f'conditioned_unet_{patch_size[0]}x{patch_size[1]}_{1_000}_v1.pth')
+
+    # p_batch, t_batch = next(iter(loader))
+    # print(p_batch.shape, t_batch.shape)
+
+    # t = torch.randint(100, size=(p_batch.shape[0],))
+    # out = model(p_batch.to(device), t_batch.to(device), t.to(device))
+    # print(out.shape)
 
     # patch_size = data.shape[1:]
     # # print(patch_size)
@@ -426,9 +433,7 @@ if __name__ == '__main__':
     # # # # # out = model(batch, t)
     # # # # # print(out.shape)
     # # # torch.save(trained_model.state_dict(), f'unet_{patch_size[0]}x{patch_size[1]}_{1_000}.pth')
-    # # # training
-    # all_losses = train(model, loader, device, 1_000, denoising_steps=1_000)
-    # model.eval()
+   
 
     # # del loader
     # torch.save(trained_model.state_dict(), f'unet_{patch_size[0]}x{patch_size[1]}_{1_000}_v3.pth')
@@ -439,24 +444,31 @@ if __name__ == '__main__':
 
 
     
-    # n_samples = 5
-    # # running into memory issues with this sample function! fix: don't compute gradients
-    # with torch.no_grad():
-    #     samples = sample(model, device, n_samples=n_samples, patch_size=patch_size, n_steps=1_000).detach().cpu().numpy()
-    # print(samples.shape)
-    # print(np.min(samples), np.max(samples))
+    n_samples = 5
+    x = np.random.uniform(0,2,n_samples)
+    y = np.random.uniform(-1,1,n_samples,)
+    z = np.random.uniform(-0.5,0.5,n_samples,)
 
-    # # fig = plt.figure(constrained_layout=True)
-    # # subfigs = fig.subfigures(2, 1)
-    # # axs_gt = subfigs[0].subplots(1, 2)
-    # # for i, gt_patch in enumerate(gt_patches):
-    # #     axs_gt[i].imshow(gt_patch, cmap='gray')
-    # #     axs_gt[i].set_title(f'ground truth {i}')
+
+    targets = torch.tensor(np.stack((x, y, z)).T, dtype=torch.float32)
+
+    # running into memory issues with this sample function! fix: don't compute gradients
+    with torch.no_grad():
+        samples = sample(model, targets, device, n_samples=n_samples, patch_size=patch_size, n_steps=1_000).detach().cpu().numpy()
+    print(samples.shape)
+    print(np.min(samples), np.max(samples))
 
     # fig = plt.figure(constrained_layout=True)
-    # axs_samples = fig.subplots(1, n_samples)
-    # for i, sample in enumerate(samples):
-    #     axs_samples[i].imshow(sample[0], cmap='gray')
-    #     axs_samples[i].set_title(f'sample {i}')
-    # fig.savefig(f'samples_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
-    # plt.show()
+    # subfigs = fig.subfigures(2, 1)
+    # axs_gt = subfigs[0].subplots(1, 2)
+    # for i, gt_patch in enumerate(gt_patches):
+    #     axs_gt[i].imshow(gt_patch, cmap='gray')
+    #     axs_gt[i].set_title(f'ground truth {i}')
+
+    fig = plt.figure(constrained_layout=True)
+    axs_samples = fig.subplots(1, n_samples)
+    for i, sample in enumerate(samples):
+        axs_samples[i].imshow(sample[0], cmap='gray')
+        axs_samples[i].set_title(f'sample {i}')
+    fig.savefig(f'samples_conditioning_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
+    plt.show()
