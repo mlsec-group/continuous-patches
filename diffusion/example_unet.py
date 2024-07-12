@@ -2,16 +2,25 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Callable, Optional
+import numpy as np
 
 from tqdm import trange
 
-<<<<<<< HEAD
-from .example_diffusion import get_alpha_betas
-=======
-from example_diffusion import get_alpha_betas
->>>>>>> diffusion
-
 # source for UNet: https://github.com/jbergq/simple-diffusion-model/
+
+def get_alpha_betas(N: int):
+  """Schedule from the original paper. Commented out is sigmoid schedule from:
+
+  'Score-Based Generative Modeling through Stochastic Differential Equations.'
+   Yang Song, Jascha Sohl-Dickstein, Diederik P. Kingma, Abhishek Kumar,
+   Stefano Ermon, Ben Poole (https://arxiv.org/abs/2011.13456)
+  """
+  beta_min = 0.1
+  beta_max = 20.
+  #betas = np.array([beta_min/N + i/(N*(N-1))*(beta_max-beta_min) for i in range(N)])
+  betas = np.random.uniform(10e-4, .02, N)  # schedule from the 2020 paper
+  alpha_bars = np.cumprod(1 - betas)
+  return alpha_bars, betas
 
 class ConvBlock(nn.Module):
     """Simple convolutional block: Conv2D -> BatchNorm -> Activation."""
@@ -269,13 +278,10 @@ class UNet(nn.Module):
             # t = torch.concat([t - 0.5, torch.cos(2*torch.pi*t), torch.sin(2*torch.pi*t), -torch.cos(4*torch.pi*t)], axis=1)
             # print(t.shape)
             t_emb = self.t_embedding(t) # shape is (b, 512)
-<<<<<<< HEAD
-=======
 
         if target is not None:
             target_emb = self.target_embedding(target)
             x = torch.concat((x, target_emb), dim=1)
->>>>>>> diffusion
 
         x = self.conv_in(x)
 
@@ -349,6 +355,7 @@ def sample(model: nn.Module, targets: torch.tensor, device: torch.device, patch_
     for t in range(len(alphas))[::-1]:
         ts = t * torch.ones((n_samples, 1), dtype=torch.int32).to(device)
         # print("ts shape: ", ts.shape)
+        # x_t.clamp_(0., 1.)   # keeping pixel values in range 0,1
         ab_t = alpha_bars[t] * torch.ones((n_samples, 1), dtype=torch.int32).to(device)  # Tile the alpha to the number of samples
         # print("ab t shape: ", ab_t.shape)
         z = (torch.randn((n_samples, 1, *patch_size)) if t > 1 else torch.zeros((n_samples, 1, *patch_size))).to(device)
@@ -356,17 +363,16 @@ def sample(model: nn.Module, targets: torch.tensor, device: torch.device, patch_
         model_prediction = model(x_t, targets, ts.squeeze(1))
         x_t = 1 / alphas[t]**.5 * (x_t - (betas[t]/(1-ab_t)**.5).unsqueeze(2).unsqueeze(2) * model_prediction)
         x_t += betas[t]**0.5 * z
-        x_t.clamp_(0., 1.)   # keeping pixel values in range 0,1
+        # x_t.clamp_(0., 1.)   # keeping pixel values in range 0,1
 
     return x_t
-
+    
 if __name__ == '__main__':
 
     import pickle
-    import numpy as np
     import matplotlib.pyplot as plt
 
-    with open('/home/hanfeld/flying_adversarial_patch/80x80patches_all_2.pickle', 'rb') as f:
+    with open('data/FAP_combined.pickle', 'rb') as f:
         data = pickle.load(f)    
 
 
@@ -397,7 +403,7 @@ if __name__ == '__main__':
     all_losses = train(model, loader, device, 1_000, denoising_steps=1_000)
     model.eval()
 
-    torch.save(model.state_dict(), f'conditioned_unet_{patch_size[0]}x{patch_size[1]}_{1_000}_3256i.pth')
+    torch.save(model.state_dict(), f'conditioned_unet_{patch_size[0]}x{patch_size[1]}_{1_000}_3256i_255.pth')
     
     n_samples = 5
     x = np.random.uniform(0,2,n_samples)
@@ -425,5 +431,5 @@ if __name__ == '__main__':
     for i, sample in enumerate(samples):
         axs_samples[i].imshow(sample[0], cmap='gray')
         axs_samples[i].set_title(f'sample {i}')
-    fig.savefig(f'samples_conditioning_3_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
+    fig.savefig(f'samples_conditioning_4_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
     plt.show()
