@@ -106,63 +106,65 @@ def sample(model: nn.Module, patch_size: int=3*3, n_samples: int = 50, n_steps: 
 # plt.scatter(x, y)
 # plt.show()
 
-patch_size = (10,10)
+if __name__ == '__main__':
 
-gt_patches = np.random.rand(2, np.multiply(*patch_size))
-data = []
-for _ in range(256):
-  data.append(gt_patches[0]+np.random.normal(loc=0.0, scale=0.05, size=np.multiply(*patch_size)))
-  data.append(gt_patches[1]+np.random.normal(loc=0.0, scale=0.05, size=np.multiply(*patch_size)))
-# plt.figure(figsize=(5, 5))
-# plt.imshow(data, cmap='gray')
-# plt.show()
+  patch_size = (10,10)
 
-# Define dataset
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-dataset = torch.utils.data.TensorDataset(torch.Tensor(np.array(data)))
-loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True)
+  gt_patches = np.random.rand(2, np.multiply(*patch_size))
+  data = []
+  for _ in range(256):
+    data.append(gt_patches[0]+np.random.normal(loc=0.0, scale=0.05, size=np.multiply(*patch_size)))
+    data.append(gt_patches[1]+np.random.normal(loc=0.0, scale=0.05, size=np.multiply(*patch_size)))
+  # plt.figure(figsize=(5, 5))
+  # plt.imshow(data, cmap='gray')
+  # plt.show()
 
-# init model
-model = Net(patch_size=np.multiply(*patch_size))
-model.to(device)
+  # Define dataset
+  device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+  dataset = torch.utils.data.TensorDataset(torch.Tensor(np.array(data)))
+  loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True)
 
-# training
-trained_model, all_losses = train(model, 10_000)
-trained_model = trained_model.eval()
+  # init model
+  model = Net(patch_size=np.multiply(*patch_size))
+  model.to(device)
 
-# fig, ax = plt.subplots(1,1)
-# ax.plot(all_losses)
-# ax.set_title('Train loss')
-# ax.set_xlabel('training steps')
-# ax.set_ylabel('MSE')
-# fig.savefig('train_loss.png', dpi=200)
+  # training
+  trained_model, all_losses = train(model, 10_000)
+  trained_model = trained_model.eval()
 
-# inference
-samples = sample(trained_model, n_samples=3, patch_size=np.multiply(*patch_size)).detach().cpu().numpy()
-print(samples.shape)
-print(np.min(samples), np.max(samples))
+  # fig, ax = plt.subplots(1,1)
+  # ax.plot(all_losses)
+  # ax.set_title('Train loss')
+  # ax.set_xlabel('training steps')
+  # ax.set_ylabel('MSE')
+  # fig.savefig('train_loss.png', dpi=200)
 
-fig = plt.figure(constrained_layout=True)
-subfigs = fig.subfigures(2, 1)
-axs_gt = subfigs[0].subplots(1, 2)
-for i, gt_patch in enumerate(gt_patches):
-  axs_gt[i].imshow(gt_patch.reshape(*patch_size), cmap='gray')
-  axs_gt[i].set_title(f'ground truth {i}')
+  # inference
+  samples = sample(trained_model, n_samples=3, patch_size=np.multiply(*patch_size)).detach().cpu().numpy()
+  print(samples.shape)
+  print(np.min(samples), np.max(samples))
 
-axs_samples = subfigs[1].subplots(1, 3)
-for i, sample in enumerate(samples):
-  axs_samples[i].imshow(sample.reshape(*patch_size), cmap='gray')
-  axs_samples[i].set_title(f'sample {i}')
-fig.savefig(f'samples_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
-plt.show()
+  fig = plt.figure(constrained_layout=True)
+  subfigs = fig.subfigures(2, 1)
+  axs_gt = subfigs[0].subplots(1, 2)
+  for i, gt_patch in enumerate(gt_patches):
+    axs_gt[i].imshow(gt_patch.reshape(*patch_size), cmap='gray')
+    axs_gt[i].set_title(f'ground truth {i}')
 
-# fig, axs = plt.subplots(1, 4, layout='constrained')
-# axs[0].set_title('ground truth')
-# axs[0].imshow(data, cmap='gray')
-# for i, sample in enumerate(samples):
-#   axs[i+1].set_title(f'sample {i}')
-#   axs[i+1].imshow(sample.reshape(*patch_size), cmap='gray')
-# # plt.scatter(x, y)
-# # plt.scatter(*(samples.T))
-# fig.savefig(f'samples_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
-# plt.show()
+  axs_samples = subfigs[1].subplots(1, 3)
+  for i, sample in enumerate(samples):
+    axs_samples[i].imshow(sample.reshape(*patch_size), cmap='gray')
+    axs_samples[i].set_title(f'sample {i}')
+  fig.savefig(f'samples_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
+  plt.show()
+
+  # fig, axs = plt.subplots(1, 4, layout='constrained')
+  # axs[0].set_title('ground truth')
+  # axs[0].imshow(data, cmap='gray')
+  # for i, sample in enumerate(samples):
+  #   axs[i+1].set_title(f'sample {i}')
+  #   axs[i+1].imshow(sample.reshape(*patch_size), cmap='gray')
+  # # plt.scatter(x, y)
+  # # plt.scatter(*(samples.T))
+  # fig.savefig(f'samples_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
+  # plt.show()
