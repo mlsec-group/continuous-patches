@@ -83,7 +83,7 @@ class PositionalEncoding(nn.Module):
             Tensor: Returned position embedding.
         """
         # print("t in embedding shape: ", t.shape, t.dtype)
-        return self.pos_embeddings[t, :]
+        return self.pos_embeddings[t.int(), :]
 
 
 class TargetEncoding(nn.Module):
@@ -144,13 +144,22 @@ class ResNetBlockUp(nn.Module):
         self.block = ResNetBlock(in_size + skip_size, out_size, activation, t_size=t_size)
 
     def forward(self, x: Tensor, x_skip: Tensor = None, t_emb: Tensor = None) -> Tensor:
+        print("up forward")
+        print("x shape", x.shape)
+        print("x_skip shape", x_skip.shape)
+        print("t_emb shape", t_emb.shape)
         x = self.up(x)
+        print("x after upsample: ", x.shape)
 
         # Concatenate with encoder skip connection.
         if x_skip is not None:
             x = torch.cat([x, x_skip], dim=1)
 
+        print("after cat: ", x.shape)
+
         out = self.block(x, t_emb)
+
+        print("after block: ", out.shape)
 
         return out
 
@@ -273,12 +282,13 @@ class UNet(nn.Module):
         self.conv_out = nn.Conv2d(feats, out_size, kernel_size=1)
 
     def forward(self, x: Tensor, target: Tensor = None, t: Tensor = None) -> Tensor:
+        # print(x.shape, target.shape, t.shape)
         if t is not None:
             # Create time embedding using positional encoding.
             # t = torch.concat([t - 0.5, torch.cos(2*torch.pi*t), torch.sin(2*torch.pi*t), -torch.cos(4*torch.pi*t)], axis=1)
             # print(t.shape)
-            t_emb = self.t_embedding(t) # shape is (b, 512)
-
+            t_emb = self.t_embedding(t.flatten()) # shape is (b, 512)
+        # print("t_emb shape: ", t_emb.shape)
         if target is not None:
             target_emb = self.target_embedding(target)
             x = torch.concat((x, target_emb), dim=1)
@@ -288,15 +298,28 @@ class UNet(nn.Module):
         # Store hidden states for U-net skip connections.
         x_i = [x]
 
+        # print("x_i", len(x_i), x_i[-1].shape)
+        # print("t_emb:", t_emb.shape)
+
+        # print(x_i[-1].shape)
+
         # Encoder stage.
         for layer in self.layers[: self.num_layers - 1]:
             x_i.append(layer(x=x_i[-1], t_emb=t_emb))
+            print(x_i[-1].shape)
+
+        # print(x_i[-1].shape)
 
         # Decoder stage.
         for i, layer in enumerate(self.layers[self.num_layers - 1 :]):
             x_i[-1] = layer(x=x_i[-1], x_skip=x_i[-2 - i], t_emb=t_emb)
+            print(x_i[-1].shape)
+
+        # print(x_i[-1].shape)
 
         out = self.conv_out(x_i[-1])
+
+        # print(out.shape)
 
         return out
 
@@ -326,9 +349,10 @@ def train(model: nn.Module, data_loader: torch.utils.data.DataLoader, device: to
       # print("data shape: ", data.shape)
       # print("alpha t shape: ", alpha_t.shape)
       # print("noise shape: ", noise.shape)
-      # print("t shape: ", t.shape)
+      print("t shape: ", t.shape)
       model_in = alpha_t**.5 * patches + noise*(1-alpha_t)**.5   # Noise corrupt the data (eq14)
-      # print("model_in shape: ", model_in.shape)
+      print("model_in shape: ", model_in.shape)
+      print("targets shape: ", targets.shape)
       out = model(model_in, targets, t)
       loss = torch.mean((noise - out)**2)     # Compute loss on prediction (eq14)
       losses.append(loss.detach().cpu().numpy())
@@ -403,33 +427,33 @@ if __name__ == '__main__':
     all_losses = train(model, loader, device, 1_000, denoising_steps=1_000)
     model.eval()
 
-    torch.save(model.state_dict(), f'conditioned_unet_{patch_size[0]}x{patch_size[1]}_{1_000}_3256i_255.pth')
+    # torch.save(model.state_dict(), f'conditioned_unet_{patch_size[0]}x{patch_size[1]}_{1_000}_3256i_255.pth')
     
-    n_samples = 5
-    x = np.random.uniform(0,2,n_samples)
-    y = np.random.uniform(-1,1,n_samples,)
-    z = np.random.uniform(-0.5,0.5,n_samples,)
+    # n_samples = 5
+    # x = np.random.uniform(0,2,n_samples)
+    # y = np.random.uniform(-1,1,n_samples,)
+    # z = np.random.uniform(-0.5,0.5,n_samples,)
 
 
-    targets = torch.tensor(np.stack((x, y, z)).T, dtype=torch.float32)
+    # targets = torch.tensor(np.stack((x, y, z)).T, dtype=torch.float32)
 
-    # running into memory issues with this sample function! fix: don't compute gradients
-    with torch.no_grad():
-        samples = sample(model, targets, device, n_samples=n_samples, patch_size=patch_size, n_steps=1_000).detach().cpu().numpy()
-    print(samples.shape)
-    print(np.min(samples), np.max(samples))
+    # # running into memory issues with this sample function! fix: don't compute gradients
+    # with torch.no_grad():
+    #     samples = sample(model, targets, device, n_samples=n_samples, patch_size=patch_size, n_steps=1_000).detach().cpu().numpy()
+    # print(samples.shape)
+    # print(np.min(samples), np.max(samples))
+
+    # # fig = plt.figure(constrained_layout=True)
+    # # subfigs = fig.subfigures(2, 1)
+    # # axs_gt = subfigs[0].subplots(1, 2)
+    # # for i, gt_patch in enumerate(gt_patches):
+    # #     axs_gt[i].imshow(gt_patch, cmap='gray')
+    # #     axs_gt[i].set_title(f'ground truth {i}')
 
     # fig = plt.figure(constrained_layout=True)
-    # subfigs = fig.subfigures(2, 1)
-    # axs_gt = subfigs[0].subplots(1, 2)
-    # for i, gt_patch in enumerate(gt_patches):
-    #     axs_gt[i].imshow(gt_patch, cmap='gray')
-    #     axs_gt[i].set_title(f'ground truth {i}')
-
-    fig = plt.figure(constrained_layout=True)
-    axs_samples = fig.subplots(1, n_samples)
-    for i, sample in enumerate(samples):
-        axs_samples[i].imshow(sample[0], cmap='gray')
-        axs_samples[i].set_title(f'sample {i}')
-    fig.savefig(f'samples_conditioning_4_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
-    plt.show()
+    # axs_samples = fig.subplots(1, n_samples)
+    # for i, sample in enumerate(samples):
+    #     axs_samples[i].imshow(sample[0], cmap='gray')
+    #     axs_samples[i].set_title(f'sample {i}')
+    # fig.savefig(f'samples_conditioning_4_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
+    # plt.show()

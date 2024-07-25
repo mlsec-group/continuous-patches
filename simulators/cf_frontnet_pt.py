@@ -13,6 +13,8 @@ from torch.utils import data
 
 import rowan
 
+from pathlib import Path
+
 class CFSim():
     def __init__(self, model_path="simulators/pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", dataset_path="simulators/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -65,10 +67,28 @@ class CFSim():
         return model.eval()
     
     # only needed during testing
-    def load_dataset(self, path, batch_size = 32, shuffle = False, drop_last = True, num_workers = 1, train=True, train_set_size=0.9):
+    def load_dataset(self, path, batch_size = 32, shuffle = False, drop_last = True, num_workers = 1, train=True, train_set_size=0.9, IMRC=True):
         # From FAP repo
         # load images and labels from the stored dataset
+        path = Path(path)
         [images, labels] = DataProcessor.ProcessTestData(path)
+
+        parent_dir = Path()
+        for part in path.parts:
+            parent_dir /= part
+            if part == 'flying_adversarial_patch':
+                break
+
+        if IMRC:
+            import pickle
+            with open(parent_dir / "misc/IMRC_images.pickle", "rb") as f:
+                imrc_data = pickle.load(f)
+
+            imrc_images = imrc_data['x']
+            imrc_labels = imrc_data['y']
+
+            images = np.concatenate([images, imrc_images])
+            labels = np.concatenate([labels, imrc_labels])
 
         
         # init RNG for loading the data always with the same key to
