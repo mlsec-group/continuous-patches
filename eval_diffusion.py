@@ -2,42 +2,10 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-from diffusion.example_unet import UNet
+from diffusion.diffusion_model import DiffusionModel
 from simulators.cf_frontnet_pt import CFSim
 
 from eval_gt_patches import calc_loss, get_targets, gen_T
-
-def get_alpha_betas(N: int):
-  """Schedule from the original paper. Commented out is sigmoid schedule from:
-
-  'Score-Based Generative Modeling through Stochastic Differential Equations.'
-   Yang Song, Jascha Sohl-Dickstein, Diederik P. Kingma, Abhishek Kumar,
-   Stefano Ermon, Ben Poole (https://arxiv.org/abs/2011.13456)
-  """
-  beta_min = 0.1
-  beta_max = 20.
-  #betas = np.array([beta_min/N + i/(N*(N-1))*(beta_max-beta_min) for i in range(N)])
-  betas = np.random.uniform(10e-4, .02, N)  # schedule from the 2020 paper
-  alpha_bars = np.cumprod(1 - betas)
-  return alpha_bars, betas
-
-
-def sample(model: nn.Module, targets: torch.tensor, device: torch.device, patch_size: (int, int), n_samples: int = 50, n_steps: int=100):
-    """Alg 2 from the DDPM paper."""
-    x_t = torch.randn((n_samples, 1, *patch_size)).to(device)
-    targets = targets.to(device)
-    alpha_bars, betas = get_alpha_betas(n_steps)
-    alphas = 1 - betas
-    for t in range(len(alphas))[::-1]:
-        ts = t * torch.ones((n_samples, 1), dtype=torch.int32).to(device)
-        ab_t = alpha_bars[t] * torch.ones((n_samples, 1), dtype=torch.int32).to(device)  # Tile the alpha to the number of samples
-        z = (torch.randn((n_samples, 1, *patch_size)) if t > 1 else torch.zeros((n_samples, 1, *patch_size))).to(device)
-        model_prediction = model(x_t, targets, ts.squeeze(1))
-        x_t = 1 / alphas[t]**.5 * (x_t - (betas[t]/(1-ab_t)**.5).unsqueeze(2).unsqueeze(2) * model_prediction)
-        x_t += betas[t]**0.5 * z
-
-    return x_t
-
 
 def loss_dataset(gt_patch, diffusion_patch, random_patch, ft_patch, targets, position, dataset, sim):
     T = gen_T(position)
@@ -57,6 +25,30 @@ def loss_dataset(gt_patch, diffusion_patch, random_patch, ft_patch, targets, pos
 
     return np.array(gt_losses), np.array(diffusion_losses), np.array(random_losses), np.array(ft_losses)
 
+def load_gt_dataset(path):
+    with open(path, 'rb') as f:
+        data = pickle.load(f)
+
+    gt_patches = []
+    gt_targets = []
+    gt_positions = []
+    for i in range(len(data)):
+        gt_patches.append(data[i][0])
+        gt_targets.append(data[i][1])
+        gt_positions.append(data[i][2])
+
+    return np.array(gt_patches)*255., np.array(gt_targets), np.array(gt_positions)
+
+def load_model(path, device):
+    model = UNet(in_size=1, out_size=1, device=device)
+    model.to(device)
+
+    model.load_state_dict(torch.load(path, map_location=device))
+    model.eval()
+
+    return model
+
+
 if __name__ == '__main__':
     from pathlib import Path
     import pickle
@@ -67,37 +59,18 @@ if __name__ == '__main__':
 
     n_samples = 100
 
-    # model = UNet(in_size=1, out_size=1, device=device)
-    # model.to(device)
-
-    # model.load_state_dict(torch.load('conditioned_unet_80x80_1000_3256i_255.pth', map_location=device))
-    # model.eval()
-
-    # with open('data/FAP_combined.pickle', 'rb') as f:
-    #     data = pickle.load(f)
-    # gt_patches = []
-    # gt_targets = []
-    # gt_positions = []
-    # for i in range(len(data)):
-        # gt_patches.append(data[i][0])
-        # gt_targets.append(data[i][1])
-        # gt_positions.append(data[i][2])
+    # model = load_model('conditioned_unet_80x80_1000_3256i_255.pth')
     
-    # # random_idx = np.random.choice(len(gt_patches), size=n_samples, replace=False)
-    # # #np.save('/home/hanfeld/flying_adversarial_patch/results/fine-tuning80x80/indices.npy', random_idx)
-    random_idx = np.load('/home/hanfeld/flying_adversarial_patch/results/fine-tuning80x80/indices.npy')
+    # random_idx = np.random.choice(len(gt_patches), size=n_samples, replace=False)
+    # np.save('/home/hanfeld/flying_adversarial_patch/results/fine-tuning80x80/indices.npy', random_idx)
+    # # random_idx = np.load('/home/hanfeld/flying_adversarial_patch/results/fine-tuning80x80/indices.npy')
 
-    # gt_patches = np.array(gt_patches)[random_idx] * 255.
-    # gt_targets = np.array(gt_targets)[random_idx]
-    # gt_positions = np.array(gt_positions)[random_idx]
+    # gt_patches, gt_targets, gt_positions = load_gt_dataset('data/FAP_combined.pickle')
+    # gt_patches = gt_patches[random_idx]
+    # gt_targets = gt_targets[random_idx]
+    # gt_positions = gt_positions[random_idx]
 
-    # print(gt_targets.shape)
-    # print(gt_positions.shape)
 
-    # # print(gt_patches.min(), gt_patches.max())
-
-    # # # # print(random_idx[:10])
-    # # # # print(gt_patches.shape)
 
     # with torch.no_grad():
     #     diffusion_patches = sample(model, torch.tensor(gt_targets), device, [80, 80], n_samples=n_samples, n_steps=1_000).detach().cpu()
@@ -230,26 +203,28 @@ if __name__ == '__main__':
     print()
 
 
-    # data = np.array([np.mean(all_random.T, axis=1), np.mean(all_gt.T, axis=1), np.mean(all_diffusion.T, axis=1), np.mean(all_ft_at_gt.T, axis=1), np.mean(all_ft_at_ft.T, axis=1)])
-    # print(data.shape)
+    data = np.array([np.mean(all_random.T, axis=1), np.mean(all_gt.T, axis=1), np.mean(all_diffusion.T, axis=1), np.mean(all_ft_at_gt.T, axis=1), np.mean(all_ft_at_ft.T, axis=1)])
+    # data = np.log10(data)
+    print(data.shape)
 
-    # import matplotlib.pyplot as plt
+    import matplotlib.pyplot as plt
 
-    # # change settings to match latex
-    # plt.rcParams.update({
-    #             "text.usetex": True,
-    #             "font.family": "sans-serif",
-    #             "font.sans-serif": "Helvetica",
-    #             "font.size": 12,
-    #             "figure.figsize": (5, 3),
-    #             "mathtext.fontset": 'stix'
-    # })
+    # change settings to match latex
+    plt.rcParams.update({
+                "text.usetex": True,
+                "font.family": "sans-serif",
+                "font.sans-serif": "Helvetica",
+                "font.size": 12,
+                "figure.figsize": (5, 3),
+                "mathtext.fontset": 'stix'
+    })
 
-    # fig, axs = plt.subplots(1, 1, layout='constrained')
-    # axs.boxplot(data.T, 'D', tick_labels=['random', 'ground truth', 'diffusion', 'fine tuning*', 'fine tuning+']) 
-    # axs.set_ylabel('Test loss [m]')
-    # axs.grid(axis='y')
+    fig, axs = plt.subplots(1, 1, layout='constrained')
+    axs.boxplot(data.T, 'D', tick_labels=['random', 'ground truth', 'diffusion', 'fine tuning*', 'fine tuning+']) 
+    axs.set_yscale('log')
+    axs.set_ylabel('Test loss [m, log10]')
+    plt.grid(True, which="both", ls="-", color='0.65')
 
-    # fig.savefig(f'eval/eval_boxplot_{n_samples}.pdf', dpi=200)
+    fig.savefig(f'eval/eval_boxplot_{n_samples}_2.pdf', dpi=200)
     
     

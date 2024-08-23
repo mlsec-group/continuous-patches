@@ -368,7 +368,7 @@ class DiffusionModel():
 
 
     def load(self, path):
-        self.model.load_state_dict(torch.load(path, map_location=device))
+        self.model.load_state_dict(torch.load(path, map_location=self.device))
     
     
 if __name__ == '__main__':
