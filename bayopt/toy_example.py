@@ -3,22 +3,24 @@ from bayes_opt import BayesianOptimization
 from bayes_opt import acquisition
 from matplotlib import pyplot as plt
 
+from tqdm import tqdm
+
 if __name__ == "__main__":
     
     # create list of all possible values for the scale factor, tx and ty
-    possible_values = np.linspace(-1, 1, 100)
+    #possible_values = np.linspace(-1, 1, 500)
 
     
     # example_search_space = np.ones((len(possible_values), len(possible_values), len(possible_values)))
 
 
     # Define the cube size
-    size = 100
+    size = 500
     cube_shape = (size, size, size)
 
     # Specify the center and radius of the sphere
     center = (20, 20, 20)
-    radius = 70
+    radius = 300
 
     # Create a grid of coordinates
     x, y, z = np.indices(cube_shape)
@@ -48,31 +50,45 @@ if __name__ == "__main__":
     def black_box_function(sf, tx, ty):
         return sphere[int(sf), int(tx), int(ty)]
 
-    #define acquisiting function
-    acq = acquisition.UpperConfidenceBound(kappa=5)
-
-    optimizer = BayesianOptimization(f=None, # because we don't know f usually
-                acquisition_function = acq,
-                pbounds=pbounds,
-                verbose=2, # verbose = 1 prints only when a maximum is observed, verbose = 0 is silent
-                random_state=5,
-                )
-
-    optimizer.set_gp_params(alpha=1e-3, n_restarts_optimizer=5)
-
+    
     # optimizer.maximize(
     # init_points=5,
     # n_iter=100,
     # )
 
-    for i in range(200):
-        next_point = optimizer.suggest()
-        target = black_box_function(**next_point)
-        optimizer.register(params=next_point, target=target)
-        print(target, next_point)
-        if target >= 0.985:
-            print("Found max after {} iterations!".format(i))
-            break
+    success = 0
+    avg_iterations = []
 
+    seed_list = np.random.randint(0, 100, 100)
 
+    for seed in tqdm(seed_list):
+        #define acquisiting function
+        acq = acquisition.UpperConfidenceBound(kappa=5)
+
+        optimizer = BayesianOptimization(f=None, # because we don't know f usually
+                    acquisition_function = acq,
+                    pbounds=pbounds,
+                    verbose=2, # verbose = 1 prints only when a maximum is observed, verbose = 0 is silent
+                    random_state=5,
+                    )
+
+        optimizer.set_gp_params(alpha=1e-3, n_restarts_optimizer=5)
+
+        for i in range(200):
+            next_point = optimizer.suggest()
+            target = black_box_function(**next_point)
+            optimizer.register(params=next_point, target=target)
+            #print(target, next_point)
+            if target >= 0.99:
+                #print("Found max after {} iterations!".format(i))
+                success += 1
+                avg_iterations.append(i)
+                break
+
+    print("Success rate: ", success/len(seed_list))
+    print("Average iterations: ", np.mean(avg_iterations))
     print(optimizer.max)    
+
+    # results:
+    # Success rate:  1
+    # Average iterations:  26.25
