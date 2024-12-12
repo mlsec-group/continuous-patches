@@ -160,3 +160,10 @@ cython_debug/
 #.idea/
 
 results/
+
+*.pth
+*.pt
+*.png
+*.out
+*.sh
+*.sbatch
