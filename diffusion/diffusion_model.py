@@ -2,10 +2,9 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Callable, Optional
+import numpy as np
 
 from tqdm import trange
-
-from example_diffusion import get_alpha_betas
 
 # source for UNet: https://github.com/jbergq/simple-diffusion-model/
 
@@ -70,7 +69,7 @@ class PositionalEncoding(nn.Module):
             Tensor: Returned position embedding.
         """
         # print("t in embedding shape: ", t.shape, t.dtype)
-        return self.pos_embeddings[t, :]
+        return self.pos_embeddings[t.int(), :]
 
 
 class TargetEncoding(nn.Module):
@@ -136,9 +135,7 @@ class ResNetBlockUp(nn.Module):
         # Concatenate with encoder skip connection.
         if x_skip is not None:
             x = torch.cat([x, x_skip], dim=1)
-
         out = self.block(x, t_emb)
-
         return out
 
 
@@ -260,12 +257,13 @@ class UNet(nn.Module):
         self.conv_out = nn.Conv2d(feats, out_size, kernel_size=1)
 
     def forward(self, x: Tensor, target: Tensor = None, t: Tensor = None) -> Tensor:
+        # print(x.shape, target.shape, t.shape)
         if t is not None:
             # Create time embedding using positional encoding.
             # t = torch.concat([t - 0.5, torch.cos(2*torch.pi*t), torch.sin(2*torch.pi*t), -torch.cos(4*torch.pi*t)], axis=1)
             # print(t.shape)
-            t_emb = self.t_embedding(t) # shape is (b, 512)
-
+            t_emb = self.t_embedding(t.flatten()) # shape is (b, 512)
+        # print("t_emb shape: ", t_emb.shape)
         if target is not None:
             target_emb = self.target_embedding(target)
             x = torch.concat((x, target_emb), dim=1)
@@ -287,79 +285,98 @@ class UNet(nn.Module):
 
         return out
 
-def train(model: nn.Module, data_loader: torch.utils.data.DataLoader, device: torch.device, nepochs: int = 10, denoising_steps: int = 100):
-  """Alg 1 from the DDPM paper"""
-  optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
-  alpha_bars, _ = get_alpha_betas(denoising_steps)      # Precompute alphas
+class DiffusionModel():
+    def __init__(self, device, in_size=1, out_size=1, lr=1e-4):
+        self.in_size = in_size    # number of channels (1 -> grayscale)
+        self.out_size = out_size  # number of channels
+        self.lr = lr    
 
-  all_losses = []
+        self.device = device
 
-  losses = []
-  print("Start training...")
-  for epoch in trange(nepochs):
-    for [patches, targets] in data_loader:
-      patches = patches.to(device)
-      targets = targets.to(device)
-      optimizer.zero_grad()
-      # print("batch", data.shape)
-      # Fwd pass
-      t = torch.randint(denoising_steps, size=(patches.shape[0],))  # sample timesteps - 1 per datapoint
-      # print("t", t.shape)
-      alpha_t = torch.index_select(torch.Tensor(alpha_bars), 0, t).unsqueeze(1).unsqueeze(1).unsqueeze(1).to(device)    # Get the alphas for each timestep
-      # print("alpha_t", alpha_t**0.5, (alpha_t**.5).shape)
+        self.model = UNet(in_size=self.in_size, out_size=self.out_size, device=self.device).to(device)
 
-      noise = torch.randn(*patches.shape, device=device)   # Sample DIFFERENT random noise for each datapoint
-      
-      # print("data shape: ", data.shape)
-      # print("alpha t shape: ", alpha_t.shape)
-      # print("noise shape: ", noise.shape)
-      # print("t shape: ", t.shape)
-      model_in = alpha_t**.5 * patches + noise*(1-alpha_t)**.5   # Noise corrupt the data (eq14)
-      # print("model_in shape: ", model_in.shape)
-      out = model(model_in, targets, t)
-      loss = torch.mean((noise - out)**2)     # Compute loss on prediction (eq14)
-      losses.append(loss.detach().cpu().numpy())
-      all_losses.append(loss.detach().cpu().numpy())
+    def get_alpha_betas(self, N: int):
+        """Schedule from the original paper. Commented out is sigmoid schedule from:
 
-      # Bwd pass
-      loss.backward()
-      optimizer.step()
+        'Score-Based Generative Modeling through Stochastic Differential Equations.'
+        Yang Song, Jascha Sohl-Dickstein, Diederik P. Kingma, Abhishek Kumar,
+        Stefano Ermon, Ben Poole (https://arxiv.org/abs/2011.13456)
+        """
+        beta_min = 0.1
+        beta_max = 20.
+        #betas = np.array([beta_min/N + i/(N*(N-1))*(beta_max-beta_min) for i in range(N)])
+        betas = np.random.uniform(10e-4, .02, N)  # schedule from the 2020 paper
+        alpha_bars = np.cumprod(1 - betas)
+        return alpha_bars, betas
+        
+    
+    def train(self, data_loader: torch.utils.data.DataLoader, device: torch.device, nepochs: int = 10, denoising_steps: int = 1_000):
+        """Alg 1 from the DDPM paper"""
+        self.model.train()
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
+        alpha_bars, _ = self.get_alpha_betas(denoising_steps)      # Precompute alphas
 
-    if (epoch+1) % 10 == 0:
-        mean_loss = np.mean(np.array(losses))
+        all_losses = []
+
         losses = []
-        print("Epoch %d,\t Loss %f " % (epoch+1, mean_loss))
+        for epoch in trange(nepochs):
+            for [patches, targets] in data_loader:
+                patches = patches.to(device)
+                targets = targets.to(device)
+                optimizer.zero_grad()
+                # Fwd pass
+                t = torch.randint(denoising_steps, size=(patches.shape[0],))  # sample timesteps - 1 per datapoint
+                alpha_t = torch.index_select(torch.Tensor(alpha_bars), 0, t).unsqueeze(1).unsqueeze(1).unsqueeze(1).to(device)    # Get the alphas for each timestep
 
-  return all_losses
+                noise = torch.randn(*patches.shape, device=device)   # Sample DIFFERENT random noise for each datapoint
+                
+                model_in = alpha_t**.5 * patches + noise*(1-alpha_t)**.5   # Noise corrupt the data (eq14)
+                out = self.model(model_in, targets, t)
+                loss = torch.mean((noise - out)**2)     # Compute loss on prediction (eq14)
+                losses.append(loss.detach().cpu().numpy())
+                all_losses.append(loss.detach().cpu().numpy())
+
+                # Bwd pass
+                loss.backward()
+                optimizer.step()
+
+                if (epoch+1) % 10 == 0:
+                    mean_loss = np.mean(np.array(losses))
+                    losses = []
+                    print("Epoch %d,\t Loss %f " % (epoch+1, mean_loss))
+
+        return all_losses
+
+    def sample(self, n_samples: int, targets: torch.tensor, device: torch.device, patch_size: (int, int), n_steps: int=1_000):
+        """Alg 2 from the DDPM paper."""
+        self.model.eval()
+        with torch.no_grad():
+            x_t = torch.randn((n_samples, 1, *patch_size)).to(device)
+            targets = targets.to(device)
+            alpha_bars, betas = self.get_alpha_betas(n_steps)
+            alphas = 1 - betas
+            for t in range(len(alphas))[::-1]:
+                ts = t * torch.ones((n_samples, 1), dtype=torch.int32).to(device)
+                ab_t = alpha_bars[t] * torch.ones((n_samples, 1), dtype=torch.int32).to(device)  # Tile the alpha to the number of samples
+                z = (torch.randn((n_samples, 1, *patch_size)) if t > 1 else torch.zeros((n_samples, 1, *patch_size))).to(device)
+                model_prediction = self.model(x_t, targets, ts.squeeze(1))
+                x_t = 1 / alphas[t]**.5 * (x_t - (betas[t]/(1-ab_t)**.5).unsqueeze(2).unsqueeze(2) * model_prediction)
+                x_t += betas[t]**0.5 * z
+
+            x_t = (x_t - torch.min(x_t)) / (torch.max(x_t) - torch.min(x_t)) # normalize
+            return x_t
 
 
-def sample(model: nn.Module, targets: torch.tensor, device: torch.device, patch_size: (int, int), n_samples: int = 50, n_steps: int=100):
-    """Alg 2 from the DDPM paper."""
-    x_t = torch.randn((n_samples, 1, *patch_size)).to(device)
-    targets = targets.to(device)
-    alpha_bars, betas = get_alpha_betas(n_steps)
-    alphas = 1 - betas
-    for t in range(len(alphas))[::-1]:
-        ts = t * torch.ones((n_samples, 1), dtype=torch.int32).to(device)
-        # print("ts shape: ", ts.shape)
-        ab_t = alpha_bars[t] * torch.ones((n_samples, 1), dtype=torch.int32).to(device)  # Tile the alpha to the number of samples
-        # print("ab t shape: ", ab_t.shape)
-        z = (torch.randn((n_samples, 1, *patch_size)) if t > 1 else torch.zeros((n_samples, 1, *patch_size))).to(device)
-        # print(x_t.device, ts.device)
-        model_prediction = model(x_t, targets, ts.squeeze(1))
-        x_t = 1 / alphas[t]**.5 * (x_t - (betas[t]/(1-ab_t)**.5).unsqueeze(2).unsqueeze(2) * model_prediction)
-        x_t += betas[t]**0.5 * z
-        x_t.clamp_(0., 1.)
-
-    return x_t
-
+    def load(self, path):
+        self.model.load_state_dict(torch.load(path, map_location=self.device))
+    
+    
 if __name__ == '__main__':
 
     import pickle
-    import numpy as np
     import matplotlib.pyplot as plt
 
-    with open('/home/hanfeld/flying_adversarial_patch/80x80patches_all_2.pickle', 'rb') as f:
+    with open('data/FAP_combined.pickle', 'rb') as f:
         data = pickle.load(f)    
 
 
@@ -383,40 +400,48 @@ if __name__ == '__main__':
     dataset = torch.utils.data.TensorDataset(patches, targets)
     loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True, drop_last=True)
 
-    model = UNet(in_size=1, out_size=1, device=device)
-    model.to(device)
+    # model = UNet(in_size=1, out_size=1, device=device)
+    # model.to(device)
+
+    model = DiffusionModel(device)
 
     # training
-    all_losses = train(model, loader, device, 1_000, denoising_steps=1_000)
-    model.eval()
+    print("Start training..")
+    all_losses = model.train(loader, device, 2, denoising_steps=1_000)
 
-    torch.save(model.state_dict(), f'conditioned_unet_{patch_size[0]}x{patch_size[1]}_{1_000}_3256i.pth')
+
+
+    # torch.save(model.state_dict(), f'conditioned_unet_{patch_size[0]}x{patch_size[1]}_{1_000}_3256i_255.pth')
     
     n_samples = 5
     x = np.random.uniform(0,2,n_samples)
     y = np.random.uniform(-1,1,n_samples,)
     z = np.random.uniform(-0.5,0.5,n_samples,)
 
+    r_targets = torch.tensor(np.stack((x, y, z)).T, dtype=torch.float32)
 
-    targets = torch.tensor(np.stack((x, y, z)).T, dtype=torch.float32)
+    samples = model.sample(n_samples, r_targets, device, patch_size=patch_size, n_steps=1_000)
+    print(samples.min(), samples.max())
 
-    # running into memory issues with this sample function! fix: don't compute gradients
-    with torch.no_grad():
-        samples = sample(model, targets, device, n_samples=n_samples, patch_size=patch_size, n_steps=1_000).detach().cpu().numpy()
-    print(samples.shape)
-    print(np.min(samples), np.max(samples))
+    
+
+    # # running into memory issues with this sample function! fix: don't compute gradients
+    # with torch.no_grad():
+    #     samples = sample(model, targets, device, n_samples=n_samples, patch_size=patch_size, n_steps=1_000).detach().cpu().numpy()
+    # print(samples.shape)
+    # print(np.min(samples), np.max(samples))
+
+    # # fig = plt.figure(constrained_layout=True)
+    # # subfigs = fig.subfigures(2, 1)
+    # # axs_gt = subfigs[0].subplots(1, 2)
+    # # for i, gt_patch in enumerate(gt_patches):
+    # #     axs_gt[i].imshow(gt_patch, cmap='gray')
+    # #     axs_gt[i].set_title(f'ground truth {i}')
 
     # fig = plt.figure(constrained_layout=True)
-    # subfigs = fig.subfigures(2, 1)
-    # axs_gt = subfigs[0].subplots(1, 2)
-    # for i, gt_patch in enumerate(gt_patches):
-    #     axs_gt[i].imshow(gt_patch, cmap='gray')
-    #     axs_gt[i].set_title(f'ground truth {i}')
-
-    fig = plt.figure(constrained_layout=True)
-    axs_samples = fig.subplots(1, n_samples)
-    for i, sample in enumerate(samples):
-        axs_samples[i].imshow(sample[0], cmap='gray')
-        axs_samples[i].set_title(f'sample {i}')
-    fig.savefig(f'samples_conditioning_3_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
-    plt.show()
+    # axs_samples = fig.subplots(1, n_samples)
+    # for i, sample in enumerate(samples):
+    #     axs_samples[i].imshow(sample[0], cmap='gray')
+    #     axs_samples[i].set_title(f'sample {i}')
+    # fig.savefig(f'samples_conditioning_4_{patch_size[0]}x{patch_size[1]}.png', dpi=200)
+    # plt.show()
