@@ -19,6 +19,8 @@ from threading import Thread
 
 import motioncapture
 
+import yaml
+
 ### code from https://github.com/bitcraze/crazyflie-lib-python/blob/master/examples/mocap/mocap_hl_commander.py
 # When using full pose, the estimator can be sensitive to noise in the orientation data when yaw is close to +/- 90
 # degrees. If this is a problem, increase orientation_std_dev a bit. The default value in the firmware is 4.5e-3.
@@ -127,9 +129,11 @@ def activate_kalman_estimator(cf):
 ### end of code from Bitcraze
 
 class CrazyflieControl():
-    def __init__(self, uri):#, positions_queue):
+    def __init__(self, config):#, positions_queue):
+
+
         self.connected= False
-        self.uri = uri_helper.uri_from_env(default=uri)
+        self.uri = uri_helper.uri_from_env(default=config['uri'])
         # self.positions_queue = positions_queue
         # print(self.positions_queue)
 
@@ -140,12 +144,14 @@ class CrazyflieControl():
         self.reboot()
 
         print("Init Mocap thread..")
-        self.mocap_wrapper = MocapWrapper('cf_pia', 'optitrack', '141.23.110.143')
+        self.mocap_wrapper = MocapWrapper(config['mocap']['rigid_body_name'], config['mocap']['type'], config['mocap']['host_name'])
 
         self.connect()
         self.init_logger()
         self.pose = None
         self.battery = [None, None]
+
+        self.frontnet = '0'
         #self.lighthouse = 0.
 
         
@@ -232,14 +238,14 @@ class CrazyflieControl():
         link.close()
         return False
 
-    def takeoff(self):
+    def takeoff(self, height=0.6, seconds=2.0):
         print("taking off..")
-        self.commander.takeoff(0.6, 2.0)
-        # time.sleep(5.0)
+        self.commander.takeoff(height, seconds)
+        time.sleep(5.0)
 
     def land(self):
-        self.commander.land(0.0, 2.0)
-        # time.sleep(2.)
+        self.commander.land(0.0, 5.0)
+        time.sleep(2.)
         # self.commander.stop()
 
     def angular_distance(self, x, y):
@@ -282,26 +288,38 @@ class CrazyflieControl():
         print("...CF rebooted!")
         self.connected = True
 
-    def close(self):
-        self.scf.close()
-        self.mocap_wrapper.close()
-        self.cf.close()
-        # self.power_off()
+    def toggle_frontnet(self):
+        if self.frontnet == '0':
+            self.frontnet = '1'
+        else:
+            self.frontnet = '0'
+
+        self.cf.param.set_value('frontnet.start', self.frontnet)
+
+    # TODO: Threads are still open after landing
+    # def close(self):
+    #     self.scf.close()
+    #     self.mocap_wrapper.close()
+    #     self.cf.close()
 
 
 
 if __name__ == '__main__':
-    # parser = argparse.ArgumentParser(description='Script to start flying your CF and simultanously stream images from the AI Deck')
-    # parser.add_argument('--uri', default="radio://0/80/2M/E7E7E7E7E7", help="Crazyflie URI")
-    # parser.add_argument('--ssid', default="TP-Link_67BC", help="WiFi SSID")
-    # parser.add_argument('--ip', default="192.168.0.100", help="AI Deck IP")
-    # parser.add_argument('--port', type=int, default=5000, help="AI Deck IP")
-    # args = parser.parse_args()
+    # read config from yaml
+    with open('flying/config.yaml') as file:
+        config = yaml.load(file, Loader=yaml.FullLoader)
+    print(config)
 
 
-
-    cf = CrazyflieControl("radio://0/80/2M/E7E7E7E712")
+    cf = CrazyflieControl(config)
     cf.takeoff()
     time.sleep(5.)
+    cf.toggle_frontnet()
+    time.sleep(5.)
+    cf.toggle_frontnet()
+
     cf.land()
-    cf.close()
+    time.sleep(10.)
+    # TODO: CF just drops instead of slowly landing
+    print('done')
+    
