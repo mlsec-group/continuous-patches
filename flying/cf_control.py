@@ -259,7 +259,7 @@ class CrazyflieControl():
         dist = np.linalg.norm(self.pose[:3]-np.array([x, y, z]))
         
         current_yaw = rowan.to_euler(self.pose[3:])[2]
-        print("current yaw: ", current_yaw)
+        # print("current yaw: ", current_yaw)
         # print("auto pose: ", self.pose)
         angular_dist = np.abs(self.angular_distance(current_yaw, np.radians(yaw)))
         # print("auto angular dist: ", angular_dist)
@@ -300,9 +300,12 @@ class CrazyflieControl():
             self.frontnet = '1'
         else:
             self.frontnet = '0'
-            self.base_commander.send_notify_setpoint_stop()
 
         self.cf.param.set_value('frontnet.start', self.frontnet)
+        if self.frontnet == '0':
+            self.base_commander.send_notify_setpoint_stop()
+            self.goto(*self.pose[:3], seconds=0.5)
+            time.sleep(0.5)
 
     # TODO: Threads are still open after landing
     # def close(self):
@@ -315,8 +318,11 @@ class CrazyflieControl():
             self.toggle_frontnet()
         time.sleep(0.5)
 
-        self.goto(0., 2., 1., seconds=5.)
-        time.sleep(5.)
+        # self.goto(0., 2., 1., seconds=5.)
+        # time.sleep(5.)
+        t = self.goto_auto(0., 2., 1., yaw=0.)
+        print(t)
+        time.sleep(t+1.)
 
 
 if __name__ == '__main__':
@@ -334,8 +340,8 @@ if __name__ == '__main__':
     time.sleep(10.)
     cf.toggle_frontnet()
     print("frontnet off")
-    cf.goto(*cf.pose[:3], seconds=5.)
-    time.sleep(5.)
+    # cf.goto(*cf.pose[:3], seconds=5.)
+    # time.sleep(5.)
     cf.reset()
     time.sleep(1)
 
@@ -343,7 +349,7 @@ if __name__ == '__main__':
     print("landing..")
     cf.land()
     time.sleep(10.)
-    # TODO: CF just drops instead of slowly landing
+
     cf.mocap_wrapper.close()
     print('done')
     
