@@ -18,7 +18,7 @@ import numpy as np
 from threading import Thread
 
 import motioncapture
-
+import rowan
 import yaml
 
 ### code from https://github.com/bitcraze/crazyflie-lib-python/blob/master/examples/mocap/mocap_hl_commander.py
@@ -144,6 +144,7 @@ class CrazyflieControl():
         self.reboot()
 
         print("Init Mocap thread..")
+        # print(config['mocap']['rigid_body_name'], config['mocap']['type'], config['mocap']['host_name'])
         self.mocap_wrapper = MocapWrapper(config['mocap']['rigid_body_name'], config['mocap']['type'], config['mocap']['host_name'])
 
         self.connect()
@@ -163,12 +164,13 @@ class CrazyflieControl():
         self.connected = self.scf.cf.fully_connected
 
         # Set up a callback to handle data from the mocap system
-        self.mocap_wrapper.on_pose = lambda pose: send_extpose_quat(self.scf.cf, pose[0], pose[1], pose[2], pose[3])
+        self.mocap_wrapper.on_pose = lambda pose: (send_extpose_quat(self.scf.cf, pose[0], pose[1], pose[2], pose[3]), # send pose to STM
+                                                   setattr(self, 'pose', np.array([*pose[:3], pose[3].w, pose[3].x, pose[3].y, pose[3].z]))) # update pose here
         adjust_orientation_sensitivity(self.scf.cf)
         activate_kalman_estimator(self.scf.cf)
         reset_estimator(self.scf.cf)
 
-
+        self.base_commander = self.scf.cf.commander
         self.commander = self.scf.cf.high_level_commander
 
     def init_logger(self):
@@ -244,6 +246,7 @@ class CrazyflieControl():
         time.sleep(5.0)
 
     def land(self):
+        self.base_commander.send_notify_setpoint_stop()
         self.commander.land(0.0, 5.0)
         time.sleep(2.)
         # self.commander.stop()
@@ -252,9 +255,13 @@ class CrazyflieControl():
         return np.arctan2(np.sin(x-y), np.cos(x-y))
 
     def goto_auto(self, x, y, z, yaw=0.):
+        print(self.pose[:3])
         dist = np.linalg.norm(self.pose[:3]-np.array([x, y, z]))
+        
+        current_yaw = rowan.to_euler(self.pose[3:])[2]
+        print("current yaw: ", current_yaw)
         # print("auto pose: ", self.pose)
-        angular_dist = np.abs(self.angular_distance(np.radians(self.pose[3]), np.radians(yaw)))
+        angular_dist = np.abs(self.angular_distance(current_yaw, np.radians(yaw)))
         # print("auto angular dist: ", angular_dist)
         angular_speed = 1.0
         speed = 0.6
@@ -293,6 +300,7 @@ class CrazyflieControl():
             self.frontnet = '1'
         else:
             self.frontnet = '0'
+            self.base_commander.send_notify_setpoint_stop()
 
         self.cf.param.set_value('frontnet.start', self.frontnet)
 
@@ -302,6 +310,13 @@ class CrazyflieControl():
     #     self.mocap_wrapper.close()
     #     self.cf.close()
 
+    def reset(self):
+        if self.frontnet == '1':
+            self.toggle_frontnet()
+        time.sleep(0.5)
+
+        self.goto(0., 2., 1., seconds=5.)
+        time.sleep(5.)
 
 
 if __name__ == '__main__':
@@ -312,14 +327,23 @@ if __name__ == '__main__':
 
 
     cf = CrazyflieControl(config)
-    cf.takeoff()
+    cf.takeoff(1.0)
     time.sleep(5.)
+    print("frontnet on")
     cf.toggle_frontnet()
+    time.sleep(10.)
+    cf.toggle_frontnet()
+    print("frontnet off")
+    cf.goto(*cf.pose[:3], seconds=5.)
     time.sleep(5.)
-    cf.toggle_frontnet()
+    cf.reset()
+    time.sleep(1)
 
+    
+    print("landing..")
     cf.land()
     time.sleep(10.)
     # TODO: CF just drops instead of slowly landing
+    cf.mocap_wrapper.close()
     print('done')
     
