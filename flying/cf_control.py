@@ -128,6 +128,31 @@ def activate_kalman_estimator(cf):
 
 ### end of code from Bitcraze
 
+
+class FlightSpaceWatcher(Thread):
+    def __init__(self, cf):
+        Thread.__init__(self)
+        self.cf = cf
+        self.limits = np.array([[-1.7, 1.7], [-3.0, 3.0], [0.0, 2.0]])
+        self._stay_open = True
+
+        self.start()
+
+    def run(self):
+        while self._stay_open:
+            if self.cf.pose is not None:
+                # print(self.cf.pose[:3])
+                if not np.all(self.limits[:, 0] < self.cf.pose[:3]) or not np.all(self.cf.pose[:3] < self.limits[:, 1]):
+                    # print("Lower limits: ", self.limits[:, 0] < self.cf.pose[:3])
+                    # print("Upper limits: ", self.cf.pose[:3] < self.limits[:, 1])
+                    # print("Need reset!")
+                    self.cf.reset()
+            # time.sleep(10.)
+
+    def close(self):
+        self._stay_open = False
+
+
 class CrazyflieControl():
     def __init__(self, config):#, positions_queue):
 
@@ -154,6 +179,9 @@ class CrazyflieControl():
 
         self.frontnet = '0'
         #self.lighthouse = 0.
+
+        self.occupied = False
+        self.flight_space_watcher = FlightSpaceWatcher(self)
 
         
 
@@ -190,7 +218,7 @@ class CrazyflieControl():
             self.cf.log.add_config(self._lg_stab)
             self.cf.log.add_config(self._lg_stat)
             # This callback will receive the data
-            self._lg_stab.data_received_cb.add_callback(self._stab_log_data)
+            # self._lg_stab.data_received_cb.add_callback(self._stab_log_data)
             self._lg_stat.data_received_cb.add_callback(self._status_log_data)
             # This callback will be called on errors
             self._lg_stab.error_cb.add_callback(self._stab_log_error)
@@ -241,24 +269,34 @@ class CrazyflieControl():
         return False
 
     def takeoff(self, height=0.6, seconds=2.0):
+        while self.occupied:
+            time.sleep(0.1)
+        self.occupied = True
         print("taking off..")
         self.commander.takeoff(height, seconds)
-        time.sleep(5.0)
+        time.sleep(seconds)
+        self.occupied = False
 
     def land(self):
+        while self.occupied:
+            time.sleep(0.1)
+        self.occupied = True
         self.base_commander.send_notify_setpoint_stop()
-        self.commander.land(0.0, 5.0)
+        self.commander.land(0.0, 2.0)
         time.sleep(2.)
+        self.occupied = False
         # self.commander.stop()
 
     def angular_distance(self, x, y):
         return np.arctan2(np.sin(x-y), np.cos(x-y))
 
     def goto_auto(self, x, y, z, yaw=0.):
-        print(self.pose[:3])
+        # while self.occupied:
+        #     time.sleep(0.1)
+        print(self.pose[:])
         dist = np.linalg.norm(self.pose[:3]-np.array([x, y, z]))
         
-        current_yaw = rowan.to_euler(self.pose[3:])[2]
+        current_yaw = rowan.to_euler(rowan.normalize(self.pose[3:]))[2]
         # print("current yaw: ", current_yaw)
         # print("auto pose: ", self.pose)
         angular_dist = np.abs(self.angular_distance(current_yaw, np.radians(yaw)))
@@ -274,6 +312,7 @@ class CrazyflieControl():
 
     def goto(self, x, y, z, yaw=0.0, seconds=2.0):
         self.commander.go_to(x, y, z, np.radians(yaw), seconds)     # yaw in rad
+
 
     def power_off(self):
         s = PowerSwitch(self.uri)
@@ -294,6 +333,7 @@ class CrazyflieControl():
         time.sleep(4.)
         print("...CF rebooted!")
         self.connected = True
+        self.occupied = False
 
     def toggle_frontnet(self):
         if self.frontnet == '0':
@@ -303,26 +343,28 @@ class CrazyflieControl():
 
         self.cf.param.set_value('frontnet.start', self.frontnet)
         if self.frontnet == '0':
+            self.goto(*self.pose[:3], seconds=0.5)
             self.base_commander.send_notify_setpoint_stop()
             self.goto(*self.pose[:3], seconds=0.5)
             time.sleep(0.5)
 
-    # TODO: Threads are still open after landing
-    # def close(self):
-    #     self.scf.close()
-    #     self.mocap_wrapper.close()
-    #     self.cf.close()
+    def close(self):
+        self.mocap_wrapper.close()
+        self.flight_space_watcher.close()
+        self.scf.close_link()
 
     def reset(self):
+        self.occupied = True
         if self.frontnet == '1':
             self.toggle_frontnet()
-        time.sleep(0.5)
+        # time.sleep(0.5)
 
         # self.goto(0., 2., 1., seconds=5.)
         # time.sleep(5.)
-        t = self.goto_auto(0., 2., 1., yaw=0.)
+        t = self.goto_auto(0., 0., 1., yaw=0.)
         print(t)
         time.sleep(t+1.)
+        self.occupied = False
 
 
 if __name__ == '__main__':
@@ -333,23 +375,33 @@ if __name__ == '__main__':
 
 
     cf = CrazyflieControl(config)
-    cf.takeoff(1.0)
-    time.sleep(5.)
-    print("frontnet on")
-    cf.toggle_frontnet()
-    time.sleep(10.)
-    cf.toggle_frontnet()
-    print("frontnet off")
-    # cf.goto(*cf.pose[:3], seconds=5.)
-    # time.sleep(5.)
-    cf.reset()
-    time.sleep(1)
 
-    
-    print("landing..")
-    cf.land()
-    time.sleep(10.)
+    try:
+        cf.takeoff(1.0)
+        # time.sleep(10.)
+        # cf.goto(0., -3.1, 1., seconds=5.)
+        # time.sleep(10.)
+        print("frontnet on")
+        cf.toggle_frontnet()
+        time.sleep(10.)
+        cf.toggle_frontnet()
+        print("frontnet off")
+        # # cf.goto(*cf.pose[:3], seconds=5.)
+        # # time.sleep(5.)
+        cf.reset()
+        time.sleep(1)
 
-    cf.mocap_wrapper.close()
-    print('done')
-    
+        
+        print("landing..")
+        cf.land()
+        time.sleep(10.)
+
+
+        print('done')
+        cf.close()
+    except Exception as e:
+        print(e)
+        cf.occupied = False
+        cf.land()
+        cf.close()
+        raise e
