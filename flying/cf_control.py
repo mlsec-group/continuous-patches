@@ -396,13 +396,15 @@ class CrazyflieControl():
         time.sleep(t+1.)
         self.occupied.append(False)
 
-def custom_sleep(t, occupied_queue):
+def custom_sleep(t, occupied_queue, wait=False):
     # should be used outside of the class
+    start_time = time.time()
     while time.time() - start_time < t:
         if occupied_queue[0]:  # waiting for current task to finish
-            start_time = time.time()
+            if wait: # reset timer and wait until the task is really done 
+                start_time = time.time()
             time.sleep(0.1)
-        else:  # otherwise actually wait for t seconds
+        else:  # otherwise only wait for t seconds and don't care about the task
             time.sleep(0.1)
 
 if __name__ == '__main__':

@@ -2,11 +2,10 @@ import numpy as np
 from bayes_opt import BayesianOptimization
 from bayes_opt import acquisition
 
-from flying.cf_control import CrazyflieControl
+from flying.cf_control import CrazyflieControl, custom_sleep
 
 import os
 import yaml
-from time import time
 
 import cv2
 
@@ -58,6 +57,25 @@ class PatchDisplayThread(Thread):
         # Destroy the window
         self._stay_alive = False
         cv2.destroyAllWindows()
+
+
+# class PoseUpdater(Thread):
+#     def __init__(self, cf, queue_size=100):
+#         super().__init__()
+#         self._stay_alive = True
+#         self.cf = cf
+#         self.queue = Queue(queue_size)   # We're receiving data with roughly 100 Hz, if queue size is 100, we have ~1 second of data
+
+#     def run(self):
+#         while self._stay_alive:
+#             if self.cf.pose is not None:
+#                 if self.queue.full():
+#                     self.queue.get()
+#                 print(self.cf.pose)
+#                 self.queue.put_nowait(self.cf.pose)
+
+#     def close(self):
+#         self._stay_alive = False
             
 
 
@@ -68,7 +86,7 @@ if __name__ == "__main__":
         config = yaml.load(file, Loader=yaml.FullLoader)
     print(config)
 
-    # cf = CrazyflieControl(config)
+    cf = CrazyflieControl(config)
 
     projector_display_size = (1050, 1680)
 
@@ -76,8 +94,8 @@ if __name__ == "__main__":
 
     # Start the PatchDisplayThread
     display_thread = PatchDisplayThread("Patch", (2561, 0))
-    display_thread.start()
-    display_thread.update(background)
+    # display_thread.start()
+    # display_thread.update(background)
 
 
 
@@ -95,9 +113,33 @@ if __name__ == "__main__":
 
     projected_patch = project_patch(random_patch, T, background)
 
-    display_thread.update(projected_patch)
+    # display_thread.update(projected_patch)
 
 
+    # cf_poses = PoseUpdater(cf)
+
+    cf.takeoff()
+
+    custom_sleep(5., cf.occupied)
+
+    # t = cf.goto_auto(*np.array([0., -3.1, 0.5]), 0.0)
+    # custom_sleep(t, cf.occupied, True)
+    cf.toggle_frontnet()
+    custom_sleep(1., cf.occupied, True)
+
+    for i in range(1000):
+        if i % 100 == 0:
+            print(cf.pose[0][:3])
+        custom_sleep(0.1, cf.occupied)
+
+    cf.reset()
+    custom_sleep(1., cf.occupied, True)
+
+    # print(poses[0], poses[-1])
+
+    cf.land()
+    custom_sleep(1., cf.occupied, True)
 
 
-    # cf.close()
+    cf.close()
+    # cf_poses.close()
