@@ -21,6 +21,8 @@ import motioncapture
 import rowan
 import yaml
 
+from collections import deque
+
 ### code from https://github.com/bitcraze/crazyflie-lib-python/blob/master/examples/mocap/mocap_hl_commander.py
 # When using full pose, the estimator can be sensitive to noise in the orientation data when yaw is close to +/- 90
 # degrees. If this is a problem, increase orientation_std_dev a bit. The default value in the firmware is 4.5e-3.
@@ -129,28 +131,29 @@ def activate_kalman_estimator(cf):
 ### end of code from Bitcraze
 
 
-class FlightSpaceWatcher(Thread):
-    def __init__(self, cf):
-        Thread.__init__(self)
-        self.cf = cf
-        self.limits = np.array([[-1.7, 1.7], [-3.0, 3.0], [0.0, 2.0]])
-        self._stay_open = True
+# class FlightSpaceWatcher(Thread):
+#     def __init__(self, pose_queue, reset_queue):
+#         Thread.__init__(self)
+#         self.pose_queue = pose_queue
+#         self.reset_queue = reset_queue
+#         self.limits = np.array([[-1.7, 1.7], [-3.0, 3.0], [0.0, 2.0]])
+#         self._stay_open = True
 
-        self.start()
+#         self.start()
 
-    def run(self):
-        while self._stay_open:
-            if self.cf.pose is not None:
-                # print(self.cf.pose[:3])
-                if not np.all(self.limits[:, 0] < self.cf.pose[:3]) or not np.all(self.cf.pose[:3] < self.limits[:, 1]):
-                    # print("Lower limits: ", self.limits[:, 0] < self.cf.pose[:3])
-                    # print("Upper limits: ", self.cf.pose[:3] < self.limits[:, 1])
-                    # print("Need reset!")
-                    self.cf.reset()
-            # time.sleep(10.)
+#     def run(self):
+#         while self._stay_open:
+#             pose = self.pose_queue.pose.get()
+#             print(pose[:3])
+#             if not np.all(self.limits[:, 0] < pose[:3]) or not np.all(pose[:3] < self.limits[:, 1]):
+#                 # print("Lower limits: ", self.limits[:, 0] < self.cf.pose[:3])
+#                 # print("Upper limits: ", self.cf.pose[:3] < self.limits[:, 1])
+#                 # print("Need reset!")
+#                 self.reset_queue.put(True)
+#             # time.sleep(0.1)
 
-    def close(self):
-        self._stay_open = False
+#     def close(self):
+#         self._stay_open = False
 
 
 class CrazyflieControl():
@@ -159,6 +162,12 @@ class CrazyflieControl():
 
         self.connected= False
         self.uri = uri_helper.uri_from_env(default=config['uri'])
+        self.occupied = deque([False], maxlen=1)
+        
+        
+        self.pose = deque(maxlen=1)
+        self.reset_queue = deque([False], maxlen=1)
+        self.limits = np.array([[-1.7, 1.7], [-3.0, 3.0], [0.0, 2.0]])
         # self.positions_queue = positions_queue
         # print(self.positions_queue)
 
@@ -168,20 +177,28 @@ class CrazyflieControl():
         print("Rebooting..")
         self.reboot()
 
+
+
         print("Init Mocap thread..")
         # print(config['mocap']['rigid_body_name'], config['mocap']['type'], config['mocap']['host_name'])
         self.mocap_wrapper = MocapWrapper(config['mocap']['rigid_body_name'], config['mocap']['type'], config['mocap']['host_name'])
 
         self.connect()
         self.init_logger()
-        self.pose = None
+
+        # reset handling
+        self.reset_monitor_thread = Thread(target=self.monitor_reset)
+        self.reset_monitor_thread.daemon = True
+        self.reset_monitor_thread.start()
+
+        
         self.battery = [None, None]
 
         self.frontnet = '0'
         #self.lighthouse = 0.
 
-        self.occupied = False
-        self.flight_space_watcher = FlightSpaceWatcher(self)
+        
+        # self.flight_space_watcher = FlightSpaceWatcher(self.pose, self.reset_queue)
 
         
 
@@ -192,8 +209,7 @@ class CrazyflieControl():
         self.connected = self.scf.cf.fully_connected
 
         # Set up a callback to handle data from the mocap system
-        self.mocap_wrapper.on_pose = lambda pose: (send_extpose_quat(self.scf.cf, pose[0], pose[1], pose[2], pose[3]), # send pose to STM
-                                                   setattr(self, 'pose', np.array([*pose[:3], pose[3].w, pose[3].x, pose[3].y, pose[3].z]))) # update pose here
+        self.mocap_wrapper.on_pose = lambda pose: self.pose_handler(pose)
         adjust_orientation_sensitivity(self.scf.cf)
         activate_kalman_estimator(self.scf.cf)
         reset_estimator(self.scf.cf)
@@ -267,24 +283,38 @@ class CrazyflieControl():
                 return True
         link.close()
         return False
+    
+    def pose_handler(self, pose):
+        send_extpose_quat(self.scf.cf, pose[0], pose[1], pose[2], pose[3]), # send pose to STM
+        self.pose.append(np.array([*pose[:3], pose[3].w, pose[3].x, pose[3].y, pose[3].z])), # update pose here
+        if not np.all(self.limits[:, 0] < pose[:3]) or not np.all(pose[:3] < self.limits[:, 1]): 
+            self.reset_queue.append(True) # check if pose is within limits
+
+    def monitor_reset(self):
+        while True:
+            if self.reset_queue and self.reset_queue[0]:
+                self.reset()
+                self.reset_queue.append(False)
+            time.sleep(0.1)
+    
 
     def takeoff(self, height=0.6, seconds=2.0):
-        while self.occupied:
+        while self.occupied[0]:
             time.sleep(0.1)
-        self.occupied = True
+        self.occupied.append(True)
         print("taking off..")
         self.commander.takeoff(height, seconds)
         time.sleep(seconds)
-        self.occupied = False
+        self.occupied.append(False)
 
     def land(self):
-        while self.occupied:
+        while self.occupied[0]:
             time.sleep(0.1)
-        self.occupied = True
+        self.occupied.append(True)
         self.base_commander.send_notify_setpoint_stop()
         self.commander.land(0.0, 2.0)
         time.sleep(2.)
-        self.occupied = False
+        self.occupied.append(False)
         # self.commander.stop()
 
     def angular_distance(self, x, y):
@@ -293,10 +323,10 @@ class CrazyflieControl():
     def goto_auto(self, x, y, z, yaw=0.):
         # while self.occupied:
         #     time.sleep(0.1)
-        print(self.pose[:])
-        dist = np.linalg.norm(self.pose[:3]-np.array([x, y, z]))
+        print(np.array(self.pose[0])[:])
+        dist = np.linalg.norm(np.array(self.pose[0])[:3]-np.array([x, y, z]))
         
-        current_yaw = rowan.to_euler(rowan.normalize(self.pose[3:]))[2]
+        current_yaw = rowan.to_euler(rowan.normalize(np.array(self.pose[0])[3:]))[2]
         # print("current yaw: ", current_yaw)
         # print("auto pose: ", self.pose)
         angular_dist = np.abs(self.angular_distance(current_yaw, np.radians(yaw)))
@@ -333,7 +363,7 @@ class CrazyflieControl():
         time.sleep(4.)
         print("...CF rebooted!")
         self.connected = True
-        self.occupied = False
+        self.occupied.append(False)
 
     def toggle_frontnet(self):
         if self.frontnet == '0':
@@ -343,18 +373,18 @@ class CrazyflieControl():
 
         self.cf.param.set_value('frontnet.start', self.frontnet)
         if self.frontnet == '0':
-            self.goto(*self.pose[:3], seconds=0.5)
+            self.goto(*np.array(self.pose[0])[:3], seconds=0.5)
             self.base_commander.send_notify_setpoint_stop()
-            self.goto(*self.pose[:3], seconds=0.5)
+            self.goto(*np.array(self.pose[0])[:3], seconds=0.5)
             time.sleep(0.5)
 
     def close(self):
         self.mocap_wrapper.close()
-        self.flight_space_watcher.close()
+        # self.flight_space_watcher.close()
         self.scf.close_link()
 
     def reset(self):
-        self.occupied = True
+        self.occupied.append(True)
         if self.frontnet == '1':
             self.toggle_frontnet()
         # time.sleep(0.5)
@@ -364,8 +394,16 @@ class CrazyflieControl():
         t = self.goto_auto(0., 0., 1., yaw=0.)
         print(t)
         time.sleep(t+1.)
-        self.occupied = False
+        self.occupied.append(False)
 
+def custom_sleep(t, occupied_queue):
+    # should be used outside of the class
+    while time.time() - start_time < t:
+        if occupied_queue[0]:  # waiting for current task to finish
+            start_time = time.time()
+            time.sleep(0.1)
+        else:  # otherwise actually wait for t seconds
+            time.sleep(0.1)
 
 if __name__ == '__main__':
     # read config from yaml
@@ -379,29 +417,31 @@ if __name__ == '__main__':
     try:
         cf.takeoff(1.0)
         # time.sleep(10.)
-        # cf.goto(0., -3.1, 1., seconds=5.)
+        cf.goto(0., -3.1, 1., seconds=5.)
+        
+        custom_sleep(10., occupied_queue=cf.occupied)
+
+        # print("frontnet on")
+        # cf.toggle_frontnet()
         # time.sleep(10.)
-        print("frontnet on")
-        cf.toggle_frontnet()
-        time.sleep(10.)
-        cf.toggle_frontnet()
-        print("frontnet off")
+        # cf.toggle_frontnet()
+        # print("frontnet off")
         # # cf.goto(*cf.pose[:3], seconds=5.)
         # # time.sleep(5.)
-        cf.reset()
-        time.sleep(1)
+        # cf.reset()
+        # time.sleep(1)
 
         
         print("landing..")
         cf.land()
-        time.sleep(10.)
+        time.sleep(2.)
 
 
         print('done')
         cf.close()
     except Exception as e:
         print(e)
-        cf.occupied = False
+        # cf.occupied.append(False)
         cf.land()
         cf.close()
         raise e
