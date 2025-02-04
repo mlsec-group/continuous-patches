@@ -32,6 +32,11 @@ orientation_std_dev = 8.0e-3
 send_full_pose = True
 
 
+
+def angular_distance(x, y):
+    return np.arctan2(np.sin(x-y), np.cos(x-y))
+
+
 class MocapWrapper(Thread):
     def __init__(self, body_name, mocap_system_type, host_name):
         Thread.__init__(self)
@@ -317,9 +322,6 @@ class CrazyflieControl():
         self.occupied.append(False)
         # self.commander.stop()
 
-    def angular_distance(self, x, y):
-        return np.arctan2(np.sin(x-y), np.cos(x-y))
-
     def goto_auto(self, x, y, z, yaw=0.):
         # while self.occupied:
         #     time.sleep(0.1)
@@ -328,7 +330,7 @@ class CrazyflieControl():
         current_yaw = rowan.to_euler(rowan.normalize(np.array(self.pose[0])[3:]))[2]
         # print("current yaw: ", current_yaw)
         # print("auto pose: ", self.pose)
-        angular_dist = np.abs(self.angular_distance(current_yaw, np.radians(yaw)))
+        angular_dist = np.abs(angular_distance(current_yaw, np.radians(yaw)))
         # print("auto angular dist: ", angular_dist)
         angular_speed = 1.0
         speed = 0.6
