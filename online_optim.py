@@ -15,6 +15,8 @@ from collections import deque
 
 import rowan
 
+import time
+
 def get_euler_angles(quats):
     return rowan.to_euler(rowan.normalize(np.array(quats)))
 
@@ -76,16 +78,50 @@ class PoseUpdater(Thread):
     def run(self):
         while self._stay_alive:
             if self.cf_pose:
-                self.pose_accu.append(np.array(self.cf_pose[0]))
+                self.pose_accu.append([np.array(self.cf_pose[0]), time.time()])
 
     def get_current_pose(self):
-        return np.array(self.pose_accu[-1])
+        return np.array(self.pose_accu[-1][0]), self.pose_accu[-1][1]
 
     def close(self):
         self._stay_alive = False
             
 
+def objective_function(x, y):
+    pass
 
+def training(drone, display_update, pose_getter, patch, background):
+    
+    for i in range(10):
+        drone.reset()
+        custom_sleep(1., drone.occupied, True)
+        start_pose, start_time = pose_getter()
+        start_yaw = get_euler_angles(start_pose)[2]
+
+        T = np.zeros((3,3))
+        T[0,0] = 5 # sf
+        T[1,1] = 5 # sf
+        T[0,2] = 800 - (i*5) # tx
+        T[1,2] = 300 # ty
+        T[2,2] = 1
+
+        projected_patch = project_patch(patch, T, background)
+        display_update(projected_patch)
+
+        drone.toggle_frontnet()
+
+        custom_sleep(2., drone.occupied, True)
+        current_pose, current_time = pose_getter()
+        current_yaw = get_euler_angles(start_pose)[2]
+
+        drone.toggle_frontnet()
+
+        velocity = np.linalg.norm(np.array(current_pose[:3]) - np.array(start_pose[:3])) / (current_time - start_time)
+
+        print(f"Velocity: {velocity}")
+        print(f"Current position: {current_pose[:3]}")
+        drone.reset()
+        custom_sleep(2., drone.occupied, True)
 
 if __name__ == "__main__":
 
@@ -102,17 +138,18 @@ if __name__ == "__main__":
     display_thread.start()
     display_thread.update(background)
 
-    person = cv2.imread("/home/phanfeld/Downloads/istockphoto-625389694-612x612.jpg")
+    patch = cv2.imread("data/frontnet_gt_patch_distance.jpg")
+    print(patch.shape)
 
     T = np.zeros((3,3))
-    T[0,0] = 1 # sf
-    T[1,1] = 1 # sf
+    T[0,0] = 5 # sf
+    T[1,1] = 5 # sf
     T[0,2] = 750 # tx
-    T[1,2] = 160 # ty
+    T[1,2] = 300 # ty
     T[2,2] = 1
     print(T)
 
-    projected_patch = project_patch(person, T, background)
+    projected_patch = project_patch(patch, T, background)
 
     display_thread.update(projected_patch)
 
@@ -123,22 +160,20 @@ if __name__ == "__main__":
 
     cf_poses = PoseUpdater(cf.pose)
 
-    cf.takeoff()
+    cf.takeoff(1.0, 3)
 
     custom_sleep(5., cf.occupied)
 
-    cf.toggle_frontnet()
-    custom_sleep(10., cf.occupied, True)
-
-    print(cf_poses.get_current_pose())
+    training(cf, display_thread.update, cf_poses.get_current_pose, patch, background)
 
     cf.reset()
-    custom_sleep(1., cf.occupied, True)
+    custom_sleep(5., cf.occupied, True)
 
     cf.land()
 
     custom_sleep(5., cf.occupied)
 
     print("Closing...")
+    display_thread.close()
     cf_poses.close()
     cf.close()
