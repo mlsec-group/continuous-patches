@@ -323,7 +323,6 @@ class CrazyflieControl():
     def goto_auto(self, x, y, z, yaw=0.):
         # while self.occupied:
         #     time.sleep(0.1)
-        print(np.array(self.pose[0])[:])
         dist = np.linalg.norm(np.array(self.pose[0])[:3]-np.array([x, y, z]))
         
         current_yaw = rowan.to_euler(rowan.normalize(np.array(self.pose[0])[3:]))[2]
@@ -392,8 +391,6 @@ class CrazyflieControl():
         # self.goto(0., 2., 1., seconds=5.)
         # time.sleep(5.)
         t = self.goto_auto(0., 0., 1., yaw=0.)
-        print(t)
-        time.sleep(t+1.)
         self.occupied.append(False)
 
 def custom_sleep(t, occupied_queue, wait=False):

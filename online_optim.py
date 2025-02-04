@@ -11,7 +11,12 @@ import cv2
 
 from matplotlib import pyplot as plt
 from threading import Thread
-from queue import Queue
+from collections import deque
+
+import rowan
+
+def get_euler_angles(quats):
+    return rowan.to_euler(rowan.normalize(np.array(quats)))
 
 def project_patch(patch, T, image):
     # using cv2 to project the patch instead of FAP place_patch() function,
@@ -34,7 +39,7 @@ class PatchDisplayThread(Thread):
         self.name = name
         self.position = position
         self._stay_alive = True
-        self.queue = Queue()
+        self.queue = deque(maxlen=5)
 
     def run(self):
         # Create a named window and move it to the second monitor
@@ -42,8 +47,8 @@ class PatchDisplayThread(Thread):
         cv2.moveWindow(self.name, *self.position)  # Assuming the second monitor is to the right of the primary monitor
         cv2.setWindowProperty(self.name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         while self._stay_alive:
-            if not self.queue.empty():
-                img = self.queue.get()
+            if self.queue:
+                img = self.queue.popleft()
                 cv2.imshow(self.name, img)
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
@@ -51,7 +56,7 @@ class PatchDisplayThread(Thread):
 
     def update(self, img):
         # Add the image to the queue
-        self.queue.put(img)
+        self.queue.append(img)
 
     def close(self):
         # Destroy the window
@@ -59,23 +64,25 @@ class PatchDisplayThread(Thread):
         cv2.destroyAllWindows()
 
 
-# class PoseUpdater(Thread):
-#     def __init__(self, cf, queue_size=100):
-#         super().__init__()
-#         self._stay_alive = True
-#         self.cf = cf
-#         self.queue = Queue(queue_size)   # We're receiving data with roughly 100 Hz, if queue size is 100, we have ~1 second of data
+class PoseUpdater(Thread):
+    def __init__(self, cf_pose, queue_size=100):
+        super().__init__()
+        self._stay_alive = True
+        self.cf_pose = cf_pose
+        self.pose_accu = deque(maxlen=queue_size)   # We're receiving data with roughly 100 Hz, if queue size is 100, we have ~1 second of data
 
-#     def run(self):
-#         while self._stay_alive:
-#             if self.cf.pose is not None:
-#                 if self.queue.full():
-#                     self.queue.get()
-#                 print(self.cf.pose)
-#                 self.queue.put_nowait(self.cf.pose)
+        self.start()
 
-#     def close(self):
-#         self._stay_alive = False
+    def run(self):
+        while self._stay_alive:
+            if self.cf_pose:
+                self.pose_accu.append(np.array(self.cf_pose[0]))
+
+    def get_current_pose(self):
+        return np.array(self.pose_accu[-1])
+
+    def close(self):
+        self._stay_alive = False
             
 
 
@@ -86,60 +93,52 @@ if __name__ == "__main__":
         config = yaml.load(file, Loader=yaml.FullLoader)
     print(config)
 
-    cf = CrazyflieControl(config)
-
     projector_display_size = (1050, 1680)
 
     background = np.zeros((*projector_display_size, 3), dtype=np.uint8)
 
     # Start the PatchDisplayThread
     display_thread = PatchDisplayThread("Patch", (2561, 0))
-    # display_thread.start()
-    # display_thread.update(background)
+    display_thread.start()
+    display_thread.update(background)
 
-
-
-
-    random_patch = np.random.randint(255, size=(80,80,3),dtype=np.uint8)
-
+    person = cv2.imread("/home/phanfeld/Downloads/istockphoto-625389694-612x612.jpg")
 
     T = np.zeros((3,3))
-    T[0,0] = 4 # sf
-    T[1,1] = 4 # sf
-    T[0,2] = 100 # tx
-    T[1,2] = 100 # ty
+    T[0,0] = 1 # sf
+    T[1,1] = 1 # sf
+    T[0,2] = 750 # tx
+    T[1,2] = 160 # ty
     T[2,2] = 1
     print(T)
 
-    projected_patch = project_patch(random_patch, T, background)
+    projected_patch = project_patch(person, T, background)
 
-    # display_thread.update(projected_patch)
+    display_thread.update(projected_patch)
 
 
-    # cf_poses = PoseUpdater(cf)
+    cf = CrazyflieControl(config)
+
+    # random_patch = np.random.randint(255, size=(80,80,3),dtype=np.uint8)
+
+    cf_poses = PoseUpdater(cf.pose)
 
     cf.takeoff()
 
     custom_sleep(5., cf.occupied)
 
-    # t = cf.goto_auto(*np.array([0., -3.1, 0.5]), 0.0)
-    # custom_sleep(t, cf.occupied, True)
     cf.toggle_frontnet()
-    custom_sleep(1., cf.occupied, True)
+    custom_sleep(10., cf.occupied, True)
 
-    for i in range(1000):
-        if i % 100 == 0:
-            print(cf.pose[0][:3])
-        custom_sleep(0.1, cf.occupied)
+    print(cf_poses.get_current_pose())
 
     cf.reset()
     custom_sleep(1., cf.occupied, True)
 
-    # print(poses[0], poses[-1])
-
     cf.land()
-    custom_sleep(1., cf.occupied, True)
 
+    custom_sleep(5., cf.occupied)
 
+    print("Closing...")
+    cf_poses.close()
     cf.close()
-    # cf_poses.close()
