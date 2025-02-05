@@ -1,6 +1,9 @@
 import numpy as np
 from bayes_opt import BayesianOptimization
 from bayes_opt import acquisition
+from bayes_opt.logger import JSONLogger
+from bayes_opt.event import Events
+from bayes_opt.util import load_logs
 
 from flying.cf_control import CrazyflieControl, custom_sleep
 
@@ -90,94 +93,118 @@ class PoseUpdater(Thread):
 def objective_function(current_pose, target_pose):
     position_dist = np.linalg.norm(np.array(current_pose[:3]) - np.array(target_pose[:3]))
     angle_dist = rowan.geometry.intrinsic_distance(current_pose[3:], target_pose[3:])
+    # print("Quaternions: ", current_pose[3:], target_pose[3:])
+    # print(f"Position distance: {position_dist}, Angle distance: {angle_dist}")
 
-    #return -(position_dist + angle_dist)
-    return -position_dist
+    return -(position_dist + (angle_dist/np.pi))
+    # return -position_dist
 
-def training(drone, config, display_update, patch, background):
+def training(drone, config, display_update, patch, background, load_logs=False):
 
     pose_getter = PoseUpdater(drone.pose)
     pbounds = {'sf': (1, 10), 'tx': (0, 1680), 'ty': (0, 1050)}
     # acq = acquisition.UpperConfidenceBound(kappa=2.5)
-    acq = acquisition.ExpectedImprovement(xi=0.1) # x = 0.0 -> exploitation, x = 0.1 -> exploration
+    acq = acquisition.ExpectedImprovement(xi=0.03) # x = 0.0 -> exploitation, x = 0.1 -> exploration
 
     optimizer = BayesianOptimization(f=None,
                                      acquisition_function=acq,
                                      pbounds=pbounds,
                                      verbose=2,
-                                     random_state=1)
+                                     random_state=1,
+                                     allow_duplicate_points = True)
     
-    optimizer.set_gp_params(alpha=1e-2, n_restarts_optimizer=5)
+    optimizer.set_gp_params(alpha=1e-3, n_restarts_optimizer=5)
+
+    if load_logs:
+        load_logs(optimizer, logs=["results/logs.log"])
+
+    os.makedirs("results", exist_ok=True)
+    logger = JSONLogger(path="results/logs.log")
+    optimizer.subscribe(Events.OPTIMIZATION_STEP, logger)
 
     target_pose = np.array([2.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0])
 
-    for i in range(40):
-        # quick battery check
-        bat_v, bat_s = drone.battery
-        if bat_s == 3:
-            print("Low battery detected! Landing...")
-            drone.land()
-            custom_sleep(2., drone.occupied, True)
-            pose_getter.close()
-            drone.close()
+    try:
+        for i in range(200):
+            # quick battery check
+            bat_v, bat_s = drone.battery
+            if bat_s == 3:
+                print("Low battery detected! Landing...")
+                drone.land()
+                custom_sleep(2., drone.occupied, True)
+                pose_getter.close()
+                drone.power_off()
+                drone.close()
 
-            print("Perform battery change and hit y if ready!")
-            while True:
-                if input('Ready?') == 'y':
-                    break
+                print("Perform battery change and hit y if ready!")
+                while True:
+                    if input('Ready?') == 'y':
+                        break
+                
+                del drone
+                drone = CrazyflieControl(config)
+                pose_getter = PoseUpdater(drone.pose)
+
+                while True:
+                    if drone.connected:
+                        break
+                print("Continue flying...")
+                drone.takeoff(1.0, 3)
+                custom_sleep(2., drone.occupied, True)
             
-            drone = CrazyflieControl(config)
-            pose_getter = PoseUpdater(drone.pose)
+            
+            drone.reset()
+            custom_sleep(1., drone.occupied, True)
+            start_pose, start_time = pose_getter.get_current_pose()
+            start_yaw = get_euler_angles(start_pose)[2]
 
-            while True:
-                if drone.connected:
-                    break
-            print("Continue flying...")
-            drone.takeoff(1.0, 3)
+
+            params = optimizer.suggest()
+            sf = params['sf']
+            tx = params['tx']
+            ty = params['ty']
+
+            T = np.zeros((3,3))
+            T[0,0] = sf # sf
+            T[1,1] = sf # sf
+            T[0,2] = tx # tx
+            T[1,2] = ty # ty
+            T[2,2] = 1
+
+            projected_patch = project_patch(patch, T, background)
+            display_update(projected_patch)
+
+            drone.toggle_frontnet()
+
             custom_sleep(2., drone.occupied, True)
-        
-        
-        drone.reset()
-        custom_sleep(1., drone.occupied, True)
-        start_pose, start_time = pose_getter.get_current_pose()
-        start_yaw = get_euler_angles(start_pose)[2]
 
+            drone.toggle_frontnet()
+            current_pose, current_time = pose_getter.get_current_pose()
+            current_yaw = get_euler_angles(start_pose)[2]
 
-        params = optimizer.suggest()
-        sf = params['sf']
-        tx = params['tx']
-        ty = params['ty']
+            # velocity = np.linalg.norm(np.array(current_pose[:3]) - np.array(start_pose[:3])) / (current_time - start_time)
 
-        T = np.zeros((3,3))
-        T[0,0] = sf # sf
-        T[1,1] = sf # sf
-        T[0,2] = tx # tx
-        T[1,2] = ty # ty
-        T[2,2] = 1
+            # print(f"Velocity: {velocity}")
+            # print(f"Current position: {current_pose[:3]}")
 
-        projected_patch = project_patch(patch, T, background)
-        display_update(projected_patch)
+            loss = objective_function(current_pose, target_pose)
+            print(f"Loss: {loss}")
+            optimizer.register(params=params, target=loss)
 
-        drone.toggle_frontnet()
-
-        custom_sleep(2., drone.occupied, True)
-        current_pose, current_time = pose_getter.get_current_pose()
-        current_yaw = get_euler_angles(start_pose)[2]
-
-        drone.toggle_frontnet()
-
-        # velocity = np.linalg.norm(np.array(current_pose[:3]) - np.array(start_pose[:3])) / (current_time - start_time)
-
-        # print(f"Velocity: {velocity}")
-        # print(f"Current position: {current_pose[:3]}")
-
-        loss = objective_function(current_pose, target_pose)
-        print(f"Loss: {loss}")
-        optimizer.register(params=params, target=loss)
-
-        drone.reset()
-        custom_sleep(1.0, drone.occupied, True)
+            drone.reset()
+            custom_sleep(1.0, drone.occupied, True)
+    except Exception as e:
+        print(e)
+        print("Training interrupted!")
+        if drone.frontnet == '1':
+            drone.toggle_frontnet()
+            custom_sleep(.5, drone.occupied, True)
+        drone.land()
+        custom_sleep(5., cf.occupied)
         pose_getter.close()
+        return optimizer.max
+    
+    pose_getter.close()
 
     return optimizer.max
 
@@ -236,6 +263,7 @@ if __name__ == "__main__":
 
 
     best_results = training(cf, config, display_thread.update, patch, background)
+    
 
     print(f"Best loss: {best_results['target']}, Best parameters: {best_results['params']}")
     with open('results.yaml', 'w') as file:
@@ -252,8 +280,8 @@ if __name__ == "__main__":
     #     cf.reset()
     #     custom_sleep(1., cf.occupied, True)
 
-    cf.reset()
-    custom_sleep(1., cf.occupied, True)
+    # cf.reset()
+    # custom_sleep(1., cf.occupied, True)
     cf.land()
 
     custom_sleep(5., cf.occupied)
