@@ -4,8 +4,9 @@ from bayes_opt import acquisition
 from bayes_opt.logger import JSONLogger
 from bayes_opt.event import Events
 from bayes_opt.util import load_logs
+from bayes_opt import SequentialDomainReductionTransformer
 
-from flying.cf_control import CrazyflieControl, custom_sleep
+from flying.cf_control import CrazyflieControl, custom_sleep, angular_distance
 
 import os
 import yaml
@@ -92,29 +93,35 @@ class PoseUpdater(Thread):
 
 def objective_function(current_pose, target_pose):
     position_dist = np.linalg.norm(np.array(current_pose[:3]) - np.array(target_pose[:3]))
-    angle_dist = rowan.geometry.intrinsic_distance(current_pose[3:], target_pose[3:])
-    # print("Quaternions: ", current_pose[3:], target_pose[3:])
-    # print(f"Position distance: {position_dist}, Angle distance: {angle_dist}")
+    # angle_dist = rowan.geometry.intrinsic_distance(current_pose[3:], target_pose[3:])
+    # print("Quaternions: ", current_pose[3:])
+    # print("Euler angles: ", get_euler_angles(current_pose[3:]))
+    angle_dist = np.abs(angular_distance(get_euler_angles(current_pose[3:])[2], target_pose[3]))
+    print(f"Position distance: {position_dist}, Angle distance: {angle_dist}")
 
-    return -(position_dist + (angle_dist/np.pi))
+    return -(position_dist + angle_dist)
     # return -position_dist
 
 def training(drone, config, display_update, patch, background, load_logs=False):
 
     pose_getter = PoseUpdater(drone.pose)
-    pbounds = {'sf': (4, 10), 'tx': (0, 1680), 'ty': (0, 1050)}
+    pbounds = {'sf': (1, 15), 'tx': (0, 1680), 'ty': (0, 1050)}
+
+    bounds_transformer = SequentialDomainReductionTransformer()
+
     # pbounds = {'tx': (0, 1680), 'ty': (0, 1050)}
-    # acq = acquisition.UpperConfidenceBound(kappa=2.5)
-    acq = acquisition.ExpectedImprovement(xi=0.01) # x = 0.0 -> exploitation, x = 0.1 -> exploration
+    acq = acquisition.UpperConfidenceBound(kappa=2.5)
+    # acq = acquisition.ExpectedImprovement(xi=0.01) # x = 0.0 -> exploitation, x = 0.1 -> exploration
 
     optimizer = BayesianOptimization(f=None,
                                      acquisition_function=acq,
                                      pbounds=pbounds,
                                      verbose=2,
                                      random_state=1,
-                                     allow_duplicate_points = True)
+                                     allow_duplicate_points = True,
+                                     bounds_transformer=bounds_transformer)
     
-    optimizer.set_gp_params(alpha=1e-2, n_restarts_optimizer=10)
+    optimizer.set_gp_params(alpha=1e-2, n_restarts_optimizer=20)
 
     if load_logs:
         load_logs(optimizer, logs=["results/logs.log"])
@@ -123,12 +130,12 @@ def training(drone, config, display_update, patch, background, load_logs=False):
     logger = JSONLogger(path="results/logs.log")
     optimizer.subscribe(Events.OPTIMIZATION_STEP, logger)
 
-    target_pose = np.array([1.0, -1.0, 1.0, 1.0, 0.0, 0.0, 0.0])
+    target_pose = np.array([-0.5, 0.5, 1.0, 0.0])
 
     counter = 0
     best_loss = -np.inf
     try:
-        for i in range(50):
+        for i in range(15):
             # quick battery check
             bat_v, bat_s = drone.battery
             if bat_s == 3:
@@ -176,6 +183,7 @@ def training(drone, config, display_update, patch, background, load_logs=False):
 
             projected_patch = project_patch(patch, T, background)
             display_update(projected_patch)
+            custom_sleep(0.2, drone.occupied, True)
 
             drone.toggle_frontnet()
 
@@ -225,9 +233,10 @@ def training(drone, config, display_update, patch, background, load_logs=False):
     # drone.close()
     # drone.power_off()
     pose_getter.close()
+    drone.close()
 
 
-    return drone, optimizer.max
+    return optimizer.max
 
 if __name__ == "__main__":
 
@@ -283,13 +292,15 @@ if __name__ == "__main__":
     custom_sleep(5., cf.occupied)
 
 
-    cf, best_results = training(cf, config, display_thread.update, patch, background)
+    best_results = training(cf, config, display_thread.update, patch, background)
     
 
     print(f"Best loss: {best_results['target']}, Best parameters: {best_results['params']}")
     with open('results.yaml', 'w') as file:
         yaml.dump(best_results, file)
 
+    
+    cf = CrazyflieControl(config)
 
     cf.takeoff(1.0, 3)
     custom_sleep(3., cf.occupied, True)
@@ -305,17 +316,17 @@ if __name__ == "__main__":
 
     projected_patch = project_patch(patch, T, background)
     display_thread.update(projected_patch)
+    custom_sleep(0.2, cf.occupied, True)
 
+    cf.toggle_frontnet()
+    custom_sleep(10., cf.occupied, True)
+    # print("Pose: ", cf.pose)
+    print('Loss: ', objective_function(np.array(cf.pose[0]), np.array([1.0, -1.0, 1.0, 1.0, 0.0, 0.0, 0.0])))
     cf.toggle_frontnet()
     custom_sleep(2., cf.occupied, True)
-    cf.toggle_frontnet()
-    custom_sleep(0.2, cf.occupied, True)
-    print("Pose: ", cf.pose)
-
-    custom_sleep(10., cf.occupied)
 
     cf.land()
-    custom_sleep(5., cf.occupied)
+    custom_sleep(5., cf.occupied, True)
 
     print("Closing...")
     display_thread.close()
