@@ -102,9 +102,10 @@ def objective_function(current_pose, target_pose):
 def training(drone, config, display_update, patch, background, load_logs=False):
 
     pose_getter = PoseUpdater(drone.pose)
-    pbounds = {'sf': (1, 10), 'tx': (0, 1680), 'ty': (0, 1050)}
+    pbounds = {'sf': (4, 10), 'tx': (0, 1680), 'ty': (0, 1050)}
+    # pbounds = {'tx': (0, 1680), 'ty': (0, 1050)}
     # acq = acquisition.UpperConfidenceBound(kappa=2.5)
-    acq = acquisition.ExpectedImprovement(xi=0.03) # x = 0.0 -> exploitation, x = 0.1 -> exploration
+    acq = acquisition.ExpectedImprovement(xi=0.01) # x = 0.0 -> exploitation, x = 0.1 -> exploration
 
     optimizer = BayesianOptimization(f=None,
                                      acquisition_function=acq,
@@ -113,7 +114,7 @@ def training(drone, config, display_update, patch, background, load_logs=False):
                                      random_state=1,
                                      allow_duplicate_points = True)
     
-    optimizer.set_gp_params(alpha=1e-3, n_restarts_optimizer=5)
+    optimizer.set_gp_params(alpha=1e-2, n_restarts_optimizer=10)
 
     if load_logs:
         load_logs(optimizer, logs=["results/logs.log"])
@@ -122,14 +123,16 @@ def training(drone, config, display_update, patch, background, load_logs=False):
     logger = JSONLogger(path="results/logs.log")
     optimizer.subscribe(Events.OPTIMIZATION_STEP, logger)
 
-    target_pose = np.array([2.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0])
+    target_pose = np.array([1.0, -1.0, 1.0, 1.0, 0.0, 0.0, 0.0])
 
+    counter = 0
+    best_loss = -np.inf
     try:
-        for i in range(200):
+        for i in range(50):
             # quick battery check
             bat_v, bat_s = drone.battery
             if bat_s == 3:
-                print("Low battery detected! Landing...")
+                print("Low battery!! Landing...")
                 drone.land()
                 custom_sleep(2., drone.occupied, True)
                 pose_getter.close()
@@ -138,7 +141,7 @@ def training(drone, config, display_update, patch, background, load_logs=False):
 
                 print("Perform battery change and hit y if ready!")
                 while True:
-                    if input('Ready?') == 'y':
+                    if input('Ready? ') == 'y':
                         break
                 
                 del drone
@@ -176,11 +179,12 @@ def training(drone, config, display_update, patch, background, load_logs=False):
 
             drone.toggle_frontnet()
 
-            custom_sleep(2., drone.occupied, True)
+            custom_sleep(2.5, drone.occupied, True)
 
-            drone.toggle_frontnet()
             current_pose, current_time = pose_getter.get_current_pose()
             current_yaw = get_euler_angles(start_pose)[2]
+
+            drone.toggle_frontnet()
 
             # velocity = np.linalg.norm(np.array(current_pose[:3]) - np.array(start_pose[:3])) / (current_time - start_time)
 
@@ -188,11 +192,17 @@ def training(drone, config, display_update, patch, background, load_logs=False):
             # print(f"Current position: {current_pose[:3]}")
 
             loss = objective_function(current_pose, target_pose)
-            print(f"Loss: {loss}")
+            print(f"Loss {i}: {loss}")
             optimizer.register(params=params, target=loss)
 
+            if loss > best_loss:
+                counter += 1
+                print(f"Found better parameters for {counter} time! {counter/ 50}")
+                best_loss = loss
+
+
             drone.reset()
-            custom_sleep(1.0, drone.occupied, True)
+            custom_sleep(1.5, drone.occupied, True)
     except Exception as e:
         print(e)
         print("Training interrupted!")
@@ -204,9 +214,20 @@ def training(drone, config, display_update, patch, background, load_logs=False):
         pose_getter.close()
         return optimizer.max
     
+    if drone.frontnet == '1':
+        drone.toggle_frontnet()
+        custom_sleep(.5, drone.occupied, True)
+
+    drone.reset()
+    custom_sleep(1.5, drone.occupied, True)
+    drone.land()
+    custom_sleep(1.0, cf.occupied, True)
+    # drone.close()
+    # drone.power_off()
     pose_getter.close()
 
-    return optimizer.max
+
+    return drone, optimizer.max
 
 if __name__ == "__main__":
 
@@ -223,7 +244,7 @@ if __name__ == "__main__":
     display_thread.start()
     display_thread.update(background)
 
-    patch = cv2.imread("data/frontnet_gt_patch_distance.jpg")
+    patch = cv2.imread("data/frontnet_gt_patch_y.jpg")
     print(patch.shape)
 
     T = np.zeros((3,3))
@@ -249,11 +270,11 @@ if __name__ == "__main__":
 
     print(f"Battery voltage: {bat_v}, Battery state: {bat_s}")
 
-    # if bat_v <= 3900: 
-    #     print('Battery below 3.9V!! Not flying.')
-    #     cf.close()
-    #     display_thread.close()
-    #     exit()
+    if bat_v <= 3900: 
+        print('Battery below 3.9V!! Not flying.')
+        cf.close()
+        display_thread.close()
+        exit()
 
     # random_patch = np.random.randint(255, size=(80,80,3),dtype=np.uint8)
 
@@ -262,7 +283,7 @@ if __name__ == "__main__":
     custom_sleep(5., cf.occupied)
 
 
-    best_results = training(cf, config, display_thread.update, patch, background)
+    cf, best_results = training(cf, config, display_thread.update, patch, background)
     
 
     print(f"Best loss: {best_results['target']}, Best parameters: {best_results['params']}")
@@ -270,20 +291,30 @@ if __name__ == "__main__":
         yaml.dump(best_results, file)
 
 
-    # test
-    # for i in range(3):  
-    #     cf.toggle_frontnet()
-    #     custom_sleep(2., cf.occupied, True)
+    cf.takeoff(1.0, 3)
+    custom_sleep(3., cf.occupied, True)
+    cf.reset()
+    custom_sleep(1., cf.occupied, True)
 
+    T = np.zeros((3,3))
+    T[0,0] = best_results['params']['sf'] # sf
+    T[1,1] = best_results['params']['sf'] # sf
+    T[0,2] = best_results['params']['tx'] # tx
+    T[1,2] = best_results['params']['ty'] # ty
+    T[2,2] = 1
 
+    projected_patch = project_patch(patch, T, background)
+    display_thread.update(projected_patch)
 
-    #     cf.reset()
-    #     custom_sleep(1., cf.occupied, True)
+    cf.toggle_frontnet()
+    custom_sleep(2., cf.occupied, True)
+    cf.toggle_frontnet()
+    custom_sleep(0.2, cf.occupied, True)
+    print("Pose: ", cf.pose)
 
-    # cf.reset()
-    # custom_sleep(1., cf.occupied, True)
+    custom_sleep(10., cf.occupied)
+
     cf.land()
-
     custom_sleep(5., cf.occupied)
 
     print("Closing...")
