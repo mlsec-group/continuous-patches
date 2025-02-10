@@ -379,6 +379,8 @@ class CrazyflieControl():
             self.base_commander.send_notify_setpoint_stop()
             self.goto(*np.array(self.pose[0])[:3], current_yaw, seconds=0.5)
             time.sleep(0.5)
+            self.goto(*np.array(self.pose[0])[:3], current_yaw, seconds=0.5)
+            time.sleep(0.5)
 
     def close(self):
         self.mocap_wrapper.close()
@@ -417,7 +419,7 @@ if __name__ == '__main__':
     cf = CrazyflieControl(config)
 
     try:
-        cf.takeoff(1.0)
+        cf.takeoff(1.0, 3.)
         # time.sleep(10.)
         cf.goto(0., -3.1, 1., seconds=5.)
         
