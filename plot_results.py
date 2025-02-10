@@ -51,5 +51,22 @@ if __name__ == '__main__':
     axs[3].set_xlabel('Time (s)')
     axs[3].set_ylabel('Yaw (deg)')
     plt.tight_layout()
+    plt.savefig('results/plot_pose_over_time.jpg', dpi=200)
+    plt.show()
+    plt.close()
+
+
+    # plot trajectory in 3D
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.plot(positions[:, 0], positions[:, 1], positions[:, 2])
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    #set ranges for axes
+    ax.set_xlim(-1, 1)
+    ax.set_ylim(-1, 1)
+    ax.set_zlim(0, 1.5)
+    plt.savefig('results/plot_trajectory_3d.jpg', dpi=200)
     plt.show()
     plt.close()
