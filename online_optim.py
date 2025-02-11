@@ -20,24 +20,31 @@ from collections import deque
 from util import PatchDisplayThread, PoseUpdater, project_patch, get_yaw
 
 import time
-            
+
+from pathlib import Path            
 
 def objective_function(current_pose, target_pose):
     position_dist = np.linalg.norm(np.array(current_pose[:3]) - np.array(target_pose[:3]))
     # angle_dist = rowan.geometry.intrinsic_distance(current_pose[3:], target_pose[3:])
     # print("Quaternions: ", current_pose[3:])
     # print("Euler angles: ", get_euler_angles(current_pose[3:]))
-    # angle_dist = np.abs(angular_distance(get_yaw(current_pose[3:]), target_pose[3]))
+    angle_dist = np.abs(angular_distance(get_yaw(current_pose[3:]), target_pose[3]))
     # print(f"Position distance: {position_dist}, Angle distance: {angle_dist}")
 
-    # return -(position_dist + angle_dist)
-    return -position_dist
+    return -(position_dist + angle_dist)
+    # return -position_dist
 
-def training(drone, config, display_update, patches, background, load_logs=False):
+def scale_tx_ty(sf, tx, ty, patch_size=80, projector_size=(1050, 1680)):
+    scaled_patch_size = patch_size * sf
+    max_tx = projector_size[1] - scaled_patch_size
+    max_ty = projector_size[0] - scaled_patch_size
+    return tx * max_tx, ty * max_ty
+
+def training(drone, config, display_update, patches, background, target_pose, result_dir, optim_seed, load_logs=False):
 
     # drone = CrazyflieControl(config)
     pose_getter = PoseUpdater(drone.pose)
-    pbounds = {'patch_idx': (0, len(patches)-1), 'sf': (1, 15), 'tx': (0, 1680), 'ty': (0, 1050)}
+    pbounds = {'patch_idx': (0, len(patches)-1), 'sf': (2, 10), 'tx': (0, 1), 'ty': (0, 1)}
 
     bounds_transformer = SequentialDomainReductionTransformer()
 
@@ -49,25 +56,22 @@ def training(drone, config, display_update, patches, background, load_logs=False
                                      acquisition_function=acq,
                                      pbounds=pbounds,
                                      verbose=2,
-                                     random_state=None,
+                                     random_state=optim_seed,
                                      allow_duplicate_points = True,
                                      bounds_transformer=bounds_transformer)
     
     optimizer.set_gp_params(alpha=1e-2, n_restarts_optimizer=20)
 
     if load_logs:
-        load_logs(optimizer, logs=["results/logs.log"])
+        load_logs(optimizer, logs=[str(result_dir / "logs.log")])
 
-    os.makedirs("results", exist_ok=True)
-    logger = JSONLogger(path="results/logs.log")
+    logger = JSONLogger(path=str(result_dir / "logs.log"))
     optimizer.subscribe(Events.OPTIMIZATION_STEP, logger)
-
-    target_pose = np.array([1.0, 0.0, 1.0, 0.0]) # x, y, z, yaw
 
     counter = 0
     best_loss = -np.inf
     try:
-        for i in range(15):
+        for i in range(30):
             # quick battery check
             bat_v, bat_s = drone.battery
             if bat_s == 3:
@@ -104,8 +108,7 @@ def training(drone, config, display_update, patches, background, load_logs=False
             params = optimizer.suggest()
             patch_idx = int(np.round(params['patch_idx'], decimals=0))
             sf = params['sf']
-            tx = params['tx']
-            ty = params['ty']
+            tx, ty = scale_tx_ty(sf, params['tx'], params['ty'])
 
             T = np.zeros((3,3))
             T[0,0] = sf # sf
@@ -176,8 +179,8 @@ def select_patches(drone, display_update, patches, num_patches):
 
     losses = [0.0] * len(patches)
 
-    for i in range(len(patches)*2):
-        patch_idx = i % len(patches)
+    for patch_idx in range(len(patches)):
+        # patch_idx = i % len(patches)
 
         bat_v, bat_s = drone.battery
         if bat_s == 3:
@@ -248,6 +251,7 @@ def select_patches(drone, display_update, patches, num_patches):
     pose_getter.close()
 
     print("All losses: ", losses)
+    np.save('data/yolo_patches/patch_losses.npy', losses)
     # return the top num_patches patches
     return drone, [patches[i] for i in np.argsort(losses)[:num_patches]]
 
@@ -255,6 +259,27 @@ def select_patches(drone, display_update, patches, num_patches):
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('result_dir', type=str, default='results/')
+    parser.add_argument('direction', type=str, choices=['left', 'right', 'forward', 'backward'], default='left')
+    parser.add_argument('trial', type=int, default=0)
+    parser.add_argument('--load_selected', action='store_true', default=False)
+    parser.add_argument('--load_optimizer', action='store_true', default=False)
+
+    args = parser.parse_args()
+
+    result_dir = Path(f"{args.result_dir}/{args.direction}/{args.trial}/")
+    os.makedirs(result_dir, exist_ok=True)
+
+    seed = args.trial
+    rng = np.random.default_rng(seed)
+    optim_seed = int(rng.integers(0, 1e6))
+    print(f"Seed: {seed}, Optim seed: {optim_seed}")
+
+    load_selected = args.load_selected
+    load_optimizer = args.load_optimizer
 
     with open('flying/config.yaml') as file:
         config = yaml.load(file, Loader=yaml.FullLoader)
@@ -269,25 +294,6 @@ if __name__ == "__main__":
     display_thread.start()
     display_thread.update(background)
 
-    # patches = []
-
-    patch = cv2.imread("data/frontnet_gt_patch_y.jpg")
-    
-
-    # patch = cv2.imread("data/frontnet_gt_patch_x.jpg")
-    # patches.append(patch)
-
-    files = [f for f in os.listdir("data/yolo_patches") if f.endswith('.jpg')][:2]
-    print(files)
-
-    yolo_patches = [cv2.imread("data/yolo_patches/" + f) for f in files]
-    # print(yolo_patches.shape)
-
-    yolo_patches.append(patch)
-
-    face_patch = cv2.imread("data/custom_patch80x80.jpg")
-    yolo_patches.append(face_patch)
-
 
     T = np.zeros((3,3))
     T[0,0] = 5 # sf
@@ -295,12 +301,6 @@ if __name__ == "__main__":
     T[0,2] = 750 # tx
     T[1,2] = 300 # ty
     T[2,2] = 1
-
-    print(T)
-
-    projected_patch = project_patch(yolo_patches[0], T, background)
-
-    display_thread.update(projected_patch)
 
 
     cf = CrazyflieControl(config)
@@ -318,24 +318,54 @@ if __name__ == "__main__":
         display_thread.close()
         exit()
 
-    # random_patch = np.random.randint(255, size=(80,80,3),dtype=np.uint8)
-
     cf.takeoff(1.0, 3)
 
     custom_sleep(2., cf.occupied)
 
-    cf, patches = select_patches(cf, display_thread.update, yolo_patches, 3)
+    if load_selected:
+        print("Loading preselected patches...")
+        patches = np.load(f'{args.result_dir}/preselected_patches.npy')
+    else:
+        print("Selecting patches...")
+        files = [f for f in sorted(os.listdir("data/yolo_patches")) if f.endswith('.jpg')]
+        patches = [cv2.imread("data/yolo_patches/" + f) for f in files]
+        face_patch = cv2.imread("data/custom_patch80x80.jpg")
+        patches.append(face_patch)
 
-    best_results = training(cf, config, display_thread.update, patches, background)
+        random_patch = np.random.randint(255, size=(80,80,3),dtype=np.uint8)
+        patches.append(random_patch)
+
+        cf, patches = select_patches(cf, display_thread.update, patches, 4)
+
+        np.save(f'{args.result_dir}/preselected_patches.npy', np.array(patches))
+
+
+    projected_patch = project_patch(patches[0], T, background)
+    display_thread.update(projected_patch)
+
+
+    match args.direction:
+        # center is at [0.5, -0.25, 1.]
+        case 'right':
+            target_pose = np.array([0.5, -1.25, 1.0, 0.0]) # x, y, z, yaw
+        case 'left':
+            target_pose = np.array([0.5, 0.75, 1.0, 0.0]) # x, y, z, yaw
+        case 'forward':
+            target_pose = np.array([1.5, -0.25, 1.0, 0.0]) # x, y, z, yaw
+        case 'backward':
+            target_pose = np.array([0.0, -0.25, 1.0, 0.0]) # x, y, z, yaw
+    
+
+    best_results = training(cf, config, display_thread.update, patches, background, target_pose, result_dir, optim_seed=optim_seed, load_logs=load_optimizer)
     
 
     print(f"Best loss: {best_results['target']}, Best parameters: {best_results['params']}")
-    with open('results.yaml', 'w') as file:
+    with open(result_dir / 'results.yaml', 'w') as file:
         yaml.dump(best_results, file)
 
     best_patch = patches[int(np.round(best_results['params']['patch_idx'], decimals=0))]
 
-    np.save('results/best_patch.npy', best_patch)
+    np.save(result_dir / 'best_patch.npy', best_patch)
     
     cf = CrazyflieControl(config)
 
