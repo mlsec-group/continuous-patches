@@ -372,11 +372,6 @@ if __name__ == "__main__":
     result_dir = Path(f"{args.result_dir}/{args.direction}/{args.trial}/")
     os.makedirs(result_dir, exist_ok=True)
 
-    seed = args.trial
-    rng = np.random.default_rng(seed)
-    optim_seed = int(rng.integers(0, 1e6))
-    print(f"Seed: {seed}, Optim seed: {optim_seed}")
-
     load_selected = args.load_selected
     load_optimizer = args.load_optimizer
 
@@ -441,17 +436,26 @@ if __name__ == "__main__":
     projected_patch = project_patch(patches[0], T, background)
     display_thread.update(projected_patch)
 
+    seed = args.trial
 
     match args.direction:
         # center is at [0.0, -0.3, 1.]
-        case 'right':
-            target_pose = np.array([1.0, -1.3, 1.0, 0.0]) # x, y, z, yaw
         case 'left':
             target_pose = np.array([1.0, 0.7, 1.0, 0.0]) # x, y, z, yaw
+        case 'right':
+            target_pose = np.array([1.0, -1.3, 1.0, 0.0])
+            seed += 10 
         case 'forward':
-            target_pose = np.array([1.5, -0.3, 1.0, 0.0]) # x, y, z, yaw
+            target_pose = np.array([1.5, -0.3, 1.0, 0.0]) 
+            seed += 20
         case 'backward':
-            target_pose = np.array([0.0, -0.3, 1.0, 0.0]) # x, y, z, yaw
+            target_pose = np.array([0.0, -0.3, 1.0, 0.0])
+            seed += 30
+
+    
+    rng = np.random.default_rng(seed)
+    optim_seed = int(rng.integers(0, 1e6))
+    print(f"Seed: {seed}, Optim seed: {optim_seed}")
     
 
     if args.brute_force:
