@@ -196,6 +196,11 @@ class CrazyflieControl():
         self.reset_monitor_thread.daemon = True
         self.reset_monitor_thread.start()
 
+        # # connected watcher
+        # self.reconnect_thread = Thread(target=self.connected_watcher)
+        # self.reconnect_thread.daemon = True
+        # self.reconnect_thread.start()
+
         
         self.battery = [None, None]
 
@@ -294,6 +299,18 @@ class CrazyflieControl():
         self.pose.append(np.array([*pose[:3], pose[3].w, pose[3].x, pose[3].y, pose[3].z])), # update pose here
         if not np.all(self.limits[:, 0] < pose[:3]) or not np.all(pose[:3] < self.limits[:, 1]): 
             self.reset_queue.append(True) # check if pose is within limits
+
+    # def connected_watcher(self):
+    #     while True:
+    #         if self.scf.cf.state == 0:
+    #             print("Connection lost, resetting..")
+    #             self.connected = False
+    #             self.occupied.append(True)
+    #             while self.connected == False:
+    #                 self.connect()
+    #                 time.sleep(0.5)
+    #             self.occupied.append(False)
+
 
     def monitor_reset(self):
         while True:
