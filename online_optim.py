@@ -23,6 +23,8 @@ import time
 
 from pathlib import Path            
 
+from tqdm import trange
+
 def objective_function(current_pose, target_pose):
     position_dist = np.linalg.norm(np.array(current_pose[:3]) - np.array(target_pose[:3]))
     # angle_dist = rowan.geometry.intrinsic_distance(current_pose[3:], target_pose[3:])
@@ -346,6 +348,136 @@ def brute_force(drone, config, display_update, patches, background, target_pose,
     return best_params
 
 
+def brute_force_2(drone, config, display_update, patches, background, target_pose, result_dir, seed):
+    pose_getter = PoseUpdater(drone.pose)
+
+
+    rng = np.random.default_rng(seed)
+
+    results = []
+    #try loading results from folder if they exist
+    if os.path.exists(result_dir / 'all_poses.npy'):
+        results = np.load(result_dir / 'all_poses.npy').tolist()
+        print("Loaded previous results!")
+
+    initial_idx = len(results)
+
+    for i in trange(500):
+        bat_v, bat_s = drone.battery
+        if bat_s == 3:
+            print("Low battery!! Landing...")
+            drone.land()
+            custom_sleep(2., drone.occupied, True)
+            pose_getter.close()
+            drone.power_off()
+            drone.close()
+
+            print("Perform battery change and hit y if ready!")
+            while True:
+                if input('Ready? ') == 'y':
+                    break
+
+            del drone
+            drone = CrazyflieControl(config)
+            pose_getter = PoseUpdater(drone.pose)
+
+            while True:
+                if drone.connected:
+                    break
+            print("Continue flying...")
+            drone.takeoff(1.0, 3)
+            custom_sleep(2., drone.occupied, True)
+
+        # check if CF fell down
+        current_pose, _ = pose_getter.get_current_pose()
+        if current_pose[2] < 0.5:
+            del drone
+            drone = CrazyflieControl(config)
+            pose_getter = PoseUpdater(drone.pose)
+
+            while True:
+                if drone.connected:
+                    break
+            print("Continue flying...")
+            drone.takeoff(1.0, 3)
+            custom_sleep(2., drone.occupied, True)
+
+        # if drone.scf.is_link_open() == False:
+        #     print("Connection lost! Reconnecting...")
+        #     del drone
+        #     drone = CrazyflieControl(config)
+        #     pose_getter = PoseUpdater(drone.pose)
+
+        #     while True:
+        #         if drone.connected:
+        #             break
+        #     print("Continue flying...")
+        #     drone.reset()
+        #     custom_sleep(3., drone.occupied, True)
+            
+        
+        if i > initial_idx:
+            drone.reset()
+            custom_sleep(3.0, drone.occupied, True)
+
+
+        patch_idx = rng.integers(0, len(patches))
+        sf = rng.random() * (10-2) + 2   # random scaling factor between 2 and 10
+        tx, ty = scale_tx_ty(sf, rng.random(), rng.random())
+
+        T = np.zeros((3,3))
+        T[0,0] = sf # sf
+        T[1,1] = sf # sf
+        T[0,2] = tx # tx
+        T[1,2] = ty # ty
+        T[2,2] = 1
+
+        # don't actually fly the drone if we are just loading previous results
+        # this is just to get the rng to the correct state for reproducibility and to ensure we don't always start from the same point
+        # again after loading
+        if i-1 < initial_idx:
+            continue
+
+        projected_patch = project_patch(patches[patch_idx], T, background)
+        display_update(projected_patch)
+        custom_sleep(0.2, drone.occupied, True)
+
+        drone.toggle_frontnet()
+
+        custom_sleep(2.5, drone.occupied, True)
+
+        current_pose, current_time = pose_getter.get_current_pose()
+        current_yaw = get_yaw(current_pose[3:])
+
+
+        drone.toggle_frontnet()
+        custom_sleep(1., drone.occupied, True)
+
+        # loss = objective_function(current_pose, target_pose)
+        # print(f"Loss {i}: {loss}")
+        results.append((i, patch_idx, sf, tx, ty, *current_pose, current_yaw))
+        np.save(str(result_dir / 'all_poses.npy'), results)
+
+
+    while drone.frontnet == '1':
+        drone.toggle_frontnet()
+        custom_sleep(.5, drone.occupied, True)
+
+    drone.reset()
+    custom_sleep(1.5, drone.occupied, True)
+    drone.land()
+    custom_sleep(1.0, cf.occupied, True)
+    pose_getter.close()
+    drone.close()
+
+    results = np.array(results)
+    np.save(str(result_dir / 'all_poses.npy'), results)
+    # best_idx = np.argmax(results[:, 0])
+    # best_params = {'target': results[best_idx, 0], 'params': {'patch_idx': results[best_idx, 1], 'sf': results[best_idx, 2], 'tx': results[best_idx, 3], 'ty': results[best_idx, 4]}}
+
+    # return best_params
+
+
 def ensure_types_for_save(result_dictionary):
     result_dictionary['target'] = float(result_dictionary['target'])
     result_dictionary['params']['patch_idx'] = int(result_dictionary['params']['patch_idx'])
@@ -419,18 +551,21 @@ if __name__ == "__main__":
         print("Loading preselected patches...")
         patches = np.load('results/preselected_patches.npy')
     else:
-        print("Selecting patches...")
-        files = [f for f in sorted(os.listdir("data/yolo_patches")) if f.endswith('.jpg')]
-        patches = [cv2.imread("data/yolo_patches/" + f) for f in files]
-        face_patch = cv2.imread("data/custom_patch80x80.jpg")
-        patches.append(face_patch)
+        # print("Selecting patches...")
+        # files = [f for f in sorted(os.listdir("data/yolo_patches")) if f.endswith('.jpg')]
+        # patches = [cv2.imread("data/yolo_patches/" + f) for f in files]
+        # face_patch = cv2.imread("data/custom_patch80x80.jpg")
+        # patches.append(face_patch)
 
-        random_patch = np.random.randint(255, size=(80,80,3),dtype=np.uint8)
-        patches.append(random_patch)
+        # random_patch = np.random.randint(255, size=(80,80,3),dtype=np.uint8)
+        # patches.append(random_patch)
 
-        cf, patches = select_patches(cf, display_thread.update, patches, 4)
+        # np.save('results/all_patches.npy', np.array(patches))
+        patches = np.load('results/all_patches.npy')
 
-        np.save('results/preselected_patches.npy', np.array(patches))
+        # cf, patches = select_patches(cf, display_thread.update, patches, 4)
+
+        # np.save('results/preselected_patches.npy', np.array(patches))
 
 
     projected_patch = project_patch(patches[0], T, background)
@@ -459,7 +594,8 @@ if __name__ == "__main__":
     
 
     if args.brute_force:
-        best_results = brute_force(cf, config, display_thread.update, patches, background, target_pose, result_dir, seed)    
+        # best_results = brute_force(cf, config, display_thread.update, patches, background, target_pose, result_dir, seed) 
+        brute_force_2(cf, config, display_thread.update, patches, background, target_pose, result_dir, seed)   
     else:
         best_results = training(cf, config, display_thread.update, patches, background, target_pose, result_dir, optim_seed=optim_seed, load_logs=load_optimizer)
         scaled_tx, scaled_ty = scale_tx_ty(best_results['params']['sf'], best_results['params']['tx'], best_results['params']['ty'])
@@ -467,47 +603,47 @@ if __name__ == "__main__":
         best_results['params']['ty'] = scaled_ty
 
 
-    best_results = ensure_types_for_save(best_results)
+    # best_results = ensure_types_for_save(best_results)
 
 
-    print(f"Best loss: {best_results['target']}, Best parameters: {best_results['params']}")
-    with open(result_dir / 'results.yaml', 'w') as file:
-        yaml.dump(best_results, file)
+    # print(f"Best loss: {best_results['target']}, Best parameters: {best_results['params']}")
+    # with open(result_dir / 'results.yaml', 'w') as file:
+    #     yaml.dump(best_results, file)
 
-    best_patch = patches[int(np.round(best_results['params']['patch_idx'], decimals=0))]
-    cv2.imwrite(str(result_dir / 'best_patch.jpg'), best_patch)
+    # best_patch = patches[int(np.round(best_results['params']['patch_idx'], decimals=0))]
+    # cv2.imwrite(str(result_dir / 'best_patch.jpg'), best_patch)
 
-    np.save(result_dir / 'best_patch.npy', best_patch)
+    # np.save(result_dir / 'best_patch.npy', best_patch)
     
-    cf = CrazyflieControl(config)
+    # cf = CrazyflieControl(config)
 
-    cf.takeoff(1.0, 3)
-    custom_sleep(3., cf.occupied, True)
-    cf.reset()
-    custom_sleep(1., cf.occupied, True)
+    # cf.takeoff(1.0, 3)
+    # custom_sleep(3., cf.occupied, True)
+    # cf.reset()
+    # custom_sleep(3., cf.occupied, True)
 
-    T = np.zeros((3,3))
-    T[0,0] = best_results['params']['sf'] # sf
-    T[1,1] = best_results['params']['sf'] # sf
-    T[0,2] = best_results['params']['tx'] # tx
-    T[1,2] = best_results['params']['ty'] # ty
-    T[2,2] = 1
+    # T = np.zeros((3,3))
+    # T[0,0] = best_results['params']['sf'] # sf
+    # T[1,1] = best_results['params']['sf'] # sf
+    # T[0,2] = best_results['params']['tx'] # tx
+    # T[1,2] = best_results['params']['ty'] # ty
+    # T[2,2] = 1
 
     
 
-    projected_patch = project_patch(best_patch, T, background)
-    display_thread.update(projected_patch)
-    custom_sleep(0.2, cf.occupied, True)
+    # projected_patch = project_patch(best_patch, T, background)
+    # display_thread.update(projected_patch)
+    # custom_sleep(0.2, cf.occupied, True)
 
-    cf.toggle_frontnet()
-    custom_sleep(10., cf.occupied, True)
-    print("Pose: ", cf.pose[0][:3], np.degrees(get_yaw(cf.pose[0][3:])))
-    cf.toggle_frontnet()
-    custom_sleep(2., cf.occupied, True)
+    # cf.toggle_frontnet()
+    # custom_sleep(10., cf.occupied, True)
+    # print("Pose: ", cf.pose[0][:3], np.degrees(get_yaw(cf.pose[0][3:])))
+    # cf.toggle_frontnet()
+    # custom_sleep(2., cf.occupied, True)
 
-    cf.land()
-    custom_sleep(5., cf.occupied, True)
+    # cf.land()
+    # custom_sleep(5., cf.occupied, True)
 
-    print("Closing...")
-    display_thread.close()
-    cf.close()
+    # print("Closing...")
+    # display_thread.close()
+    # cf.close()

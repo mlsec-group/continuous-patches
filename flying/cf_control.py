@@ -302,14 +302,16 @@ class CrazyflieControl():
 
     # def connected_watcher(self):
     #     while True:
-    #         if self.scf.cf.state == 0:
+    #         if self.connected == False:
     #             print("Connection lost, resetting..")
+    #             print(self.scf.is_link_open)
     #             self.connected = False
     #             self.occupied.append(True)
     #             while self.connected == False:
     #                 self.connect()
     #                 time.sleep(0.5)
     #             self.occupied.append(False)
+    #             self.reset()
 
 
     def monitor_reset(self):
