@@ -299,7 +299,7 @@ def brute_force(drone, config, display_update, patches, background, target_pose,
         custom_sleep(3.0, drone.occupied, True)
 
         patch_idx = rng.integers(0, len(patches))
-        sf = rng.integers(2, 10)
+        sf = rng.random() * (10-2) + 2   # random scaling factor between 2 and 10
         tx, ty = scale_tx_ty(sf, rng.random(), rng.random())
 
         T = np.zeros((3,3))
@@ -480,7 +480,7 @@ def brute_force_2(drone, config, display_update, patches, background, target_pos
 
 def ensure_types_for_save(result_dictionary):
     result_dictionary['target'] = float(result_dictionary['target'])
-    result_dictionary['params']['patch_idx'] = int(result_dictionary['params']['patch_idx'])
+    result_dictionary['params']['patch_idx'] = int(np.round(result_dictionary['params']['patch_idx'], 0))
     result_dictionary['params']['sf'] = float(result_dictionary['params']['sf'])
     result_dictionary['params']['tx'] = int(np.round(result_dictionary['params']['tx'], 0))
     result_dictionary['params']['ty'] = int(np.round(result_dictionary['params']['ty'], 0))
@@ -551,21 +551,23 @@ if __name__ == "__main__":
         print("Loading preselected patches...")
         patches = np.load('results/preselected_patches.npy')
     else:
-        # print("Selecting patches...")
-        # files = [f for f in sorted(os.listdir("data/yolo_patches")) if f.endswith('.jpg')]
-        # patches = [cv2.imread("data/yolo_patches/" + f) for f in files]
-        # face_patch = cv2.imread("data/custom_patch80x80.jpg")
-        # patches.append(face_patch)
+        print("Selecting patches...")
+        files = [f for f in sorted(os.listdir("data/yolo_patches")) if f.endswith('.jpg')]
+        patches = [cv2.imread("data/yolo_patches/" + f) for f in files]
+        face_patch = cv2.imread("data/custom_patch80x80.jpg")
+        patches.append(face_patch)
 
-        # random_patch = np.random.randint(255, size=(80,80,3),dtype=np.uint8)
-        # patches.append(random_patch)
+        random_patch = np.random.randint(255, size=(80,80,3),dtype=np.uint8)
+        patches.append(random_patch)
 
-        # np.save('results/all_patches.npy', np.array(patches))
-        patches = np.load('results/all_patches.npy')
+        np.save('results/all_patches.npy', np.array(patches))
+        
+        
+        # patches = np.load('results/all_patches.npy')
 
-        # cf, patches = select_patches(cf, display_thread.update, patches, 4)
+        cf, patches = select_patches(cf, display_thread.update, patches, 4)
 
-        # np.save('results/preselected_patches.npy', np.array(patches))
+        np.save('results/preselected_patches.npy', np.array(patches))
 
 
     projected_patch = project_patch(patches[0], T, background)
@@ -594,8 +596,8 @@ if __name__ == "__main__":
     
 
     if args.brute_force:
-        # best_results = brute_force(cf, config, display_thread.update, patches, background, target_pose, result_dir, seed) 
-        brute_force_2(cf, config, display_thread.update, patches, background, target_pose, result_dir, seed)   
+        best_results = brute_force(cf, config, display_thread.update, patches, background, target_pose, result_dir, seed) 
+        # brute_force_2(cf, config, display_thread.update, patches, background, target_pose, result_dir, seed)   
     else:
         best_results = training(cf, config, display_thread.update, patches, background, target_pose, result_dir, optim_seed=optim_seed, load_logs=load_optimizer)
         scaled_tx, scaled_ty = scale_tx_ty(best_results['params']['sf'], best_results['params']['tx'], best_results['params']['ty'])
@@ -603,47 +605,47 @@ if __name__ == "__main__":
         best_results['params']['ty'] = scaled_ty
 
 
-    # best_results = ensure_types_for_save(best_results)
+    best_results = ensure_types_for_save(best_results)
 
 
-    # print(f"Best loss: {best_results['target']}, Best parameters: {best_results['params']}")
-    # with open(result_dir / 'results.yaml', 'w') as file:
-    #     yaml.dump(best_results, file)
+    print(f"Best loss: {best_results['target']}, Best parameters: {best_results['params']}")
+    with open(result_dir / 'results.yaml', 'w') as file:
+        yaml.dump(best_results, file)
 
-    # best_patch = patches[int(np.round(best_results['params']['patch_idx'], decimals=0))]
-    # cv2.imwrite(str(result_dir / 'best_patch.jpg'), best_patch)
+    best_patch = patches[int(np.round(best_results['params']['patch_idx'], decimals=0))]
+    cv2.imwrite(str(result_dir / 'best_patch.jpg'), best_patch)
 
-    # np.save(result_dir / 'best_patch.npy', best_patch)
+    np.save(result_dir / 'best_patch.npy', best_patch)
     
-    # cf = CrazyflieControl(config)
+    cf = CrazyflieControl(config)
 
-    # cf.takeoff(1.0, 3)
-    # custom_sleep(3., cf.occupied, True)
-    # cf.reset()
-    # custom_sleep(3., cf.occupied, True)
+    cf.takeoff(1.0, 3)
+    custom_sleep(3., cf.occupied, True)
+    cf.reset()
+    custom_sleep(3., cf.occupied, True)
 
-    # T = np.zeros((3,3))
-    # T[0,0] = best_results['params']['sf'] # sf
-    # T[1,1] = best_results['params']['sf'] # sf
-    # T[0,2] = best_results['params']['tx'] # tx
-    # T[1,2] = best_results['params']['ty'] # ty
-    # T[2,2] = 1
+    T = np.zeros((3,3))
+    T[0,0] = best_results['params']['sf'] # sf
+    T[1,1] = best_results['params']['sf'] # sf
+    T[0,2] = best_results['params']['tx'] # tx
+    T[1,2] = best_results['params']['ty'] # ty
+    T[2,2] = 1
 
     
 
-    # projected_patch = project_patch(best_patch, T, background)
-    # display_thread.update(projected_patch)
-    # custom_sleep(0.2, cf.occupied, True)
+    projected_patch = project_patch(best_patch, T, background)
+    display_thread.update(projected_patch)
+    custom_sleep(0.2, cf.occupied, True)
 
-    # cf.toggle_frontnet()
-    # custom_sleep(10., cf.occupied, True)
-    # print("Pose: ", cf.pose[0][:3], np.degrees(get_yaw(cf.pose[0][3:])))
-    # cf.toggle_frontnet()
-    # custom_sleep(2., cf.occupied, True)
+    cf.toggle_frontnet()
+    custom_sleep(10., cf.occupied, True)
+    print("Pose: ", cf.pose[0][:3], np.degrees(get_yaw(cf.pose[0][3:])))
+    cf.toggle_frontnet()
+    custom_sleep(2., cf.occupied, True)
 
-    # cf.land()
-    # custom_sleep(5., cf.occupied, True)
+    cf.land()
+    custom_sleep(5., cf.occupied, True)
 
-    # print("Closing...")
-    # display_thread.close()
-    # cf.close()
+    print("Closing...")
+    display_thread.close()
+    cf.close()
