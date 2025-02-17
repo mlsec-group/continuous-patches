@@ -10,6 +10,9 @@ from time import sleep
 
 import yaml
 
+import os
+from pathlib import Path
+
 
 def move_patch(T, delta_sf=0.0, delta_tx=0.0, delta_ty=0.0):
     T[0,0] += delta_sf
@@ -23,6 +26,9 @@ if __name__ == "__main__":
 
     with open('flying/config.yaml') as file:
         config = yaml.load(file, Loader=yaml.FullLoader)
+
+    results_dir = Path("results/test_y/")
+    os.makedirs(results_dir, exist_ok=True)
 
     projector_display_size = (1050, 1680)
 
@@ -102,10 +108,26 @@ if __name__ == "__main__":
         all_poses.append((timestamp, *pose))
         sleep(0.01)
 
+    # for i in range(30):
+    #     T = move_patch(T, delta_sf=0.1)
+    #     projected_patch = project_patch(patch, T, background)
+    #     display_thread.update(projected_patch)
+    #     pose, timestamp = poses.get_current_pose()
+    #     all_poses.append((timestamp, *pose))
+    #     sleep(0.1)
+
+    # for i in range(50):
+    #     T = move_patch(T, delta_sf=-0.1)
+    #     projected_patch = project_patch(patch, T, background)
+    #     display_thread.update(projected_patch)
+    #     pose, timestamp = poses.get_current_pose()
+    #     all_poses.append((timestamp, *pose))
+    #     sleep(0.1)
+
     pose, timestamp = poses.get_current_pose()
     all_poses.append((timestamp, *pose))
 
-    np.save("data/poses.npy", np.array(all_poses))
+    np.save(str(results_dir/ "poses.npy"), np.array(all_poses))
 
     cf.toggle_frontnet()
     custom_sleep(1., cf.occupied, True)

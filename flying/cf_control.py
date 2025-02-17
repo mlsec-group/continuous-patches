@@ -395,7 +395,7 @@ class CrazyflieControl():
 
         # self.goto(0., 2., 1., seconds=5.)
         # time.sleep(5.)
-        t = self.goto_auto(0., 0., 1., yaw=0.)
+        t = self.goto_auto(0.0, -0.3, 1., yaw=0.)     # setting this to the center of the projector
         self.occupied.append(False)
 
 def custom_sleep(t, occupied_queue, wait=False):
