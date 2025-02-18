@@ -31,8 +31,8 @@ def objective_function(current_pose, target_pose):
     # print("Quaternions: ", current_pose[3:])
     # print("Euler angles: ", get_euler_angles(current_pose[3:]))
     angle_dist = np.abs(angular_distance(get_yaw(current_pose[3:]), target_pose[3]))
-    if angle_dist > np.radians(80):
-        angle_dist = 2.0
+    if angle_dist > np.radians(45):
+        angle_dist = 4.
     # print(f"Position distance: {position_dist}, Angle distance: {angle_dist}")
 
     return -(position_dist + angle_dist)
@@ -44,7 +44,27 @@ def scale_tx_ty(sf, tx, ty, patch_size=80, projector_size=(1050, 1680)):
     max_ty = projector_size[0] - scaled_patch_size
     return tx * max_tx, ty * max_ty
 
-def training(drone, config, display_update, patches, background, target_pose, result_dir, optim_seed, load_logs=False):
+
+# def scale_transform(sf_opt, tx_opt, ty_opt, drone_position, patch_size=80, projector_size=(1050, 1680)):
+#     sf_alpha = 10.
+#     display_x_world = 2.0
+
+#     sf_scaled = sf_opt * sf_alpha * (np.linalg.norm(drone_position[0] - display_x_world) / display_x_world)
+#     sf_scaled = max(2, sf_scaled)
+
+#     scaled_patch_size = patch_size * sf_scaled
+#     max_tx = projector_display_size[1] - scaled_patch_size
+
+#     scaled_tx_pos = (drone_position[1] + 1.3) / 2 * max_tx
+#     scaled_tx = tx_opt * scaled_tx_pos
+#     scaled_tx = max(0, scaled_tx)
+
+#     scaled_ty = ty_opt * (projector_display_size[0] - scaled_patch_size)
+#     scaled_ty = max(0, scaled_ty)
+
+#     return sf_scaled, scaled_tx, scaled_ty
+
+def training(drone, config, display_update, patches, background, target_pose, result_dir, optim_seed, load_optim=False):
 
     # drone = CrazyflieControl(config)
     pose_getter = PoseUpdater(drone.pose)
@@ -66,16 +86,25 @@ def training(drone, config, display_update, patches, background, target_pose, re
     
     optimizer.set_gp_params(alpha=1e-2, n_restarts_optimizer=20)
 
-    if load_logs:
+    num_lines = 0
+    counter = 0
+    best_loss = -np.inf
+    if load_optim:
         load_logs(optimizer, logs=[str(result_dir / "logs.log")])
+        # count the entries in the log file
+        with open(str(result_dir / "logs.log")) as f:
+            num_lines = sum(1 for line in f)
+            print(f"Loaded {num_lines} entries from log file!")
+        
+        best_loss = optimizer.max['target']
 
     logger = JSONLogger(path=str(result_dir / "logs.log"))
     optimizer.subscribe(Events.OPTIMIZATION_STEP, logger)
 
     counter = 0
-    best_loss = -np.inf
+
     try:
-        for i in range(30):
+        for i in range(num_lines, 30):
             # quick battery check
             bat_v, bat_s = drone.battery
             if bat_s == 3:
@@ -114,6 +143,9 @@ def training(drone, config, display_update, patches, background, target_pose, re
             sf = params['sf']
             tx, ty = scale_tx_ty(sf, params['tx'], params['ty'])
 
+            # automatic scaling
+            # sf, tx, ty = scale_transform(params['sf'], params['tx'], params['ty'], start_pose[:3])
+
             T = np.zeros((3,3))
             T[0,0] = sf # sf
             T[1,1] = sf # sf
@@ -123,6 +155,29 @@ def training(drone, config, display_update, patches, background, target_pose, re
 
             projected_patch = project_patch(patches[patch_idx], T, background)
             display_update(projected_patch)
+
+
+            #  automatic scaling, needs to be moved directly into projector thread
+            # for 2.5 seconds, update the display with the projected patch and the current pose
+            # current_time = time.time()
+            # drone.toggle_frontnet()
+            # while time.time() - current_time < 2.5:
+            #     current_pose, _ = pose_getter.get_current_pose()
+
+            #     sf, tx, ty = scale_transform(params['sf'], params['tx'], params['ty'], current_pose[:3])
+
+            #     T = np.zeros((3,3))
+            #     T[0,0] = sf # sf
+            #     T[1,1] = sf # sf
+            #     T[0,2] = tx # tx
+            #     T[1,2] = ty # ty
+            #     T[2,2] = 1
+
+            #     projected_patch = project_patch(patches[patch_idx], T, background)
+
+            #     display_update(projected_patch)
+            #     custom_sleep(0.1, drone.occupied, True)
+
             custom_sleep(0.2, drone.occupied, True)
 
             drone.toggle_frontnet()
@@ -498,6 +553,7 @@ if __name__ == "__main__":
     parser.add_argument('--brute_force', action='store_true', default=False)
     parser.add_argument('--load_selected', action='store_true', default=False)
     parser.add_argument('--load_optimizer', action='store_true', default=False)
+    parser.add_argument('--patches', type=str, choices=['frontnet', 'yolo'], default='yolo')
 
     args = parser.parse_args()
 
@@ -549,25 +605,25 @@ if __name__ == "__main__":
 
     if load_selected:
         print("Loading preselected patches...")
-        patches = np.load('results/preselected_patches.npy')
+        patches = np.load(f'results/preselected_patches_{args.patches}.npy')
     else:
         print("Selecting patches...")
-        files = [f for f in sorted(os.listdir("data/yolo_patches")) if f.endswith('.jpg')]
-        patches = [cv2.imread("data/yolo_patches/" + f) for f in files]
+        files = [f for f in sorted(os.listdir(f"data/{args.patches}_patches")) if f.endswith('.jpg')]
+        patches = [cv2.imread(f"data/{args.patches}_patches/" + f) for f in files]
         face_patch = cv2.imread("data/custom_patch80x80.jpg")
         patches.append(face_patch)
 
         random_patch = np.random.randint(255, size=(80,80,3),dtype=np.uint8)
         patches.append(random_patch)
 
-        np.save('results/all_patches.npy', np.array(patches))
+        np.save(f'results/all_patches_{args.patches}.npy', np.array(patches))
         
         
         # patches = np.load('results/all_patches.npy')
 
         cf, patches = select_patches(cf, display_thread.update, patches, 4)
 
-        np.save('results/preselected_patches.npy', np.array(patches))
+        np.save(f'results/preselected_patches_{args.patches}.npy', np.array(patches))
 
 
     projected_patch = project_patch(patches[0], T, background)
@@ -599,8 +655,9 @@ if __name__ == "__main__":
         best_results = brute_force(cf, config, display_thread.update, patches, background, target_pose, result_dir, seed) 
         # brute_force_2(cf, config, display_thread.update, patches, background, target_pose, result_dir, seed)   
     else:
-        best_results = training(cf, config, display_thread.update, patches, background, target_pose, result_dir, optim_seed=optim_seed, load_logs=load_optimizer)
+        best_results = training(cf, config, display_thread.update, patches, background, target_pose, result_dir, optim_seed=optim_seed, load_optim=load_optimizer)
         scaled_tx, scaled_ty = scale_tx_ty(best_results['params']['sf'], best_results['params']['tx'], best_results['params']['ty'])
+        # scaled_sf, scaled_tx, scaled_ty = scale_transform(best_results['params']['sf'], best_results['params']['tx'], best_results['params']['ty'], target_pose[:3])
         best_results['params']['tx'] = scaled_tx
         best_results['params']['ty'] = scaled_ty
 

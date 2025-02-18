@@ -42,7 +42,7 @@ def load_patch_for_direction(path, direction, index=None):
 
     else:
         all_results = {}
-        for i in range(3):
+        for i in range(1):
             folder_i = folder / str(i)
             with open(folder_i / "results.yaml") as file:
                 results = yaml.load(file, Loader=yaml.FullLoader)
@@ -177,7 +177,7 @@ def attack(target_trajectory, drone_config, patches_dict):
 
             sleep(0.2)
             current_pose, _ = pose_getter.get_current_pose()
-            if np.linalg.norm(target_pose[:2] - current_pose[:2]) < 0.3:
+            if np.linalg.norm(target_pose[:2] - current_pose[:2]) < 0.2:
                 print("Reached target position!")
                 trajectory_idx += 1
         
@@ -219,7 +219,7 @@ if __name__ == "__main__":
 
 
     # load best patches + transformations for each direction
-    results_dir = Path("results/random")
+    results_dir = Path("results/test_frontnet")
 
     patches_positions = {'left': {'patch': None, 'T': None, 'loss': None},
                          'right': {'patch': None, 'T': None, 'loss': None},

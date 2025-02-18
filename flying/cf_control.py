@@ -393,11 +393,15 @@ class CrazyflieControl():
 
         self.cf.param.set_value('frontnet.start', self.frontnet)
         if self.frontnet == '0':
-            current_yaw = np.degrees(rowan.to_euler(rowan.normalize(np.array(self.pose[0])[3:]))[2])
+            current_yaw = np.degrees(rowan.to_euler(rowan.normalize(np.array(self.pose[0])[3:]))[0])
             self.goto(*np.array(self.pose[0])[:3], current_yaw, seconds=0.5)
+            time.sleep(0.1)
+            self.goto(*np.array(self.pose[0])[:3], current_yaw, seconds=0.5)
+            time.sleep(0.1)
             self.base_commander.send_notify_setpoint_stop()
             self.goto(*np.array(self.pose[0])[:3], current_yaw, seconds=0.5)
-            time.sleep(0.5)
+            time.sleep(0.2)
+            self.base_commander.send_notify_setpoint_stop()
             self.goto(*np.array(self.pose[0])[:3], current_yaw, seconds=0.5)
             time.sleep(0.5)
 
