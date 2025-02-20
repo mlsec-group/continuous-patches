@@ -102,7 +102,7 @@ class PatchDisplayThread(Thread):
 
 
 class PoseUpdater(Thread):
-    def __init__(self, cf_pose, queue_size=100):
+    def __init__(self, cf_pose, queue_size=5):
         super().__init__()
         self._stay_alive = True
         self.cf_pose = cf_pose

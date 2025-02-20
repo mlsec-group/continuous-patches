@@ -10,18 +10,18 @@ with open('flying/config.yaml') as file:
     config = yaml.load(file, Loader=yaml.FullLoader)
 print(config)
 
-display_updater = PatchDisplayThread('Patch', (2561, 0))
+
+
+cf = CrazyflieControl(config)
+
+# pose_updater = PoseUpdater(cf.pose)
+display_updater = PatchDisplayThread('Patch', (2561, 0), cf.pose)
 
 projector_display_size = (1050, 1680)
 background = np.zeros((*projector_display_size, 3), dtype=np.uint8)
 
 display_updater.start()
 display_updater.update_simple(background)
-
-cf = CrazyflieControl(config)
-
-pose_updater = PoseUpdater(cf.pose)
-
 
 patch = np.random.rand(80, 80, 3) * 255
 
@@ -31,15 +31,16 @@ ty_opt = 0.5
 
 while True:
     try:
-        current_pose, _ = pose_updater.get_current_pose()
+        # current_pose, _ = pose_updater.get_current_pose()
+        current_pose = np.array(cf.pose[0])
         # print("Current pose:", current_pose)
-        display_updater.update(patch, sf_opt, tx_opt, ty_opt, current_pose)
+        display_updater.update(patch, sf_opt, tx_opt, ty_opt)
         time.sleep(0.1)
     except KeyboardInterrupt:
         break
 
 display_updater.close()
-pose_updater.close()
+# pose_updater.close()
 cf.close()
 
 
