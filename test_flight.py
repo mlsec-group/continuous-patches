@@ -6,6 +6,8 @@ from util import PoseUpdater
 from Display import PatchDisplayThread
 import numpy as np
 
+import cv2
+
 with open('flying/config.yaml') as file:
     config = yaml.load(file, Loader=yaml.FullLoader)
 print(config)
@@ -21,23 +23,29 @@ projector_display_size = (1050, 1680)
 background = np.zeros((*projector_display_size, 3), dtype=np.uint8)
 
 display_updater.start()
-display_updater.update_simple(background)
+# display_updater.update_simple(background)
 
-patch = np.random.rand(80, 80, 3) * 255
+# patch = np.random.rand(80, 80, 3) * 255
+
+patch = cv2.imread("data/frontnet_patches/patch_0.jpg")
 
 sf_opt = 1.
 tx_opt = 0.5 
 ty_opt = 0.5
 
-while True:
-    try:
-        # current_pose, _ = pose_updater.get_current_pose()
-        current_pose = np.array(cf.pose[0])
-        # print("Current pose:", current_pose)
-        display_updater.update(patch, sf_opt, tx_opt, ty_opt)
-        time.sleep(0.1)
-    except KeyboardInterrupt:
-        break
+# while True:
+#     try:
+#         # current_pose, _ = pose_updater.get_current_pose()
+#         current_pose = np.array(cf.pose[0])
+#         # print("Current pose:", current_pose)
+#         display_updater.update(patch, sf_opt, tx_opt, ty_opt)
+#         time.sleep(0.1)
+#     except KeyboardInterrupt:
+#         break
+
+display_updater.update(patch, sf_opt, tx_opt, ty_opt)
+
+time.sleep(20)
 
 display_updater.close()
 # pose_updater.close()

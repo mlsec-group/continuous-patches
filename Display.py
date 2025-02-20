@@ -1,5 +1,6 @@
 from turtle import back
 from fastapi import background
+from httpx import patch
 import numpy as np
 from threading import Thread
 import cv2
@@ -210,35 +211,32 @@ class PatchDisplayThread(Thread):
         cv2.namedWindow(self.name, cv2.WINDOW_NORMAL)
         cv2.moveWindow(self.name, *self.position)  # Assuming the second monitor is to the right of the primary monitor
         cv2.setWindowProperty(self.name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-        background = np.zeros((*self.projector_size, 3), dtype=np.float64)
+        background = np.zeros((*self.projector_size, 3), dtype=np.uint8)
         cv2.imshow(self.name, background)
+        patch = None
         while self._stay_alive:
             if self.queue:
-                out = self.queue.popleft()
-                if len(out) == 2:
-                    patch, T = out
-                    img = project_patch(patch, T, background)
-                    # img = background
-                    # img = cv2.warpPerspective(patch, T, self.projector_size)
-                    cv2.imshow(self.name, img)
-                else:
-                    img = out
+                patch, sf, tx, ty = self.queue.popleft()
+            if patch is not None:
+                T = self.bb_opt2transformation(sf, tx, ty, np.array(self.drone_pose[0]))
+                img = project_patch(patch, T, background)
+                # img = cv2.warpPerspective(patch, T, self.projector_size)
                 cv2.imshow(self.name, img)
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 self.close()
-            time.sleep(0.03)
+            time.sleep(1)
 
 
-    def update_simple(self, img):
-        # Add the image to the queue
-        self.queue.append(img)
+    # def update_simple(self, img):
+    #     # Add the image to the queue
+    #     self.queue.append(img)
 
     def update(self, patch, sf, tx, ty):
         # Add the image to the queue
-        T = self.bb_opt2transformation(sf, tx, ty, np.array(self.drone_pose[0]))
+        # T = self.bb_opt2transformation(sf, tx, ty, np.array(self.drone_pose[0]))
         # img = project_patch(patch, T, np.zeros((*self.projector_size, 3)))
-        self.queue.append((patch, T))
+        self.queue.append((patch, sf, tx, ty))
         # print("time passed:", time.time() - start_time)
     
     def bb_opt2transformation(self, sf_opt, tx_opt, ty_opt, drone_pose, patch_size=80):
