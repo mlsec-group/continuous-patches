@@ -196,6 +196,11 @@ class CrazyflieControl():
         self.reset_monitor_thread.daemon = True
         self.reset_monitor_thread.start()
 
+        # # connected watcher
+        # self.reconnect_thread = Thread(target=self.connected_watcher)
+        # self.reconnect_thread.daemon = True
+        # self.reconnect_thread.start()
+
         
         self.battery = [None, None]
 
@@ -295,6 +300,20 @@ class CrazyflieControl():
         if not np.all(self.limits[:, 0] < pose[:3]) or not np.all(pose[:3] < self.limits[:, 1]): 
             self.reset_queue.append(True) # check if pose is within limits
 
+    # def connected_watcher(self):
+    #     while True:
+    #         if self.connected == False:
+    #             print("Connection lost, resetting..")
+    #             print(self.scf.is_link_open)
+    #             self.connected = False
+    #             self.occupied.append(True)
+    #             while self.connected == False:
+    #                 self.connect()
+    #                 time.sleep(0.5)
+    #             self.occupied.append(False)
+    #             self.reset()
+
+
     def monitor_reset(self):
         while True:
             if self.reset_queue and self.reset_queue[0]:
@@ -374,11 +393,15 @@ class CrazyflieControl():
 
         self.cf.param.set_value('frontnet.start', self.frontnet)
         if self.frontnet == '0':
-            current_yaw = np.degrees(rowan.to_euler(rowan.normalize(np.array(self.pose[0])[3:]))[2])
+            current_yaw = np.degrees(rowan.to_euler(rowan.normalize(np.array(self.pose[0])[3:]))[0])
             self.goto(*np.array(self.pose[0])[:3], current_yaw, seconds=0.5)
+            time.sleep(0.1)
+            self.goto(*np.array(self.pose[0])[:3], current_yaw, seconds=0.5)
+            time.sleep(0.1)
             self.base_commander.send_notify_setpoint_stop()
             self.goto(*np.array(self.pose[0])[:3], current_yaw, seconds=0.5)
-            time.sleep(0.5)
+            time.sleep(0.2)
+            self.base_commander.send_notify_setpoint_stop()
             self.goto(*np.array(self.pose[0])[:3], current_yaw, seconds=0.5)
             time.sleep(0.5)
 
