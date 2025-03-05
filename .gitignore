@@ -162,3 +162,9 @@ cython_debug/
 results/
 
 cache/
+*.pth
+*.pt
+*.png
+*.out
+*.sh
+*.sbatch
