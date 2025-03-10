@@ -21,6 +21,35 @@ def bezier_curve(control_points, n_points=100):
 
     return curve
 
+# rotation vectors are axis-angle format in "compact form", where
+# theta = norm(rvec) and axis = rvec / theta
+# they can be converted to a matrix using cv2. Rodrigues, see
+# https://docs.opencv.org/4.7.0/d9/d0c/group__calib3d.html#ga61585db663d9da06b68e70cfbf6a1eac
+def opencv2quat(rvec):
+    angle = np.linalg.norm(rvec)
+    if angle == 0:
+        q = np.array([1,0,0,0])
+    else:
+        axis = rvec.flatten() / angle
+        q = rowan.from_axis_angle(axis, angle)
+    return q
+
+
+def scale_tx_ty(sf, tx, ty, patch_size=80, projector_size=(1050, 1680)):
+    scaled_patch_size = patch_size * sf
+    max_tx = projector_size[1] - scaled_patch_size
+    max_ty = projector_size[0] - scaled_patch_size
+    return tx * max_tx, ty * max_ty
+
+def construct_T(sf, tx, ty):
+    T = np.zeros((3,3))
+    T[0,0] = sf
+    T[1,1] = sf
+    T[0,2] = tx
+    T[1,2] = ty
+    T[2,2] = 1
+    return T
+
 
 def get_yaw(quats):
     return rowan.to_euler(rowan.normalize(np.array(quats)))[0]      # returns yaw in radians
@@ -73,7 +102,7 @@ class PatchDisplayThread(Thread):
 
 
 class PoseUpdater(Thread):
-    def __init__(self, cf_pose, queue_size=100):
+    def __init__(self, cf_pose, queue_size=5):
         super().__init__()
         self._stay_alive = True
         self.cf_pose = cf_pose

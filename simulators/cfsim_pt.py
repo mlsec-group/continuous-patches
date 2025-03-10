@@ -15,12 +15,19 @@ import rowan
 
 from pathlib import Path
 
+from yolobox import YOLOBox
+
 class CFSim():
-    def __init__(self, model_path="simulators/pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", dataset_path="simulators/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"):
+    def __init__(self, model='frontnet', dataset_path="simulators/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = model
         
-        pytorch_model = self.load_model(model_path, self.device)
-        self.pose_estimator = pytorch_model
+        if self.model == 'frontnet':
+            self.pose_estimator = self.load_frontnet_model(self.device)
+        elif self.model == 'yolov5':
+            self.pose_estimator = self.load_yolo_model()
+        else:
+            raise ValueError("Model type not supported!")
         
         self.pose = np.array([0., 0., 0., 0.]) # x, y, z, yaw
         
@@ -28,15 +35,15 @@ class CFSim():
         # self.target_trajectory = target_trajectory
 
         # might be deleted later, the dataset is only loaded to get a suitable background image
-        # self.dataset, _ = self.load_dataset(dataset_path)
-        # base_img, gt = self.dataset.dataset.__getitem__(0)
-        # self.base_img = base_img#.squeeze(0).numpy()
+        self.dataset, _ = self.load_dataset(dataset_path)
+        base_img, gt = self.dataset.dataset.__getitem__(0)
+        self.base_img = base_img#.squeeze(0).numpy()
 
         # patch stays random for now and inside the simulator for compatibility with current
         # optimize script
         self.patch = np.random.rand(10, 10, 1).astype(np.float32) * 255. # load one of the optimized FAPs instead!
 
-    def load_model(self, path, device, config="160x32"):
+    def load_frontnet_model(self, device, model_path="simulators/pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", config="160x32"):
         """
         From FAP repo
         Loads a saved Frontnet model from the given path with the set configuration and moves it to CPU/GPU.
@@ -66,6 +73,10 @@ class CFSim():
 
         return model.eval()
     
+    def load_yolo_model(self):
+        model = YOLOBox()
+        return model
+        
     # only needed during testing
     def load_dataset(self, path, batch_size = 32, shuffle = False, drop_last = True, num_workers = 1, train=True, train_set_size=0.9, IMRC=True):
         # From FAP repo
@@ -202,12 +213,17 @@ class CFSim():
             image_t = image_t.unsqueeze(1)
         
         # frontnet prediction
-        x, y, z, yaw = self.pose_estimator(image_t)
-        # reshape output and turn into numpy array
-        predicted_pose = torch.hstack((x, y, z, yaw))
+        if self.model == 'frontnet':
+            x, y, z, yaw = self.pose_estimator(image_t)
+            # reshape output and turn into numpy array
+            predicted_pose = torch.hstack((x, y, z, yaw))
+        # yolov5 prediction
+        elif self.model == 'yolov5':
+            predicted_pose = self.pose_estimator(image_t)
+
         predicted_pose = predicted_pose.detach().cpu().numpy()
 
-        # print("predicted pose", predicted_pose, predicted_pose.shape)
+        print("predicted pose", predicted_pose, predicted_pose.shape)
         
         # calculate controller output
         new_setpoint = self._controller_setpoint(predicted_pose)
@@ -259,8 +275,11 @@ class CFSim():
 
 if __name__ == '__main__':
 
-    model_path = "simulators/pulp-frontnet/PyTorch/Models/Frontnet160x32.pt"
-    dataset_path = "simulators/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"
+    #model_path = "simulators/pulp-frontnet/PyTorch/Models/Frontnet160x32.pt"
+    #dataset_path = "simulators/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"
+    dataset_path = "/home/hanfeld/flying_adversarial_patch/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"
+
+    model_type = 'yolov5'
 
     # won't be necessary later
     # sys.path.append('.')
@@ -268,7 +287,7 @@ if __name__ == '__main__':
     # control_points_bezier = np.array([[0, 0, 0.0], [1, 3, 0.4], [2, -1, 0.8], [3, 2, 1]])
     # target_trajectory = np.array(bezier_curve(control_points_bezier, 20))
 
-    cf_sim = CFSim(model_path, dataset_path)
+    cf_sim = CFSim(model_type, dataset_path)
 
     # # test with single image
     # base_img = cf_sim.base_img.unsqueeze(0).to(cf_sim.device)
@@ -299,10 +318,31 @@ if __name__ == '__main__':
     T[1, 2] = 48.
 
     mod_img = cf_sim.project_patch(patch, T, base_img).to(cf_sim.device)
-    mod_img = mod_img.unsqueeze(0).unsqueeze(0)
+    mod_img = mod_img.unsqueeze(0).unsqueeze(0).float()
     print(mod_img.shape, mod_img.dtype)
 
-    print(cf_sim.pose_estimator(mod_img))
+    # plot the modified image
+    from matplotlib import pyplot as plt
+    plt.imshow(mod_img.squeeze(0).squeeze(0).cpu().numpy(), cmap='gray')
+    plt.savefig("patched_image.png")
+
+
+    predicted_pose = cf_sim.pose_estimator(mod_img)
+    print(predicted_pose)
+
+    # sanity check
+    # project pose back to point in image frame
+    # print(cf_sim.pose_estimator.cam.camera_extrinsic, cf_sim.pose_estimator.cam.camera_extrinsic.shape)
+    homogeneous_coords = np.hstack((predicted_pose.cpu().numpy()[0, :3], 1.))
+    # print(homogeneous_coords, homogeneous_coords.shape)
+    point = cf_sim.pose_estimator.cam.point_from_xyz(homogeneous_coords)
+    print(point)
+
+    # plot point in mod_img
+    plt.imshow(mod_img.squeeze(0).squeeze(0).cpu().numpy(), cmap='gray')
+    plt.scatter(point[0], point[1], color='red')
+    plt.savefig("pred_pose.png")
+
     # out_pytorch = torch.hstack(cf_sim.pose_estimator(mod_img.unsqueeze(0).unsqueeze(0)))
     # print("Output frontnet: ", out_pytorch)
     # new_pose = cf_sim.sim_new_pose(mod_img)
