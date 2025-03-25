@@ -168,3 +168,6 @@ cache/
 *.out
 *.sh
 *.sbatch
+HoverAir/
+reid/
+data/
