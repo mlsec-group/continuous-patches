@@ -53,10 +53,11 @@ class Plane(g.Geometry):
 
 if __name__ == '__main__':
 
-    results = np.load('results/poses.npy')
+    results = np.load('results/single_patch/2/poses.npy')
 
     timestamps = results[:, 0]
-    timestamps = (timestamps - timestamps[0])  # convert to seconds
+    print(timestamps)
+    # timestamps = (timestamps - timestamps[0])  # convert to seconds
 
     positions = results[:, 1:4]
     rotations = results[:, 4:]
@@ -79,7 +80,7 @@ if __name__ == '__main__':
     axs[3].set_xlabel('Time (s)')
     axs[3].set_ylabel('Yaw (deg)')
     plt.tight_layout()
-    plt.savefig('results/plot_pose_over_time.jpg', dpi=200)
+    plt.savefig('results/single_patch/2/plot_pose_over_time.jpg', dpi=200)
     # plt.show()
     plt.close()
 
@@ -92,10 +93,10 @@ if __name__ == '__main__':
     ax.set_ylabel('Y')
     ax.set_zlabel('Z')
     #set ranges for axes
-    ax.set_xlim(-1, 1)
-    ax.set_ylim(-1, 1)
+    ax.set_xlim(-1, 2)
+    ax.set_ylim(-1.5, 1.5)
     ax.set_zlim(0, 1.5)
-    plt.savefig('results/plot_trajectory_3d.jpg', dpi=200)
+    plt.savefig('results/single_patch/2/plot_trajectory_3d.jpg', dpi=200)
     # plt.show()
     plt.close()
 
@@ -113,7 +114,7 @@ if __name__ == '__main__':
     vis["Quadrotor"].set_object(
         g.StlMeshGeometry.from_file('data/cf2_assembly.stl'))
 
-    # vis["projector"].set_object(Plane())
+    vis["projector"].set_object(Plane())
 
     # # # Little experiment to support hyperplanes specified by n and a; This doesn't include all corner cases yet
     # n = np.array([0,0,1])
@@ -128,6 +129,14 @@ if __name__ == '__main__':
     # R[:3,2] = zd
     # p = np.array([0,0,-a/n[2]])
 
+    p = np.array([2, -0.3, 1])
+    R = tf.identity_matrix()
+    # rotate R 90 degrees around y-axis
+    R[:3, 0] = [0, 0, 1]
+    R[:3, 1] = [0, 1, 0]
+    R[:3, 2] = [-1, 0, 0]
+
+
     anim = Animation()
 
     for idx, timestamp in enumerate(timestamps):
@@ -135,11 +144,11 @@ if __name__ == '__main__':
             frame["Quadrotor"].set_transform(
                 tf.translation_matrix([*positions[idx]]).dot(
                     tf.quaternion_matrix(rotations[idx])))
-            # frame["projector"].set_transform(tf.translation_matrix(p).dot(R))
+            frame["projector"].set_transform(tf.translation_matrix(p).dot(R))
         # time.sleep(0.1)
     vis.set_animation(anim)
     res = vis.static_html()
     # save to a file
-    Path("results").mkdir(exist_ok=True)
-    with open(Path("results") / "meshcat_example.html", "w") as f:
+    Path("results/single_patch/2/").mkdir(exist_ok=True)
+    with open(Path("results/single_patch/2") / "meshcat_example.html", "w") as f:
         f.write(res)
