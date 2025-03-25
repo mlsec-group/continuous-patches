@@ -4,11 +4,18 @@ from onnx2torch import convert
 import onnxruntime as ort
 import numpy as np
 
+import os
+
 from torchsummary import summary
 
 # got model from NVIDIA NGC:
 # wget --content-disposition 'https://api.ngc.nvidia.com/v2/models/org/nvidia/team/tao/reidentificationnet/deployable_v1.2/files?redirect=true&path=resnet50_market1501_aicity156.onnx' -O resnet50_market1501_aicity156.onnx
 # input shape (1,3,256,128)
+
+# download model with os and wget
+os.makedirs('reid', exist_ok=True)
+os.system('wget --content-disposition "https://api.ngc.nvidia.com/v2/models/org/nvidia/team/tao/reidentificationnet/deployable_v1.2/files?redirect=true&path=resnet50_market1501_aicity156.onnx" -O reid/resnet50_market1501_aicity156.onnx')
+
 
 
 # Path to ONNX model
