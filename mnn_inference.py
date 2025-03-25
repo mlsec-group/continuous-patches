@@ -17,27 +17,39 @@ rt = MNN.nn.create_runtime_manager((config,))
 net = MNN.nn.load_module_from_file('/home/pia/bb_FAP/HoverAir/models/mnn/elan_yolo_192x192_20230718_830.mnn', [], [], runtime_manager=rt)
 
  
-original_image = cv2.imread('/home/pia/bb_FAP/HoverAir/data/our_img/0000.jpg') # loads images in RGB
+# original_image = cv2.imread('/home/pia/bb_FAP/HoverAir/data/our_img/0000.jpg') # loads images in RGB
+# original_image = cv2.imread('/home/pia/bb_FAP/HoverAir/data/192x192/chairs.jpg')
 # cv2_original.imshow('image', np_original.array(original_image.read())) 
 # key = cv2_original.waitKey(0) & 0xFF
 # if key == ord('q') or key == 27:
 #     cv2_original.destroyAllWindows()
 
-ih, iw, _ = original_image.shape
-length = max((ih, iw))
-scale = length / 192
-print(scale)
-image = cv2.resize(original_image, (192, 192), 0., 0., cv2.INTER_LINEAR, -1, [0., 0., 0.], [1./255., 1./255., 1./255.])
-print(image.shape)
+# ih, iw, _ = original_image.shape
+# length = max((ih, iw))
+# scale = length / 192
+# print(scale)
+# image = cv2.resize(original_image, (192, 192), 0., 0., cv2.INTER_LINEAR, -1, [0., 0., 0.], [1./255., 1./255., 1./255.])
+# print(image.shape)
 
-print(image.max(), image.min())
+# print(image.max(), image.min())
 
 # cv2_original.imshow('image', np_original.array(image.read()))
 # key = cv2_original.waitKey(0) & 0xFF
 # if key == ord('q') or key == 27:
 #     cv2_original.destroyAllWindows()
 
-input_var = np.expand_dims(image, 0)
+raw_image = np_original.array(np_original.fromfile('HoverAir/data/192x192/chairs.raw', dtype=np_original.float32))
+print(raw_image.shape)
+print(raw_image.max(), raw_image.min())
+raw_image = raw_image.reshape(192, 192, 3)
+print(raw_image.shape)
+
+cv2_original.imshow('image', raw_image)
+key = cv2_original.waitKey(0) & 0xFF
+if key == ord('q') or key == 27:
+    cv2_original.destroyAllWindows()
+
+input_var = np.expand_dims(raw_image, 0)
 input_var = MNN.expr.convert(input_var, MNN.expr.NC4HW4)
 output_var = net.forward(input_var)
 
@@ -49,20 +61,22 @@ print(output_var.shape)
 # print(output_var.read().shape, output_var.read().dtype)
 
 
-output_var = np_original.array(output_var.read())
+output_var = np_original.array(output_var.read()).flatten()
 print(output_var.shape)
 
 file_path = 'HoverAir/data/192x192/output/Result_0/output-0.raw'
-dlc_output = np_original.fromfile(file_path, dtype=np_original.float32).reshape(3, 24, 24, 7)
-
+dlc_output = np_original.fromfile(file_path, dtype=np_original.float32)
 print(dlc_output.shape)
 # print(output_var.shape)
 
 # print(np_original.testing.assert_allclose(dlc_output, output_var, rtol=1e-5, atol=1e-5))
 
-difference = (dlc_output - output_var).flatten()
+difference = (dlc_output - output_var)
 print(difference.shape)
 print(difference[:7])
+
+print(dlc_output[:7]*2.)
+print(output_var[:7])
 
 
 # output_var = output_var.reshape(-1, 7)
