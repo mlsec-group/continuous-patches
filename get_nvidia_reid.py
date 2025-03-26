@@ -14,34 +14,38 @@ from torchsummary import summary
 
 # download model with os and wget
 os.makedirs('reid', exist_ok=True)
-os.system('wget --content-disposition "https://api.ngc.nvidia.com/v2/models/org/nvidia/team/tao/reidentificationnet/deployable_v1.2/files?redirect=true&path=resnet50_market1501_aicity156.onnx" -O reid/resnet50_market1501_aicity156.onnx')
+# check if file exists
+if not os.path.exists('reid/resnet50_market1501_aicity156.onnx'):
+    os.system('wget --content-disposition "https://api.ngc.nvidia.com/v2/models/org/nvidia/team/tao/reidentificationnet/deployable_v1.2/files?redirect=true&path=resnet50_market1501_aicity156.onnx" -O reid/resnet50_market1501_aicity156.onnx')
 
 
+if not os.path.exists('reid/resnet50_market1501_aicity156.pth'):
+    # Path to ONNX model
+    onnx_model_path = "reid/resnet50_market1501_aicity156.onnx"
+    ort_session = ort.InferenceSession(onnx_model_path)
+    input_shape = ort_session.get_inputs()[0].shape
+    print(input_shape) # sanity check: shape is (bs, 3, 256, 128)
 
-# Path to ONNX model
-onnx_model_path = "reid/resnet50_market1501_aicity156.onnx"
-ort_session = ort.InferenceSession(onnx_model_path)
-input_shape = ort_session.get_inputs()[0].shape
-print(input_shape) # sanity check: shape is (bs, 3, 256, 128)
+    # You can pass the path to the onnx model to convert it or...
+    torch_model = convert(onnx_model_path).eval()
 
-# You can pass the path to the onnx model to convert it or...
-torch_model = convert(onnx_model_path)
+    x = torch.ones(4, 3, 256, 128)
+    print(x.shape)
 
-x = torch.ones(4, 3, 256, 128)
-print(x.shape)
-
-out_torch = torch_model(x)
-
-
-out_onnx = np.array(ort_session.run(None, {'input': x.numpy()}))[0]
-
-print(out_onnx.dtype, out_torch.dtype)
-print(out_onnx.shape, out_torch.shape)
+    out_torch = torch_model(x)
 
 
-# Check the Onnx output against PyTorch
-print(np.max(np.abs(out_onnx - out_torch.detach().numpy())))
-print(np.allclose(out_onnx, out_torch.detach().numpy(), atol=1.0e-7))
+    out_onnx = np.array(ort_session.run(None, {'input': x.numpy()}))[0]
 
-# Save the PyTorch model
-torch.save(torch_model.state_dict(), "reid/resnet50_market1501_aicity156.pth")
+    print(out_onnx.dtype, out_torch.dtype)
+    print(out_onnx.shape, out_torch.shape)
+
+
+    # Check the Onnx output against PyTorch
+    print(np.max(np.abs(out_onnx - out_torch.detach().numpy())))
+    print(np.allclose(out_onnx, out_torch.detach().numpy(), atol=1.0e-7))
+
+    # Save the PyTorch model
+    torch.save(torch_model, "reid/resnet50_market1501_aicity156.pth")
+else:
+    print("Model already exists, exiting...")
