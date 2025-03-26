@@ -159,6 +159,45 @@ print(nms_boxes[0].shape)
 print(nms_boxes)
 
 
+# cut bounding box out of image
+x1, y1, x2, y2 = nms_boxes[0][0, :4].int()
+
+person_box = image_1[0, :, y1:y2, x1:x2]
+print(person_box.shape)
+
+# sanity check
+# plt.imshow(person_box.permute(1, 2, 0).numpy())
+# plt.show()
+
+resized_person_box = torch.nn.functional.interpolate(person_box.unsqueeze(0), size=(256, 128), mode='bilinear')
+print(resized_person_box.shape)
+#sanity check
+# plt.imshow(resized_person_box[0].permute(1, 2, 0).numpy())
+# plt.show()
+
+
+# calc reid features
+features_person_box = model(resized_person_box)
+print(features_person_box.shape)
+
+
+# second image
+out_2 = yolo(image_2)[0]
+boxes = out_2[0, :, :4]
+objectness = out_2[0, :, 4]
+person_scores = out_2[0, :, 5]
+scores = (objectness * person_scores)
+nms_boxes = non_max_suppression(out_2, conf_thres=0.5, iou_thres=0.45, classes=[0], max_det=200) # 0 is person class
+x1, y1, x2, y2 = nms_boxes[0][0, :4].int()
+person_box_2 = image_2[0, :, y1:y2, x1:x2]
+resized_person_box_2 = torch.nn.functional.interpolate(person_box_2.unsqueeze(0), size=(256, 128), mode='bilinear')
+features_person_box_2 = model(resized_person_box_2)
+print(features_person_box_2.shape)
+
+# calculate cosine similarity
+similarity = cos(features_person_box, features_person_box_2)
+print(similarity)
+
 
 # print(nms_boxes[0][:4].min(), nms_boxes[0][:4].max())
 
