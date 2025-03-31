@@ -55,59 +55,80 @@ if __name__ == "__main__":
     image = cv2.resize(image, (640, 320))
     image_t = torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0).float() / 255.
 
-    print(image.shape)
-
     nms_boxes = get_bounding_boxes(image_t, yolo)[0]
-    print(nms_boxes.shape)
 
-    boxes = []
-    features = []
-    for detected_person in range(nms_boxes.shape[0]):
-        cv2.rectangle(image, (int(nms_boxes[detected_person, 0]), int(nms_boxes[detected_person, 1])), (int(nms_boxes[detected_person, 2]), int(nms_boxes[detected_person, 3])), (0, 255, 0), 2)
-        person_box = cut_bounding_box(image_t, nms_boxes[detected_person, :4])
-        boxes.append(person_box)
-        person_features = get_features(person_box, reid)
-        features.append(person_features)
+    max_people = 5
+    max_feature_budget = 20
+    feature_dim = 256
+    cosine_similarity_matrix  = np.zeros((max_people, max_feature_budget, feature_dim))
 
-    print("Similarity: ", feature_similarity(features[0], features[1]))
-    cv2.imshow("Detection", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
-    if cv2.waitKey(0) == 27:
-        cv2.destroyAllWindows()
+    camera = cv2.VideoCapture('data/dji_fly_20250121_135614_0011_1737464791745_video.mp4')
+    ret, _ = camera.read()
+    ret, frame = camera.read()
+
+    # print(frame.shape)
+
+
+
+    # person_ids = []
+    # for detected_person in range(nms_boxes.shape[0]):
+    #     person_box = cut_bounding_box(image_t, nms_boxes[detected_person, :4])
+    #     person_features = get_features(person_box, reid)
+    #     person_ids.append(person_features)
+
+    # print(image.shape)
+
+    # nms_boxes = get_bounding_boxes(image_t, yolo)[0]
+    # print(nms_boxes.shape)
+
+    # boxes = []
+    # features = []
+    # for detected_person in range(nms_boxes.shape[0]):
+    #     cv2.rectangle(image, (int(nms_boxes[detected_person, 0]), int(nms_boxes[detected_person, 1])), (int(nms_boxes[detected_person, 2]), int(nms_boxes[detected_person, 3])), (0, 255, 0), 2)
+    #     person_box = cut_bounding_box(image_t, nms_boxes[detected_person, :4])
+    #     boxes.append(person_box)
+    #     person_features = get_features(person_box, reid)
+    #     features.append(person_features)
+
+    # print("Similarity: ", feature_similarity(features[0], features[1]))
+    # cv2.imshow("Detection", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+    # if cv2.waitKey(0) == 27:
+    #     cv2.destroyAllWindows()
 
     
-    image_2 = cv2.imread("/home/pia/dji_videos/flightspace_human/0536.jpg")
-    image_2 = cv2.cvtColor(image_2, cv2.COLOR_BGR2RGB)
-    image_2 = cv2.resize(image_2, (640, 320))
-    image_2_t = torch.from_numpy(image_2).permute(2, 0, 1).unsqueeze(0).float() / 255.
+    # image_2 = cv2.imread("/home/pia/dji_videos/flightspace_human/0536.jpg")
+    # image_2 = cv2.cvtColor(image_2, cv2.COLOR_BGR2RGB)
+    # image_2 = cv2.resize(image_2, (640, 320))
+    # image_2_t = torch.from_numpy(image_2).permute(2, 0, 1).unsqueeze(0).float() / 255.
 
-    nms_boxes_2 = get_bounding_boxes(image_2_t, yolo)[0]
-    print(nms_boxes_2.shape)
+    # nms_boxes_2 = get_bounding_boxes(image_2_t, yolo)[0]
+    # print(nms_boxes_2.shape)
 
-    boxes_2 = []
-    features_2 = []
-    for detected_person in range(nms_boxes_2.shape[0]):
-        cv2.rectangle(image_2, (int(nms_boxes_2[detected_person, 0]), int(nms_boxes_2[detected_person, 1])), (int(nms_boxes_2[detected_person, 2]), int(nms_boxes_2[detected_person, 3])), (0, 255, 0), 2)
-        person_box = cut_bounding_box(image_2_t, nms_boxes_2[detected_person, :4])
-        boxes_2.append(person_box)
-        person_features = get_features(person_box, reid)
-        features_2.append(person_features)
+    # boxes_2 = []
+    # features_2 = []
+    # for detected_person in range(nms_boxes_2.shape[0]):
+    #     cv2.rectangle(image_2, (int(nms_boxes_2[detected_person, 0]), int(nms_boxes_2[detected_person, 1])), (int(nms_boxes_2[detected_person, 2]), int(nms_boxes_2[detected_person, 3])), (0, 255, 0), 2)
+    #     person_box = cut_bounding_box(image_2_t, nms_boxes_2[detected_person, :4])
+    #     boxes_2.append(person_box)
+    #     person_features = get_features(person_box, reid)
+    #     features_2.append(person_features)
 
-    print("Similarity: ", feature_similarity(features_2[0], features_2[1]))
-    cv2.imshow("Detection", cv2.cvtColor(image_2, cv2.COLOR_RGB2BGR))
-    if cv2.waitKey(0) == 27:
-        cv2.destroyAllWindows()
+    # print("Similarity: ", feature_similarity(features_2[0], features_2[1]))
+    # cv2.imshow("Detection", cv2.cvtColor(image_2, cv2.COLOR_RGB2BGR))
+    # if cv2.waitKey(0) == 27:
+    #     cv2.destroyAllWindows()
 
-    # print("Similarity image_0,box_0 to image_1, box_0: ", feature_similarity(features[0], features_2[0]))
-    # print("Similarity image_0,box_0 to image_1, box_1: ", feature_similarity(features[0], features_2[1]))
-    # print("Similarity image_0,box_1 to image_1, box_0: ", feature_similarity(features[1], features_2[0]))
-    # print("Similarity image_0,box_1 to image_1, box_1: ", feature_similarity(features[1], features_2[1]))
+    # # print("Similarity image_0,box_0 to image_1, box_0: ", feature_similarity(features[0], features_2[0]))
+    # # print("Similarity image_0,box_0 to image_1, box_1: ", feature_similarity(features[0], features_2[1]))
+    # # print("Similarity image_0,box_1 to image_1, box_0: ", feature_similarity(features[1], features_2[0]))
+    # # print("Similarity image_0,box_1 to image_1, box_1: ", feature_similarity(features[1], features_2[1]))
 
-    similarity_matrix = np.zeros((len(features), len(features_2)))
-    for i, feature_1 in enumerate(features):
-        for j, feature_2 in enumerate(features_2):
-            similarity_matrix[i, j] = feature_similarity(feature_1, feature_2)
+    # similarity_matrix = np.zeros((len(features), len(features_2)))
+    # for i, feature_1 in enumerate(features):
+    #     for j, feature_2 in enumerate(features_2):
+    #         similarity_matrix[i, j] = feature_similarity(feature_1, feature_2)
         
-    print(similarity_matrix)
+    # print(similarity_matrix)
 
 
 
