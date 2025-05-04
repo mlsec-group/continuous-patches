@@ -92,8 +92,9 @@ def gen_noisy_transformations(batch_size, sf, tx, ty, scale_min=0.3, scale_max=0
 def targeted_attack_joint(dataset, patch, model, positions, assignment, targets, lr=3e-2, epochs=10, path="eval/", model_name='frontnet', prob_weight=5, scale_min=0.3, scale_max=0.5, target_offsets = [[0,0,0]], position_offsets=[[0,0,0]], stlc_weights=[1.0]):
     patch_t = patch.clone().requires_grad_(True)
     positions_t = positions.clone().requires_grad_(True)
+    # print("Initial position inside joint attack: ", positions_t)
 
-    opt = torch.optim.Adam([patch_t, positions_t], lr=lr)
+    opt = torch.optim.Adam([patch_t], lr=lr)
 
     losses = []
 
@@ -498,8 +499,12 @@ def calc_anytime_loss(time_start, test_set, patch, targets, model, optimization_
         for target_idx, target in enumerate(targets):
             test_losses_per_patch = []
             for patch_idx in range(len(patch)):
-                scale_norm, tx_norm, ty_norm = norm_transformation(*optimization_pos_vectors[-1][target_idx][patch_idx], scale_min, scale_max)
-                transformation_matrix = get_transformation(scale_norm, tx_norm, ty_norm).to(patch.device)
+                # scale_norm, tx_norm, ty_norm = norm_transformation(*optimization_pos_vectors[-1][target_idx][patch_idx], scale_min, scale_max)
+                sf, tx, ty = optimization_pos_vectors[-1][target_idx][patch_idx]
+                scale_tx, scale_ty = scale_tx_ty(sf, tx, ty, 80)
+                # transformation_matrix = get_transformation(scale_norm, tx_norm, ty_norm).to(patch.device)
+                transformation_matrix = get_transformation(sf, scale_tx, scale_ty).to(patch.device)
+
 
                 test_losses_per_patch.append(calc_eval_loss(test_set, patch[patch_idx:patch_idx+1], transformation_matrix, model, target, model_name=model_name, quantized=quantized))
             # only store the best loss per target
@@ -627,6 +632,7 @@ if __name__=="__main__":
     np.save(path / 'positions_initial.npy', positions_n)
 
     positions = torch.from_numpy(positions_n).repeat(len(targets), num_patches, 1, 1).to(device)
+    print("Initial positions: ", positions)
 
 
     # load the patch from misc folder
@@ -761,8 +767,13 @@ if __name__=="__main__":
             train_losses_per_patch = []
             test_losses_per_patch = []
             for patch_idx in range(num_patches):
-                scale_norm, tx_norm, ty_norm = norm_transformation(*optimization_pos_vectors[-1][target_idx][patch_idx], scale_min, scale_max)
-                transformation_matrix = get_transformation(scale_norm, tx_norm, ty_norm).to(device)
+                # scale_norm, tx_norm, ty_norm = norm_transformation(*optimization_pos_vectors[-1][target_idx][patch_idx], scale_min, scale_max)
+                # transformation_matrix = get_transformation(scale_norm, tx_norm, ty_norm).to(device)
+                sf, tx, ty = optimization_pos_vectors[-1][target_idx][patch_idx]
+                scale_tx, scale_ty = scale_tx_ty(sf, tx, ty, 80)
+                transformation_matrix = get_transformation(sf, scale_tx, scale_ty).to(patch.device)
+
+
 
                 train_losses_per_patch.append(calc_eval_loss(train_set, patch[patch_idx:patch_idx+1], transformation_matrix, model, target, model_name=args.model, quantized=quantized))
                 test_losses_per_patch.append(calc_eval_loss(test_set, patch[patch_idx:patch_idx+1], transformation_matrix, model, target, model_name=args.model, quantized=quantized))
@@ -827,7 +838,19 @@ if __name__=="__main__":
 
     print(optimization_pos_vectors.shape)
 
-    norm_optimized_vecs = [norm_transformation(optimization_pos_vectors[i].mT[..., 0], optimization_pos_vectors[i].mT[..., 1], optimization_pos_vectors[i].mT[..., 2], scale_min, scale_max) for i in range(len(optimization_pos_vectors))]
+    norm_optimized_vecs = [
+        (
+            optimization_pos_vectors[i].mT[..., 0],
+            *scale_tx_ty(
+                optimization_pos_vectors[i].mT[..., 0],
+                optimization_pos_vectors[i].mT[..., 1],
+                optimization_pos_vectors[i].mT[..., 2],
+                80
+            )
+        )
+        for i in range(len(optimization_pos_vectors))
+    ]
+
 
     print(norm_optimized_vecs)
 
