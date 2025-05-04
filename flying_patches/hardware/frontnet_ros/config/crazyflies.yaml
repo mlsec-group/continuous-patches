@@ -1,0 +1,257 @@
+# named list of all robots
+robots:
+  cf18:
+    enabled: true
+
+    uri: radio://0/80/2M/E7E7E7E712    ## CHANGED!
+    initial_position: [0.0, 0.0, 0.0] #z=0.15
+    type: cf21  # see robot_types
+    firmware_params:
+      pid_attitude:
+        yaw_kp: 3.0 # 6.0
+        yaw_kd: 1.5 #0.35
+        yaw_ki: 1.0 #1.0
+      posCtlPid:
+        xKp: 0.6 # 2.0
+        xKd: 0.2 # 0.0
+        xVelMax: 0.5 # 1.0
+        yKp: 0.6 # 2.0
+        yKd: 0.2 # 0.0
+        yVelMax: 0.5 # 1.0
+      stabilizer:
+        controller: 1
+      locSrv:
+        extPosStdDev: 1e-3
+        extQuatStdDev: 0.5e-1
+
+    #   kalman:
+    #     pNAcc_xy: 1.0 # default 0.5
+    firmware_logging:
+      enabled: true
+      custom_topics:
+        frontnet: 
+          frequency: 10
+          vars: ["ctrltarget.x", "ctrltarget.y", "ctrltarget.z", "ctrltarget.yaw"] #"frontnet.x_uart", "frontnet.y_uart", "frontnet.z_uart"]
+      #   frontnet_targetpos:
+      #     frequency: 10
+      #     vars: ["frontnet.targetx", "frontnet.targety", "frontnet.targetz", "frontnet.targetyaw"]
+  cf4:
+    enabled: true
+    uri: radio://0/80/2M/E7E7E7E704
+    initial_position: [0.0, -1.0, 0.3]
+    type: cf21_betafpv  # see robot_types
+    firmware_params:
+      stabilizer:
+        controller: 6 # 4 -> sjc controller, 6-> lee controller
+      locSrv:
+        extPosStdDev: 1e-3
+        # extQuatStdDev: 1.0e-1
+        extRPStdDev: 0.1
+        extYStdDev: 0.01
+    #   kalman:
+    #     pNAcc_xy: 1.0 # default 0.5
+    #firmware_logging:
+    #  custom_topics:
+    #    topic_name3: 
+    #      frequency: 1
+    #      vars: ["acc.x", "acc.y", "acc.z"]
+# Definition of the various robot types
+robot_types:
+  cf21:
+    motion_capture:
+      enabled: true
+      # only if enabled; see motion_capture.yaml
+      marker: default_single_marker
+      dynamics: default
+    big_quad: false
+    battery:
+      voltage_warning: 3.8  # V
+      voltage_critical: 3.7 # V
+    # firmware_params:
+    #   kalman:
+    #     pNAcc_xy: 1.0 # default 0.5
+    #firmware_logging:
+    #   enabled: true
+    #   default_topics:
+    #   pose:
+    #     frequency: 1 # Hz
+    #   custom_topics:
+    #    topic_name3: 
+    #      frequency: 1
+    #      vars: ["acc.x", "acc.y", "acc.z"]
+  cf21_betafpv:
+    motion_capture:
+      enabled: true
+      # only if enabled; see motion_capture.yaml
+      marker: default_single_marker  # mocap_deck  # 
+      dynamics: default
+    big_quad: false
+    battery:
+      voltage_warning: 3.8  # V
+      voltage_critical: 3.7 # V
+    firmware_params:
+      pwm:
+        d00: 0.6034652836497831
+        d10: 0.07227137807568539
+        d01: -0.4832288487150109
+        d20: -0.0009261372585960825
+        d11: -0.0216219843334675
+
+        e00: -12.564182528108777
+        e10: 5.153254032178315
+        e01: 34.40420347673405
+      ctrlLee:
+        Kpos_Px: 10. #30.0 # def: 10.0, 9.
+        Kpos_Py: 10. #30.0 # def: 10.0, 9.
+        Kpos_Pz: 10. #30.0 # def: 10.0, 9.
+        Kpos_Dx: 8.0  # def: 8.0, 5.0
+        Kpos_Dy: 8.0  # def: 8.0, 5.
+        Kpos_Dz: 8.0  # def: 8.0  ,5.
+        Kpos_Ix: 2.0  # 5.0
+        Kpos_Iy: 2.0  # 5.0
+        Kpos_Iz: 4.0  # 8.0
+        KR_x: 0.0095 #0.0055   # def: 0.005  
+        KR_y: 0.0095 #0.0055  # def: 0.005
+        KR_z: 0.01 #0.008   # def: 0.005
+        Kw_x: 0.0031 #0.0013 # def: 0.0009
+        Kw_y: 0.0031 #0.0013  # def: 0.0009
+        Kw_z: 0.006  # def: 0.0012
+        KI_x: 0.001 #0.012 #0.009 #0.015
+        KI_y: 0.001 #0.018 #0.009 #0.015
+        KI_z: 0.001 #0.015 #0.009 #0.015
+        mass: 0.041 #0.0386 # for systemid
+     
+      # FROM NEURAL-SWARM, see https://github.com/aerorobotics/neural-swarm/blob/master/hardware/neural-swarm-ros-pkg/launch/crazyflieTypes.yaml
+      # kalman:
+      #   pNAcc_xy: 4.0 # default 0.5
+      #   pNAcc_z: 8.0 # default 1.0
+      #   mNGyro_rollpitch: 0.2 # default 0.1
+      #   mNGyro_yaw: 0.1 # default 0.1
+      # ctrlMel:
+      #   kp_xy: 0.4 #0.6 # p for position
+      #   kd_xy: 0.2 # 0.35 # d for position
+      #   ki_xy: 0.05
+      #   i_range_xy: 2.0
+      #   kR_xy: 70000 # p for attitude
+      #   kw_xy: 20000 # d for attitude
+      #   kR_z: 60000 # 70000 # p for yaw
+      #   kw_z: 12000 # 30000  # d for yaw
+      #   ki_m_z: 500 #0 #20000     # i for yaw
+      #   i_range_m_z: 1500 # i range for yaw
+      #   kd_omega_rp: 200 # roll and pitch angular velocity d gain
+      #   kp_z: 1.25
+      #   kd_z: 0.4
+      #   ki_z: 0.05
+      #   i_range_z: 0.4
+      #   mass: 0.032
+      #   massThrust: 132000
+      # pwm:
+      #   d00: 0.5009717811726693
+      #   d10: 0.11823595371065385
+      #   d01: -0.41225540923278853
+      #   d20: -0.002065562409668875
+      #   d11: -0.04287969844506664
+
+      #   e00: -9.855774395877377
+      #   e10: 3.0164756915292554
+      #   e01: 26.716368783384496
+      # sysId:
+      #   thrust_to_torque: 0.006
+      #   arm_length: 0.046
+      ctrlSJC:
+        mass: 0.041
+        # attitude lambda
+        Katt_Px: 5.
+        Katt_Py: 5.
+        Katt_Pz: 5.
+        # attitude K
+        Katt_Dx: 0.004 # 0.0012
+        Katt_Dy: 0.004 # 0.0012
+        Katt_Dz: 0.003 # 0.0012
+
+        Katt_Dwx: 0.00005
+        Katt_Dwy: 0.00005
+        Katt_Dwz: 0.00002
+
+        Katt_Ix: 0.002 # 0.001 
+        Katt_Iy: 0.002 # 0.001 
+        Katt_Iz: 0.004 # 0.0005 # 0.0005
+        Katt_I_limit: 2. # 20
+
+        Jtune_x: 16e-6
+        Jtune_y: 16e-6
+        Jtune_z: 30e-6
+
+        Kpos_Px: 20. # 15 # 15 # 12
+        Kpos_Py: 20. # 15 # 15 # 12
+        Kpos_Pz: 10. # 12 # 12 # 12
+        Kpos_P_limit: 100.0
+        Kpos_Dx: 10. # 10 # 8
+        Kpos_Dy: 10. # 10 # 8
+        Kpos_Dz: 5. # 8 # 8
+        Kpos_D_limit: 100.0
+        Kpos_Ix: 3. #5
+        Kpos_Iy: 3. #5
+        Kpos_Iz: 10. #20
+        Kpos_I_limit: 0.1
+        Kpos_I_decay: 1.0 #0.997 # 0.75 ** 0.01
+      # ctrlSJC2:
+        # T_d_lambda: 10
+        # T_d_dot_limit: 1
+        # Katt_Dw_limit: 10000
+  cf21_mocap_deck:
+    motion_capture:
+      enabled: true
+      # only if enabled; see motion_capture.yaml
+      marker: mocap_deck
+      dynamics: default
+    big_quad: false
+    battery:
+      voltage_warning: 3.8  # V
+      voltage_critical: 3.7 # V
+    # firmware_params:
+    #   kalman:
+    #     pNAcc_xy: 1.0 # default 0.5
+  cf21_motive:
+    motion_capture:
+      enabled: false
+
+# global settings for all robots
+all:
+  # firmware logging for all drones (use robot_types/type_name to set per type, or
+  # robots/drone_name to set per drone)
+  firmware_logging:
+    enabled: true
+    default_topics:
+     # remove to disable default topic
+      pose:
+        frequency: 10 # Hz
+    #custom_topics:
+    #  topic_name1:
+    #    frequency: 10 # Hz
+    #    vars: ["stateEstimateZ.x", "stateEstimateZ.y", "stateEstimateZ.z", "pm.vbat"]
+    #  topic_name2:
+    #    frequency: 1 # Hz
+    #    vars: ["stabilizer.roll", "stabilizer.pitch", "stabilizer.yaw"]
+  # firmware parameters for all drones (use robot_types/type_name to set per type, or
+  # robots/drone_name to set per drone)
+  firmware_params:
+    commander:
+      enHighLevel: 1
+    stabilizer:
+      estimator: 2 # 1: complementary, 2: kalman
+      # controller: 1 # 1: PID, 2: mellinger
+    # ring:
+    #   effect: 16 # 6: double spinner, 7: solid color, 16: packetRate
+    #   solidBlue: 255 # if set to solid color
+    #   solidGreen: 0 # if set to solid color
+    #   solidRed: 0 # if set to solid color
+    #   headlightEnable: 0
+    # locSrv:
+      # extPosStdDev: 1e-3
+      # extQuatStdDev: 0.5e-1
+    # kalman:
+    #   resetEstimation: 1
+  broadcasts:
+    num_repeats: 15 # number of times broadcast commands are repeated
+    delay_between_repeats_ms: 1 # delay in milliseconds between individual repeats

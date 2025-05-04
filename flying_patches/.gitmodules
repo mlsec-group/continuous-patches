@@ -1,0 +1,12 @@
+[submodule "pulp-frontnet"]
+	path = pulp-frontnet
+	url = git@github.com:idsia-robotics/pulp-frontnet.git
+[submodule "hardware/crazyflie-firmware"]
+	path = hardware/crazyflie-firmware
+	url = git@github.com:IMRCLab/crazyflie-firmware.git
+[submodule "nemo"]
+	path = nemo
+	url = git@github.com:phanfeld/nemo.git
+[submodule "hardware/attacker_firmware"]
+	path = hardware/attacker_firmware
+	url = git@github.com:IMRCLab/crazyflie-firmware.git

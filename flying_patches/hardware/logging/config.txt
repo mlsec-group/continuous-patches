@@ -1,0 +1,27 @@
+1     # version
+512   # buffer size in bytes
+log   # file name
+0     # enable on startup (0/1)
+on:fixedFrequency
+100     # frequency
+1     # mode (0: disabled, 1: synchronous stabilizer, 2: asynchronous)
+ctrltarget.vx # soll
+ctrltarget.vy
+ctrltarget.z
+ctrltarget.yaw
+ctrltarget.yawrate
+stateEstimate.x # ist
+stateEstimate.y
+stateEstimate.z
+stateEstimate.vx
+stateEstimate.vy
+stateEstimate.vz
+stateEstimate.yaw
+gyro.z  # Ist-Wert yaw rate
+app.targetx # target pos
+app.targety
+app.targetz
+app.targetyaw
+
+
+
