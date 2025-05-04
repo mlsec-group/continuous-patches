@@ -1,0 +1,3 @@
+[submodule "pulp-frontnet"]
+	path = pulp-frontnet
+	url = git@github.com:idsia-robotics/pulp-frontnet.git
