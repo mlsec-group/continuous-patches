@@ -1,4 +1,4 @@
-path: 'results/yolo_dataset'
+path: 'results/test'
 # +x is distance
 # +y is left
 # +z is top
@@ -12,7 +12,7 @@ stlc: # small-time locally controllability
     - target: [0,0,0]
       position: [0,0,0]
 lr_pos: 0.001
-lr_patch: 0.01
+lr_patch: 0.001
 prob_weight: 1.0
 num_hl_iter: 50
 num_pos_restarts: 3

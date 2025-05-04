@@ -20,12 +20,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 # import random
 
-import onnx
-from onnx import numpy_helper
+# import onnx
+# from onnx import numpy_helper
 
 import glob
 
 DEBUG_GRAD = False
+
+def scale_tx_ty(sf, tx, ty, patch_size=80, image_size=(96, 160)):
+    scaled_patch_size = patch_size * sf
+    max_tx = image_size[1] - scaled_patch_size
+    max_ty = image_size[0] - scaled_patch_size
+    return tx * max_tx, ty * max_ty
 
 def printd(*args, **kwargs):
     if DEBUG_GRAD:

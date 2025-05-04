@@ -85,13 +85,13 @@ def train(idx_start=0, idx_end=100, model='frontnet'):
         with open('dataset.yaml') as f:
             settings = yaml.load(f, Loader=yaml.FullLoader)
         patch_size = settings['patch']['size']
-        path = Path(f"{settings['path']}/{patch_size[0]}x{patch_size[1]}/{i}/")
-        # print(path)
+        path = Path(f"{settings['path']}/{model}/{patch_size[0]}x{patch_size[1]}/{i}/")
+        print(path)
 
         targets = [values for _, values in settings['targets'].items()]
         targets = np.array(targets, dtype=float).T
 
-        number_targets = np.random.randint(1, 4)
+        number_targets = 1#np.random.randint(1, 4)
 
         random_target_x = np.random.uniform(0,2,number_targets)
         random_target_y = np.random.uniform(-1,1,number_targets,)
@@ -108,7 +108,8 @@ def train(idx_start=0, idx_end=100, model='frontnet'):
         with open(path / 'settings.yaml', 'w') as f:
             yaml.dump(settings, f)
 
-        command = shlex.split(f"sbatch dataset.sh {str(path / 'settings.yaml')} {model}")
+        # command = shlex.split(f"sbatch dataset.sh {str(path / 'settings.yaml')} {model}")
+        command = shlex.split(f"python attacks.py --file {str(path / 'settings.yaml')} --model {model}")
         subprocess.run(command)
         del settings
 
@@ -199,7 +200,7 @@ if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('mode', type=str, choices=['train', 'save'])
     parser.add_argument('idx', type=int, metavar='N', nargs='+', default=[100])
-    parser.add_argument('--folder', type=str, default='results/finetuning/')
+    parser.add_argument('--folder', type=str, default='results/test/')
     parser.add_argument('--out', type=str, default='dataset.pickle')
     parser.add_argument('--model', type=str, default='frontnet', choices=['frontnet', 'yolov5'])
     args = parser.parse_args()

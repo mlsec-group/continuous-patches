@@ -9,11 +9,13 @@ from tqdm import trange
 from patch_placement import place_patch
 
 from yolo_bounding import YOLOBox
-from camera import Camera
+# from camera import Camera
 
 from pathlib import Path
 
 from time import time
+
+from util import scale_tx_ty
 
 def get_transformation(sf, tx, ty):
     translation_vector = torch.stack([tx, ty]).unsqueeze(0) #torch.zeros([1], device=tx.device)]).unsqueeze(0)
@@ -63,14 +65,18 @@ def norm_transformation(sf, tx, ty, scale_min=0.3, scale_max=0.5, tx_min=-10., t
 #     return rotation_matrix
 
 def gen_noisy_transformations(batch_size, sf, tx, ty, scale_min=0.3, scale_max=0.5):
+    # gets sf, tx, ty in [0,1]
+    # outputs sf in min/max range and tx, ty in image range [0, 160 or 96]
     noisy_transformation_matrix = []
     for i in range(batch_size):
         sf_n = sf + np.random.normal(0.0, 0.1)
         tx_n = tx + np.random.normal(0.0, 0.1)
         ty_n = ty + np.random.normal(0.0, 0.1)
 
-        scale_norm, tx_norm, ty_norm = norm_transformation(sf_n, tx_n, ty_n, scale_min, scale_max)
-        matrix = get_transformation(scale_norm, tx_norm, ty_norm)
+        # scale_norm, tx_norm, ty_norm = norm_transformation(sf_n, tx_n, ty_n, scale_min, scale_max)
+        scaled_tx, scaled_ty = scale_tx_ty(sf_n, tx_n, ty_n, 80)
+        matrix = get_transformation(sf_n, scaled_tx, scaled_ty)
+        # print(matrix)
 
         # random_yaw = np.deg2rad(np.random.normal(-10, 10))
         # random_pitch = np.deg2rad(np.random.normal(-5, 5))
@@ -128,6 +134,8 @@ def targeted_attack_joint(dataset, patch, model, positions, assignment, targets,
                     patch_batches = torch.cat([x.repeat(len(batch), 1, 1, 1) for x in patch_t[active_patches]]) # get batch_sized batches of each patch in patches, size should be batch_size*num_patches
                     batch_multi = batch.clone().repeat(len(patch_t[active_patches]), 1, 1, 1)
                     transformations_multi = noisy_transformations.view(len(patch_t[active_patches])*len(batch), 2, 3) # reshape transformation matrices
+                    # print(positions_t)
+                    # print(transformations_multi)
                     #print(transformations_multi.shape)
 
                     target_loss = torch.zeros(len(patch_t[active_patches]), device=patch.device)
@@ -466,23 +474,23 @@ def calc_eval_loss(dataset, patch, transformation_matrix, model, target, model_n
 
         return actual_loss
 
-def generate_targets(num_targets):
-    cam = Camera('misc/camera_calibration/calibration.yaml')
-    # random_pixel = np.random.randint([10, 10], [150, 86], (num_targets,))
-    targets = []
-    # p_width = 10
-    # p_height = 25
+# def generate_targets(num_targets):
+#     cam = Camera('misc/camera_calibration/calibration.yaml')
+#     # random_pixel = np.random.randint([10, 10], [150, 86], (num_targets,))
+#     targets = []
+#     # p_width = 10
+#     # p_height = 25
     
-    while len(targets) < num_targets:
-        target = np.random.uniform([0, -1, -0.5], [2, 1, 0.5])
-        pxl = cam.point_from_xyz([*target, 1.])
-        print('generating', target, pxl)
-        if pxl[0] < 0 or pxl[0] > 160 or pxl[1] < 0 or pxl[1] > 96:
-            continue
+#     while len(targets) < num_targets:
+#         target = np.random.uniform([0, -1, -0.5], [2, 1, 0.5])
+#         pxl = cam.point_from_xyz([*target, 1.])
+#         print('generating', target, pxl)
+#         if pxl[0] < 0 or pxl[0] > 160 or pxl[1] < 0 or pxl[1] > 96:
+#             continue
 
-        targets.append(target)
+#         targets.append(target)
 
-    return targets
+#     return targets
 
 def calc_anytime_loss(time_start, test_set, patch, targets, model, optimization_pos_vectors, scale_min, scale_max, model_name='frontnet', quantized=False):
     with torch.no_grad():
@@ -607,7 +615,19 @@ if __name__=="__main__":
     num_patches = settings['num_patches']
 
     # initialize random position
-    positions = torch.FloatTensor(len(targets), num_patches, 3, 1).uniform_(-1., 1.).to(device)
+    # positions = torch.FloatTensor(len(targets), num_patches, 3, 1).uniform_(-1., 1.).to(device)
+    random_scale = np.random.uniform(settings['scale_min'], settings['scale_max'], (num_patches,))
+    random_tx = np.random.uniform(0, 1., (num_patches,))
+    random_ty = np.random.uniform(0, 1., (num_patches,))
+    #scaled_tx, scaled_ty = scale_tx_ty(random_scale, random_tx, random_ty, settings['patch']['size'][0])
+
+
+    #positions_n = np.stack([random_scale, scaled_tx, scaled_ty])
+    positions_n = np.stack([random_scale, random_tx, random_ty])
+    np.save(path / 'positions_initial.npy', positions_n)
+
+    positions = torch.from_numpy(positions_n).repeat(len(targets), num_patches, 1, 1).to(device)
+
 
     # load the patch from misc folder
     if settings['patch']['mode'] == 'face':

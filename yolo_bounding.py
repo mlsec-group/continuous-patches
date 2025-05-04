@@ -13,7 +13,7 @@ import torch.nn as nn
 from util import load_dataset, printd
 from torchvision.ops import generalized_box_iou_loss
 
-from camera import Camera
+# from camera import Camera
 
 
 USE_TENSOR = True
