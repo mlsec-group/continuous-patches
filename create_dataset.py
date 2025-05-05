@@ -38,11 +38,13 @@ def load_targets(patch_path):
 
 def get_coeffs(patch_path, idx=-1):
     parent_folder = patch_path.parent
-    T_coeffs = np.load(parent_folder / 'positions_norm.npy') # shape: [sf, tx, ty], epochs, num_targets, 1, 1
+    # T_coeffs = np.load(parent_folder / 'positions_norm.npy') # shape: [sf, tx, ty], epochs, num_targets, 1, 1
     # # should shape: num_targets, [sf, tx, ty]
-    T_coeffs = T_coeffs[:, idx, :, 0, 0].T
+    # T_coeffs = T_coeffs[:, idx, :, 0, 0].T
 
-    return T_coeffs
+    position = np.load(parent_folder / 'positions_initial.npy').T  # T_coeffs is of shape (1,3) in the end, positions_initial is of shape (3,1) without the transpose
+
+    return position
 
 def get_Ts(T_coeffs):
     Ts = [gen_T(coeffs) for coeffs in T_coeffs]
@@ -125,66 +127,68 @@ def read_data(path, idx_start=0, idx_end=100, model='frontnet', idx=-1):
 
     print(len(file_paths))
 
-    from util import load_dataset
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    # from util import load_dataset
+    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    dataset_path = "pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"
-    dataset = load_dataset(dataset_path, batch_size=1, train=False, train_set_size=0.9)
+    # dataset_path = "pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"
+    # dataset = load_dataset(dataset_path, batch_size=1, train=False, train_set_size=0.9)
 
-    if model == 'frontnet':
-        from util import load_model
-        model_path = 'pulp-frontnet/PyTorch/Models/Frontnet160x32.pt'
-        model_config = '160x32'
-        model = load_model(path=model_path, device=device, config=model_config)
-        model.eval()
-    else:
-        from yolo_bounding import YOLOBox
-        model = YOLOBox()
-        model.to(device)
+    # if model == 'frontnet':
+    #     from util import load_model
+    #     model_path = 'pulp-frontnet/PyTorch/Models/Frontnet160x32.pt'
+    #     model_config = '160x32'
+    #     model = load_model(path=model_path, device=device, config=model_config)
+    #     model.eval()
+    # else:
+    #     from yolo_bounding import YOLOBox
+    #     model = YOLOBox()
+    #     model.to(device)
 
     # print(model)
     
-    patches = np.array([np.load(file_path)[idx][0][0] for file_path in file_paths[idx_start:idx_end]]) * 255.
+    patches = np.array([np.load(file_path)[idx][0][0] for file_path in file_paths[idx_start:idx_end]])
     print(patches.shape, patches.min(), patches.max())
-    all_images = dataset.dataset.data
-    print(all_images.shape)
+    # all_images = dataset.dataset.data
+    # print(all_images.shape)
 
-    targets = [load_targets(patch_path).to(device) for patch_path in file_paths[idx_start:idx_end]]
+    targets = [load_targets(patch_path) for patch_path in file_paths[idx_start:idx_end]]
     print(len(targets))
     
-    coeffs = [get_coeffs(patch_path, idx) for patch_path in file_paths[idx_start:idx_end]]
+    positions = [get_coeffs(patch_path, idx) for patch_path in file_paths[idx_start:idx_end]]
 
-    best_targets = []
-    best_coeffs = []
-    with torch.no_grad():
-        for i, (patch, p_targets, p_coeffs) in enumerate(zip(patches, targets, coeffs)):
-            losses = []
-            patch = torch.tensor(patch, device=device).float().unsqueeze(0).unsqueeze(0)
-            Ts = get_Ts(p_coeffs)
+    print(len(positions))
+
+    # best_targets = []
+    # best_coeffs = []
+    # with torch.no_grad():
+    #     for i, (patch, p_targets, p_coeffs) in enumerate(zip(patches, targets, coeffs)):
+    #         losses = []
+    #         patch = torch.tensor(patch, device=device).float().unsqueeze(0).unsqueeze(0)
+    #         Ts = get_Ts(p_coeffs)
             
-            for idx_target in range(len(p_targets)):
-                T = Ts[idx_target]
-                mod_img_pt = place_patch(all_images.to(patch.device), patch.repeat((len(all_images), 1, 1, 1)), T.unsqueeze(0).repeat(len(all_images), 1, 1).to(patch.device), random_perspection=False) 
-                if model == 'frontnet':
-                    x, y, z, yaw = model(mod_img_pt)
-                    predicted_pose = torch.hstack((x, y, z)).detach().cpu()
-                else: 
-                    predicted_pose = model(mod_img_pt)
-                print(all_images.shape)
-                print(predicted_pose.shape)
-                print(p_targets, p_targets.shape, p_targets[idx_target], p_targets[idx_target].shape)
+    #         for idx_target in range(len(p_targets)):
+    #             T = Ts[idx_target]
+    #             mod_img_pt = place_patch(all_images.to(patch.device), patch.repeat((len(all_images), 1, 1, 1)), T.unsqueeze(0).repeat(len(all_images), 1, 1).to(patch.device), random_perspection=False) 
+    #             if model == 'frontnet':
+    #                 x, y, z, yaw = model(mod_img_pt)
+    #                 predicted_pose = torch.hstack((x, y, z)).detach().cpu()
+    #             else: 
+    #                 predicted_pose = model(mod_img_pt)
+    #             print(all_images.shape)
+    #             print(predicted_pose.shape)
+    #             print(p_targets, p_targets.shape, p_targets[idx_target], p_targets[idx_target].shape)
                 
-                # print(p_targets[idx_target].repeat(len(all_images), 1).shape)
-                losses.append(torch.nn.functional.mse_loss(p_targets[idx_target].repeat(len(all_images), 1), predicted_pose).detach().cpu().item())
+    #             # print(p_targets[idx_target].repeat(len(all_images), 1).shape)
+    #             losses.append(torch.nn.functional.mse_loss(p_targets[idx_target].repeat(len(all_images), 1), predicted_pose).detach().cpu().item())
             
-            best_targets.append(p_targets[np.argmin(losses)].detach().cpu().numpy())
-            best_coeffs.append(p_coeffs[np.argmin(losses)])
+    #         best_targets.append(p_targets[np.argmin(losses)].detach().cpu().numpy())
+    #         best_coeffs.append(p_coeffs[np.argmin(losses)])
 
-    targets = np.array(best_targets)
-    positions = np.array(best_coeffs)
+    # targets = np.array(best_targets)
+    # positions = np.array(best_coeffs)
 
-    print(targets.shape)
-    print(positions.shape)
+    # print(targets.shape)
+    # print(positions.shape)
 
     return patches, targets, positions
     # out = np.array([get_best_target_pos(patch, path, dataset, model, device) for patch, path in zip(patches, file_paths[idx_start:idx_end+1])])
@@ -193,7 +197,7 @@ def read_data(path, idx_start=0, idx_end=100, model='frontnet', idx=-1):
 def save_pickle(path, out_name, idx_start=0, idx_end=100, model='frontnet'):
     patches, targets, positions = read_data(path, idx_start, idx_end, model)
     with open(out_name, 'wb') as f:
-        pickle.dump([[patch/255., target, position] for patch, target, position in zip(patches, targets, positions)], f, pickle.HIGHEST_PROTOCOL)
+        pickle.dump([[patch, target, position] for patch, target, position in zip(patches, targets, positions)], f, pickle.HIGHEST_PROTOCOL)
 
 
 if __name__=="__main__":

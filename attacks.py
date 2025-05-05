@@ -94,7 +94,7 @@ def targeted_attack_joint(dataset, patch, model, positions, assignment, targets,
     positions_t = positions.clone().requires_grad_(True)
     # print("Initial position inside joint attack: ", positions_t)
 
-    opt = torch.optim.Adam([patch_t], lr=lr)
+    opt = torch.optim.Adam([patch_t], lr=lr)     # eps 1e-4
 
     losses = []
 
@@ -218,7 +218,7 @@ def targeted_attack_joint(dataset, patch, model, positions, assignment, targets,
                 loss.backward()
                 opt.step()
 
-                patch_t.data.clamp_(0., 1.)
+                patch_t.data.clamp_(0., 1.)      # evtl. 
             actual_loss /= len(dataset)
             stats /= len(dataset)
             stats_p /= len(dataset)
