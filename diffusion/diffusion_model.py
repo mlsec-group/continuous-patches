@@ -402,18 +402,24 @@ if __name__ == '__main__':
 
     patches = []
     targets = []
+    positions = []
     for i in range(len(data)):
         patches.append(data[i][0])
         targets.append(data[i][1])
+        positions.append(data[i][2])
+
     
-    patches = np.array(patches)
-    targets = np.array(targets)
+    patches = np.array(patches) # shape (N, 80, 80)
+    targets = np.array(targets) # shape (N, 1, 3)
+    positions = np.array(positions) # shape (N, 1, 3)
 
     patch_size = patches.shape[-2:]
 
-    # patches = np.array([patch - np.min(patch)) / (np.max(patch) - np.min(patch) for patch in patches]) # normalize
+    patches = np.array([(patch - np.min(patch)) / (np.max(patch) - np.min(patch)) for patch in patches]) # normalize
     patches = torch.tensor(patches).unsqueeze(1)
-    targets = torch.tensor(targets)
+    print(patches.shape, patches.min(), patches.max())
+    targets = torch.tensor(targets).squeeze(1)
+    positions = torch.tensor(positions)
 
     # print(patches.shape)
 
