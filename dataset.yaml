@@ -1,4 +1,4 @@
-path: 'results/yolo_dataset'
+path: 'results/test'
 # +x is distance
 # +y is left
 # +z is top
@@ -12,16 +12,16 @@ stlc: # small-time locally controllability
     - target: [0,0,0]
       position: [0,0,0]
 lr_pos: 0.001
-lr_patch: 0.01
+lr_patch: 0.001
 prob_weight: 1.0
-num_hl_iter: 50
+num_hl_iter: 100
 num_pos_restarts: 3
 num_pos_epochs: 1
 num_patch_epochs: 1
 batch_size: 32
 num_patches: 1
-scale_min: 0.2
-scale_max: 0.7
+scale_min: 0.4
+scale_max: 0.8
 patch: 
   mode: 'random'  # face, white, random
   size: [80, 80] # patch size in [height, width]
