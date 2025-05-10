@@ -1,0 +1,5 @@
+{
+	"BNRelu_bits": 64,
+	"onnx_file": "../Results/160x32/Export/Frontnet.onnx",
+	"code reserved space": 132000
+}
