@@ -82,7 +82,7 @@ class TargetEncoding(nn.Module):
 
         self.embed_channels = embed_channels
         self.h, self.w = patch_size
-        self.linear = nn.Linear(3, 512)
+        self.linear = nn.Linear(6, 512)   # 3 for target only, 6 for target+position
         self.conv = nn.Conv2d(512, 64, kernel_size=2, stride=1, padding=5)
 
     def forward(self, target: Tensor) -> Tensor:
@@ -313,16 +313,16 @@ class DiffusionModel():
     def train(self, data_loader: torch.utils.data.DataLoader, device: torch.device, nepochs: int = 10, denoising_steps: int = 1_000):
         """Alg 1 from the DDPM paper"""
         self.model.train()
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, eps=1e-4)
         alpha_bars, _ = self.get_alpha_betas(denoising_steps)      # Precompute alphas
 
         all_losses = []
 
         losses = []
         for epoch in trange(nepochs):
-            for [patches, targets] in data_loader:
+            for [patches, conditioning] in data_loader:
                 patches = patches.to(device)
-                targets = targets.to(device)
+                conditioning = conditioning.to(device)
                 optimizer.zero_grad()
                 # Fwd pass
                 t = torch.randint(denoising_steps, size=(patches.shape[0],))  # sample timesteps - 1 per datapoint
@@ -331,7 +331,7 @@ class DiffusionModel():
                 noise = torch.randn(*patches.shape, device=device)   # Sample DIFFERENT random noise for each datapoint
                 
                 model_in = alpha_t**.5 * patches + noise*(1-alpha_t)**.5   # Noise corrupt the data (eq14)
-                out = self.model(model_in, targets, t)
+                out = self.model(model_in, conditioning, t)
                 loss = torch.mean((noise - out)**2)     # Compute loss on prediction (eq14)
                 losses.append(loss.detach().cpu().numpy())
                 all_losses.append(loss.detach().cpu().numpy())
@@ -411,21 +411,23 @@ if __name__ == '__main__':
     
     patches = np.array(patches) # shape (N, 80, 80)
     targets = np.array(targets) # shape (N, 1, 3)
-    positions = np.array(positions) # shape (N, 1, 3)
+    positions = np.array(positions) # shape (N, 1, 3), sf in range [0.4, 0.8], tx, ty in range [0, 1]
 
     patch_size = patches.shape[-2:]
 
     patches = np.array([(patch - np.min(patch)) / (np.max(patch) - np.min(patch)) for patch in patches]) # normalize
     patches = torch.tensor(patches).unsqueeze(1)
     print(patches.shape, patches.min(), patches.max())
-    targets = torch.tensor(targets).squeeze(1)
-    positions = torch.tensor(positions)
+    targets = torch.tensor(targets, dtype=torch.float).squeeze(1)
+    positions = torch.tensor(positions, dtype=torch.float).squeeze(1)
+
+    conditioning = torch.cat((positions, targets), dim=1)
 
     # print(patches.shape)
 
     # Define dataset
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    dataset = torch.utils.data.TensorDataset(patches, targets)
+    dataset = torch.utils.data.TensorDataset(patches, conditioning)
     loader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True, drop_last=True)
 
     # model = UNet(in_size=1, out_size=1, device=device)
@@ -435,19 +437,22 @@ if __name__ == '__main__':
 
     # training
     print("Start training..")
-    all_losses = model.train(loader, device, nepochs=args.epochs, denoising_steps=1_000)
+    all_losses = model.train(loader, device, nepochs=args.epochs, denoising_steps=100)
     
     os.makedirs('results/diffusion_training', exist_ok=True)
     model.save(f'results/diffusion_training/{args.output}')
     
     n_samples = 5
+    sf = np.random.uniform(0.4, 0.8, n_samples)
+    tx = np.random.uniform(0., 1., n_samples)
+    ty = np.random.uniform(0., 1., n_samples)
     x = np.random.uniform(0,2,n_samples)
     y = np.random.uniform(-1,1,n_samples,)
     z = np.random.uniform(-0.5,0.5,n_samples,)
 
-    r_targets = torch.tensor(np.stack((x, y, z)).T, dtype=torch.float32)
+    r_targets = torch.tensor(np.stack((sf, tx, ty, x, y, z)).T, dtype=torch.float32)
 
-    samples = model.sample(n_samples, r_targets, device, patch_size=patch_size, n_steps=1_000).detach().to('cpu').numpy()
+    samples = model.sample(n_samples, r_targets, device, patch_size=patch_size, n_steps=100).detach().to('cpu').numpy()
     print(samples.min(), samples.max())
 
     
