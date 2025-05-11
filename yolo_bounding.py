@@ -13,7 +13,7 @@ import torch.nn as nn
 from util import load_dataset, printd
 from torchvision.ops import generalized_box_iou_loss
 
-# from camera import Camera
+from camera import Camera
 
 
 USE_TENSOR = True
@@ -41,7 +41,7 @@ class YOLOBox(nn.Module):
     max_det = 1000  # maximum number of detections per image
     softmax_mult = 15.
 
-    def __init__(self, cam_config='misc/camera_calibration/calibration.yaml'):
+    def __init__(self, cam_config='camera_calibration.yaml'):
         super().__init__()
 
         # load model
