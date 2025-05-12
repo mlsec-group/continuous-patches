@@ -16,8 +16,13 @@ import rowan
 from pathlib import Path
 
 from yolo_bounding import YOLOBox
-from util import load_model
-from util import load_dataset
+from util import load_model, load_dataset
+
+from threading import Thread
+from collections import deque
+
+
+import time
 
 class CFSim():
     def __init__(self, model='frontnet', dataset_path="pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"):
@@ -40,93 +45,18 @@ class CFSim():
         # self.target_trajectory = target_trajectory
 
         # might be deleted later, the dataset is only loaded to get a suitable background image
-        self.dataset = self.load_dataset(dataset_path)
+        self.dataset = self.load_dataset(dataset_path, train=False) # we need to test on the test set
         base_img, gt = self.dataset.dataset.__getitem__(0)
         self.base_img = base_img#.squeeze(0).numpy()
 
         # patch stays random for now and inside the simulator for compatibility with current
         # optimize script
         self.patch = np.random.rand(10, 10, 1).astype(np.float32) * 255. # load one of the optimized FAPs instead!
-
-    # def load_frontnet_model(self, device, model_path="simulators/pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", config="160x32"):
-    #     """
-    #     From FAP repo
-    #     Loads a saved Frontnet model from the given path with the set configuration and moves it to CPU/GPU.
-    #     Parameters
-    #         ----------
-    #         path
-    #             The path to the stored Frontnet model
-    #         device
-    #             A PyTorch device (either CPU or GPU)
-    #         config
-    #             The architecture configuration of the Frontnet model. Must be one of ['160x32', '160x16', '80x32']
-    #     """
-    #     assert config in FrontnetModel.configs.keys(), 'config must be one of {}'.format(list(FrontnetModel.configs.keys()))
-        
-    #     # get correct architecture configuration
-    #     model_params = FrontnetModel.configs[config]
-    #     # initialize a random model with configuration
-    #     model = FrontnetModel(**model_params).to(device)
-        
-    #     # load the saved model 
-    #     try:
-    #         model.load_state_dict(torch.load(path, map_location=device)['model'])
-    #     except RuntimeError:
-    #         print("RuntimeError while trying to load the saved model!")
-    #         print("Seems like the model config does not match the saved model architecture.")
-    #         print("Please check if you're loading the right model for the chosen config!")
-
-    #     return model.eval()
     
     def load_yolo_model(self):
         model = YOLOBox()
         return model
         
-    # only needed during testing
-    # def load_dataset(self, path, batch_size = 32, shuffle = False, drop_last = True, num_workers = 1, train=True, train_set_size=0.9, IMRC=True):
-    #     # From FAP repo
-    #     # load images and labels from the stored dataset
-    #     path = Path(path)
-    #     [images, labels] = DataProcessor.ProcessTestData(path)
-
-    #     parent_dir = Path()
-    #     for part in path.parts:
-    #         parent_dir /= part
-    #         if part == 'flying_adversarial_patch':
-    #             break
-
-    #     if IMRC:
-    #         import pickle
-    #         with open(parent_dir / "misc/IMRC_images.pickle", "rb") as f:
-    #             imrc_data = pickle.load(f)
-
-    #         imrc_images = imrc_data['x']
-    #         imrc_labels = imrc_data['y']
-
-    #         images = np.concatenate([images, imrc_images])
-    #         labels = np.concatenate([labels, imrc_labels])
-
-        
-    #     # init RNG for loading the data always with the same key to
-    #     # ensure the same images end up in train and test set respectively
-    #     rng = np.random.default_rng(1749)
-
-    #     # split dataset into train and test set
-    #     indices = np.arange(len(images))
-    #     rng.shuffle(indices)
-    #     split_idx = int(len(images) * train_set_size)
-
-    #     train_set = Dataset(images[indices[:split_idx]], labels[indices[:split_idx]])
-    #     test_set = Dataset(images[indices[split_idx:]], labels[split_idx:])
-
-    #     # for quick and convinient access, create a torch DataLoader with the given parameters
-    #     data_params = {'batch_size': batch_size, 'shuffle': shuffle, 'drop_last':drop_last, 'num_workers': num_workers}
-    #     train_loader = data.DataLoader(train_set, **data_params)
-    #     test_loader = data.DataLoader(test_set, **data_params)
-
-    #     return train_loader, test_loader
-
-
     def _perspective_grid(self,
     coeffs: [float], 
     w: int, h: int, 
@@ -277,6 +207,43 @@ class CFSim():
         l2_distances = np.linalg.norm((pose - desired_pose), ord=2)#, axis=1)
         return l2_distances
     
+def SimulatorThread(Thread):
+    def __init__(self, sim_new_pose):
+        super().__init__()
+        self.simulator = sim_new_pose
+        self.drone_pose = deque(1)
+
+        self.all_poses = []
+
+        self.camera_images = deque(10)
+        self.current_image = None
+
+        self._stay_alive = True
+
+        self.dt = 0.1
+
+    def run(self):
+        while self._stay_alive:
+            if len(self.camera_images) > 0:
+                self.current_image = self.camera_images.popleft()
+            
+            if self.current_image is not None:
+                current_setpoint = self.simulator(self.current_image)[0]
+            
+            if self.drone_pose[0] != current_setpoint:
+                current_pose = self.drone_pose[0] + (current_setpoint * 0.1)
+                self.drone_pose.append(current_pose)
+
+            self.all_poses.append((time.time(), *self.drone_pose))
+            time.sleep(self.dt)
+
+    def update(self, image):
+        self.camera_images.append(image)
+
+    def close(self):
+        self._stay_alive = False
+        self.join()
+
 
 if __name__ == '__main__':
 
@@ -284,29 +251,7 @@ if __name__ == '__main__':
 
     model_type = 'frontnet'
 
-    # won't be necessary later
-    # sys.path.append('.')
-    # from util import bezier_curve
-    # control_points_bezier = np.array([[0, 0, 0.0], [1, 3, 0.4], [2, -1, 0.8], [3, 2, 1]])
-    # target_trajectory = np.array(bezier_curve(control_points_bezier, 20))
-
     cf_sim = CFSim(model_type, dataset_path)
-
-    # # test with single image
-    # base_img = cf_sim.base_img.unsqueeze(0).to(cf_sim.device)
-    # out_pytorch = torch.hstack(cf_sim.pose_estimator(base_img))
-    # print("Output frontnet: ", out_pytorch)
-    # new_pose = cf_sim.sim_new_pose(cf_sim.base_img)
-    # print("Output controller: ", new_pose)
-
-    # # test with batch
-    # print("Test with batch")
-    # base_imgs = cf_sim.base_img.repeat(2, 1, 1, 1).to(cf_sim.device)
-    # x, y, z, yaw = cf_sim.pose_estimator(base_imgs)
-    # out_pytorch = torch.hstack(cf_sim.pose_estimator(base_imgs))
-    # print("Output frontnet: ", out_pytorch)
-    # new_pose = cf_sim.sim_new_pose(base_imgs)
-    # print("Output controller: ", new_pose)
 
     patch = np.random.rand(3,3) * 255.
     base_img = cf_sim.base_img[0]
