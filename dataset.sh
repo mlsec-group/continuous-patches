@@ -5,4 +5,4 @@
 
 # source /home/hanfeld/.yolopatches/bin/activate
 # python src/attacks.py --file $1 --model $2
-apptainer run --nv container.sif python attacks.py --file $1 --model $2
+apptainer run --nv /home/piha/container_new.sif python attacks.py --file $1 --model $2
