@@ -4,26 +4,31 @@ import cv2
 import numpy as np
 
 
-sys.path.append('simulators/pulp-frontnet/PyTorch/Frontnet')
+# sys.path.append('simulators/pulp-frontnet/PyTorch/Frontnet')
 
-from Frontnet import FrontnetModel
-from DataProcessor import DataProcessor
-from Dataset import Dataset
+# from Frontnet import FrontnetModel
+# from DataProcessor import DataProcessor
+# from Dataset import Dataset
 from torch.utils import data
 
 import rowan
 
 from pathlib import Path
 
-from yolobox import YOLOBox
+from yolo_bounding import YOLOBox
+from util import load_model
+from util import load_dataset
 
 class CFSim():
-    def __init__(self, model='frontnet', dataset_path="simulators/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"):
+    def __init__(self, model='frontnet', dataset_path="pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = model
+
+        self.load_frontnet_model = load_model
+        self.load_dataset = load_dataset
         
         if self.model == 'frontnet':
-            self.pose_estimator = self.load_frontnet_model(self.device)
+            self.pose_estimator = self.load_frontnet_model(path='pulp-frontnet/PyTorch/Models/Frontnet160x32.pt', device=self.device, config='160x32')
         elif self.model == 'yolov5':
             self.pose_estimator = self.load_yolo_model()
         else:
@@ -35,7 +40,7 @@ class CFSim():
         # self.target_trajectory = target_trajectory
 
         # might be deleted later, the dataset is only loaded to get a suitable background image
-        self.dataset, _ = self.load_dataset(dataset_path)
+        self.dataset = self.load_dataset(dataset_path)
         base_img, gt = self.dataset.dataset.__getitem__(0)
         self.base_img = base_img#.squeeze(0).numpy()
 
@@ -43,83 +48,83 @@ class CFSim():
         # optimize script
         self.patch = np.random.rand(10, 10, 1).astype(np.float32) * 255. # load one of the optimized FAPs instead!
 
-    def load_frontnet_model(self, device, model_path="simulators/pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", config="160x32"):
-        """
-        From FAP repo
-        Loads a saved Frontnet model from the given path with the set configuration and moves it to CPU/GPU.
-        Parameters
-            ----------
-            path
-                The path to the stored Frontnet model
-            device
-                A PyTorch device (either CPU or GPU)
-            config
-                The architecture configuration of the Frontnet model. Must be one of ['160x32', '160x16', '80x32']
-        """
-        assert config in FrontnetModel.configs.keys(), 'config must be one of {}'.format(list(FrontnetModel.configs.keys()))
+    # def load_frontnet_model(self, device, model_path="simulators/pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", config="160x32"):
+    #     """
+    #     From FAP repo
+    #     Loads a saved Frontnet model from the given path with the set configuration and moves it to CPU/GPU.
+    #     Parameters
+    #         ----------
+    #         path
+    #             The path to the stored Frontnet model
+    #         device
+    #             A PyTorch device (either CPU or GPU)
+    #         config
+    #             The architecture configuration of the Frontnet model. Must be one of ['160x32', '160x16', '80x32']
+    #     """
+    #     assert config in FrontnetModel.configs.keys(), 'config must be one of {}'.format(list(FrontnetModel.configs.keys()))
         
-        # get correct architecture configuration
-        model_params = FrontnetModel.configs[config]
-        # initialize a random model with configuration
-        model = FrontnetModel(**model_params).to(device)
+    #     # get correct architecture configuration
+    #     model_params = FrontnetModel.configs[config]
+    #     # initialize a random model with configuration
+    #     model = FrontnetModel(**model_params).to(device)
         
-        # load the saved model 
-        try:
-            model.load_state_dict(torch.load(path, map_location=device)['model'])
-        except RuntimeError:
-            print("RuntimeError while trying to load the saved model!")
-            print("Seems like the model config does not match the saved model architecture.")
-            print("Please check if you're loading the right model for the chosen config!")
+    #     # load the saved model 
+    #     try:
+    #         model.load_state_dict(torch.load(path, map_location=device)['model'])
+    #     except RuntimeError:
+    #         print("RuntimeError while trying to load the saved model!")
+    #         print("Seems like the model config does not match the saved model architecture.")
+    #         print("Please check if you're loading the right model for the chosen config!")
 
-        return model.eval()
+    #     return model.eval()
     
     def load_yolo_model(self):
         model = YOLOBox()
         return model
         
     # only needed during testing
-    def load_dataset(self, path, batch_size = 32, shuffle = False, drop_last = True, num_workers = 1, train=True, train_set_size=0.9, IMRC=True):
-        # From FAP repo
-        # load images and labels from the stored dataset
-        path = Path(path)
-        [images, labels] = DataProcessor.ProcessTestData(path)
+    # def load_dataset(self, path, batch_size = 32, shuffle = False, drop_last = True, num_workers = 1, train=True, train_set_size=0.9, IMRC=True):
+    #     # From FAP repo
+    #     # load images and labels from the stored dataset
+    #     path = Path(path)
+    #     [images, labels] = DataProcessor.ProcessTestData(path)
 
-        parent_dir = Path()
-        for part in path.parts:
-            parent_dir /= part
-            if part == 'flying_adversarial_patch':
-                break
+    #     parent_dir = Path()
+    #     for part in path.parts:
+    #         parent_dir /= part
+    #         if part == 'flying_adversarial_patch':
+    #             break
 
-        if IMRC:
-            import pickle
-            with open(parent_dir / "misc/IMRC_images.pickle", "rb") as f:
-                imrc_data = pickle.load(f)
+    #     if IMRC:
+    #         import pickle
+    #         with open(parent_dir / "misc/IMRC_images.pickle", "rb") as f:
+    #             imrc_data = pickle.load(f)
 
-            imrc_images = imrc_data['x']
-            imrc_labels = imrc_data['y']
+    #         imrc_images = imrc_data['x']
+    #         imrc_labels = imrc_data['y']
 
-            images = np.concatenate([images, imrc_images])
-            labels = np.concatenate([labels, imrc_labels])
+    #         images = np.concatenate([images, imrc_images])
+    #         labels = np.concatenate([labels, imrc_labels])
 
         
-        # init RNG for loading the data always with the same key to
-        # ensure the same images end up in train and test set respectively
-        rng = np.random.default_rng(1749)
+    #     # init RNG for loading the data always with the same key to
+    #     # ensure the same images end up in train and test set respectively
+    #     rng = np.random.default_rng(1749)
 
-        # split dataset into train and test set
-        indices = np.arange(len(images))
-        rng.shuffle(indices)
-        split_idx = int(len(images) * train_set_size)
+    #     # split dataset into train and test set
+    #     indices = np.arange(len(images))
+    #     rng.shuffle(indices)
+    #     split_idx = int(len(images) * train_set_size)
 
-        train_set = Dataset(images[indices[:split_idx]], labels[indices[:split_idx]])
-        test_set = Dataset(images[indices[split_idx:]], labels[split_idx:])
+    #     train_set = Dataset(images[indices[:split_idx]], labels[indices[:split_idx]])
+    #     test_set = Dataset(images[indices[split_idx:]], labels[split_idx:])
 
-        # for quick and convinient access, create a torch DataLoader with the given parameters
-        data_params = {'batch_size': batch_size, 'shuffle': shuffle, 'drop_last':drop_last, 'num_workers': num_workers}
-        train_loader = data.DataLoader(train_set, **data_params)
-        test_loader = data.DataLoader(test_set, **data_params)
+    #     # for quick and convinient access, create a torch DataLoader with the given parameters
+    #     data_params = {'batch_size': batch_size, 'shuffle': shuffle, 'drop_last':drop_last, 'num_workers': num_workers}
+    #     train_loader = data.DataLoader(train_set, **data_params)
+    #     test_loader = data.DataLoader(test_set, **data_params)
 
-        return train_loader, test_loader
+    #     return train_loader, test_loader
 
 
     def _perspective_grid(self,
@@ -275,11 +280,9 @@ class CFSim():
 
 if __name__ == '__main__':
 
-    #model_path = "simulators/pulp-frontnet/PyTorch/Models/Frontnet160x32.pt"
-    #dataset_path = "simulators/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"
-    dataset_path = "/home/hanfeld/flying_adversarial_patch/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"
+    dataset_path = "pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"
 
-    model_type = 'yolov5'
+    model_type = 'frontnet'
 
     # won't be necessary later
     # sys.path.append('.')
@@ -327,21 +330,21 @@ if __name__ == '__main__':
     plt.savefig("patched_image.png")
 
 
-    predicted_pose = cf_sim.pose_estimator(mod_img)
+    predicted_pose = cf_sim.sim_new_pose(mod_img)
     print(predicted_pose)
 
     # sanity check
     # project pose back to point in image frame
     # print(cf_sim.pose_estimator.cam.camera_extrinsic, cf_sim.pose_estimator.cam.camera_extrinsic.shape)
-    homogeneous_coords = np.hstack((predicted_pose.cpu().numpy()[0, :3], 1.))
-    # print(homogeneous_coords, homogeneous_coords.shape)
-    point = cf_sim.pose_estimator.cam.point_from_xyz(homogeneous_coords)
-    print(point)
+    # homogeneous_coords = np.hstack((predicted_pose[0, :3], 1.))
+    # # print(homogeneous_coords, homogeneous_coords.shape)
+    # point = cf_sim.pose_estimator.cam.point_from_xyz(homogeneous_coords)
+    # print(point)
 
-    # plot point in mod_img
-    plt.imshow(mod_img.squeeze(0).squeeze(0).cpu().numpy(), cmap='gray')
-    plt.scatter(point[0], point[1], color='red')
-    plt.savefig("pred_pose.png")
+    # # plot point in mod_img
+    # plt.imshow(mod_img.squeeze(0).squeeze(0).cpu().numpy(), cmap='gray')
+    # plt.scatter(point[0], point[1], color='red')
+    # plt.savefig("pred_pose.png")
 
     # out_pytorch = torch.hstack(cf_sim.pose_estimator(mod_img.unsqueeze(0).unsqueeze(0)))
     # print("Output frontnet: ", out_pytorch)
