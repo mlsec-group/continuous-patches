@@ -1,18 +1,26 @@
+# import yaml
+# import subprocess 
+# import numpy as np
+# from pathlib import Path
+# import os
+# import shlex
+# import pickle
+# import argparse
+
+# import torch
+# from patch_placement import place_patch
+# from util import load_model, load_dataset
+
+# from yolo_bounding import YOLOBox
+
 import yaml
-import subprocess 
+import subprocess
 import numpy as np
 from pathlib import Path
 import os
 import shlex
 import pickle
 import argparse
-
-import torch
-from patch_placement import place_patch
-from util import load_model, load_dataset
-
-from yolo_bounding import YOLOBox
-
 
 def gen_T(coeffs):
     T = np.zeros((2,3))
@@ -110,8 +118,9 @@ def train(idx_start=0, idx_end=100, model='frontnet'):
         with open(path / 'settings.yaml', 'w') as f:
             yaml.dump(settings, f)
 
-        # command = shlex.split(f"sbatch dataset.sh {str(path / 'settings.yaml')} {model}")
-        command = shlex.split(f"python attacks.py --file {str(path / 'settings.yaml')} --model {model}")
+        command = shlex.split(f"sbatch dataset.sh {str(path / 'settings.yaml')} {model}")
+        print(command)
+        # command = shlex.split(f"python attacks.py --file {str(path / 'settings.yaml')} --model {model}")
         subprocess.run(command)
         del settings
 
