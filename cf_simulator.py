@@ -212,7 +212,7 @@ class SimulatorThread(Thread):
         super().__init__()
         self.simulator = sim_new_pose
         self.drone_pose = deque(maxlen=1)
-        self.drone_pose.append(np.array([0., 0., 0., 0.])) # x, y, z, yaw
+        self.drone_pose.append(np.array([0., 0., 1., 0.])) # x, y, z, yaw
 
         self.all_poses = []
 

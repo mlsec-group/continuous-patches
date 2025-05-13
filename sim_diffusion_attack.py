@@ -14,7 +14,7 @@ from threading import Thread
 from collections import deque
 
 class DiffusionThread(Thread):
-    def __init__(self, diffusion_model_path):
+    def __init__(self, diffusion_model_path, target_queue):
         super().__init__()
         # self.camera_image_queue = camera_image_queue
         # self.project_patch = project_patch
@@ -25,10 +25,15 @@ class DiffusionThread(Thread):
 
         self.patch_queue = deque(maxlen=1)
 
+        self.target_queue = target_queue
+
         self._stay_alive = True
 
     def run(self):
         while self._stay_alive:
+            if not self.target_queue:
+                time.sleep(0.01)
+                continue
             sf = np.random.uniform(0.4,0.8,1)
             tx = np.random.uniform(0.,1.,1)
             ty = np.random.uniform(0.,1.,1)
@@ -36,9 +41,11 @@ class DiffusionThread(Thread):
             # x = np.random.uniform(0,2,1)
             # y = np.random.uniform(-1,1,1,)
             # z = np.random.uniform(-0.5,0.5,1,)
-            x = np.array([1.])
-            y = np.array([0.])
-            z = np.array([0.])
+            # x = np.array([1.])
+            # y = np.array([0.])
+            # z = np.array([0.])
+
+            x, y, z = self.target_queue[0]
 
             r_targets = torch.tensor(np.stack((sf, tx, ty, x, y, z)).T, dtype=torch.float32)
 
@@ -93,14 +100,9 @@ class ManipulatorThread(Thread):
             if self.camera_image_queue and self.patch_queue:
                 camera_image = self.camera_image_queue[0]
                 patch, sf, scaled_tx, scaled_ty = self.patch_queue[0]
-            # if not self.camera_image_queue.empty() and not self.patch_queue.empty():
-            #     camera_image = self.camera_image_queue.popleft()
-            #     patch, sf, scaled_tx, scaled_ty = self.patch_queue.popleft()
-
-                # print(sf, scaled_tx, scaled_ty)
 
                 T = np.zeros((3, 3))
-                T[0, 0] = sf[0] # shape is (1,) TODO
+                T[0, 0] = sf[0] # shape is (1,) TODO!
                 T[1, 1] = sf[0]
                 T[0, 2] = scaled_tx[0]
                 T[1, 2] = scaled_ty[0]
@@ -119,6 +121,59 @@ class ManipulatorThread(Thread):
         # self.join()
 
 
+class AttackerPolicyThread(Thread):
+    def __init__(self, drone_pose, target_trajectory):
+        super().__init__()
+        self.drone_pose = drone_pose
+        self.target_trajectory = target_trajectory
+        self.current_target = deque(maxlen=1)
+        self.index_reached = 0
+        self._stay_alive = True
+
+    def run(self):
+        while self._stay_alive:
+            if self.index_reached < len(self.target_trajectory):
+                target_position = self.target_trajectory[self.index_reached]
+
+                # check if the drone pose is close to the target
+                if np.linalg.norm(self.drone_pose - target_position) < 0.1:
+                    self.index_reached += 1
+                    print("Target reached: ", target_position)
+                    target_position = self.target_trajectory[self.index_reached]
+                    print("Moving towards: ", target_position)
+                
+                # to keep x constant -> target x should be 1.
+                # to lower x -> target x should be > 1.
+                # to increase x -> target x should be < 1.
+                # to move left -> target y should be > 0.
+                # to move right -> target y should be < 0.
+                # to move up -> target z should be > 0.
+                # to move down -> target z should be < 0.
+
+                change_necessary = target_position - self.drone_pose[0]
+                print("Change necessary: ", change_necessary)
+
+                # calculate target x based on change_necessary[0]
+                target_x = 1. - change_necessary[0]
+                # calculate target y based on change_necessary[1]
+                target_y = change_necessary[1]
+                # calculate target z based on change_necessary[2]
+                target_z = change_necessary[2]
+
+                print("Target: ", target_x, target_y, target_z)
+
+                self.current_target.append(([target_x], [target_y], [target_z]))
+                time.sleep(1.)
+
+            else:
+                print("All targets reached")
+                self._stay_alive = False
+                break
+
+    def close(self):
+        self._stay_alive = False
+        self.join()
+
 if __name__ == "__main__":
 
     # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -132,19 +187,41 @@ if __name__ == "__main__":
     model_type = 'frontnet'
     cf_sim = CFSim(model_type, dataset_path)
 
-    base_img = cf_sim.base_img[0]
-    print(base_img.shape, base_img.min(), base_img.max())
+    camera_thread = CameraThread(cf_sim.dataset)
+    # camera_thread.start()
 
-    diffusion_thread = DiffusionThread(model_path)
+    sim_thread = SimulatorThread(cf_sim.sim_new_pose, camera_thread.camera_image_queue)
+    # sim_thread.start()
+
+
+    target_trajectory = np.array([[0.0, 0.25, 1., 0.0],
+                                  [0.0, 0.50, 1., 0.0],
+                                  [0.0, 0.75, 1., 0.0],
+                                  [0.0, 1.00, 1., 0.0],
+                                  [0.0, 0.75, 1., 0.0],
+                                  [0.0, 0.50, 1., 0.0],
+                                  [0.0, 0.25, 1., 0.0],
+                                  [0.0, 0.00, 1., 0.0],
+                                  [0.0, -0.25, 1., 0.0],
+                                  [0.0, -0.50, 1., 0.0],
+                                  [0.0, -0.75, 1., 0.0],
+                                  [0.0, -1.00, 1., 0.0],
+                                  [0.0, -0.75, 1., 0.0],
+                                  [0.0, -0.50, 1., 0.0],
+                                  [0.0, -0.25, 1., 0.0],
+                                  [0.0, 0.00, 1., 0.0]])
+
+    attacker_policy = AttackerPolicyThread(sim_thread.drone_pose, target_trajectory)
+    attacker_policy.start()
+
+
+    diffusion_thread = DiffusionThread(model_path, attacker_policy.current_target)
     diffusion_thread.start()
 
     while not diffusion_thread.patch_queue:
         time.sleep(0.1)
 
-    camera_thread = CameraThread(cf_sim.dataset)
     camera_thread.start()
-
-    sim_thread = SimulatorThread(cf_sim.sim_new_pose, camera_thread.camera_image_queue)
     sim_thread.start()
 
     manipulator_thread = ManipulatorThread(camera_thread.camera_image_queue, diffusion_thread.patch_queue, cf_sim.project_patch)
@@ -161,6 +238,7 @@ if __name__ == "__main__":
     camera_thread.close()
     manipulator_thread.close()
     diffusion_thread.close()
+    attacker_policy.close()
 
     # print(sim_thread.all_poses)
 
@@ -173,7 +251,6 @@ if __name__ == "__main__":
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
     # ax.scatter(all_poses[:, 1], all_poses[:, 2], all_poses[:, 3])
-    # as trajectory
     ax.plot(all_poses[:, 1], all_poses[:, 2], all_poses[:, 3])
     ax.set_xlabel('Y')
     ax.set_ylabel('X')
