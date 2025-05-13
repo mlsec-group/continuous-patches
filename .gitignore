@@ -177,3 +177,5 @@ results/
 *.pickle
 *.pt
 *.png
+
+.patch_env

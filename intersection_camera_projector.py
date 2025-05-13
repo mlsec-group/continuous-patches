@@ -1,6 +1,3 @@
-from turtle import back
-from fastapi import background
-from httpx import patch
 import numpy as np
 from threading import Thread
 import cv2
@@ -11,13 +8,31 @@ import yaml
 
 import rowan
 
-from util import opencv2quat, project_patch, scale_tx_ty, construct_T
+from util import scale_tx_ty
 
 # from sympy import Line3D, Plane, evalf
 
 from matplotlib import pyplot as plt
 
 import time
+
+def opencv2quat(rvec):
+    angle = np.linalg.norm(rvec)
+    if angle == 0:
+        q = np.array([1,0,0,0])
+    else:
+        axis = rvec.flatten() / angle
+        q = rowan.from_axis_angle(axis, angle)
+    return q
+
+def construct_T(sf, tx, ty):
+    T = np.zeros((3,3))
+    T[0,0] = sf
+    T[1,1] = sf
+    T[0,2] = tx
+    T[1,2] = ty
+    T[2,2] = 1
+    return T
 
 def get_bbox(T, patch_size=80, img_size=(96, 160)):
     # print("Transformation matrix for cf img space:", T)
@@ -294,6 +309,9 @@ def bb_opt2transformation(drone_pose, cf_intrinsic, cf_extrinsic, cf_distortion,
     patch_space_world_lr = [2., np.max(intersection_lr[1], projector_matrix[3, 1]), np.max(intersection_lr[2], projector_matrix[3, 2])]
 
     
+    patch_space_world = np.array([patch_space_world_ul, patch_space_world_ur, patch_space_world_ll, patch_space_world_lr])
+    print(patch_space_world)
+
 
     # T = corners2transformation(intersection_ul, intersection_ur, intersection_ll, intersection_lr, projector_matrix)
     
@@ -327,7 +345,7 @@ def bb_opt2transformation(drone_pose, cf_intrinsic, cf_extrinsic, cf_distortion,
 
     # T = corners2transformation(intersection_ul, intersection_ur, intersection_ll, intersection_lr, self.projector_matrix)
     # T = np.random.rand(3,3)
-    return T
+    # return T
 
 
     # def close(self):
@@ -343,7 +361,7 @@ if __name__ == "__main__":
 
     drone_pose = np.array([0., 0., 0., 1., 0., 0., 0.])
 
-    with open('data/camera_calibration.yaml') as f:
+    with open('camera_calibration.yaml') as f:
             camera_config = yaml.load(f, Loader=yaml.FullLoader)
 
     cf_intrinsic = np.array(camera_config['camera_matrix'], dtype=np.float32)
