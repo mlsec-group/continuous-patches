@@ -13,6 +13,11 @@ import cv2
 from threading import Thread
 from collections import deque
 
+import os
+
+
+from matplotlib import pyplot as plt
+
 class DiffusionThread(Thread):
     def __init__(self, diffusion_model_path, target_queue):
         super().__init__()
@@ -76,10 +81,11 @@ class CameraThread(Thread):
             # rnd_idx = np.random.randint(0, len(self.dataset))
             # new_img, _ = self.dataset.dataset.__getitem__(rnd_idx)
 
+            # TODO: sticking to first image for now
             new_img, _ = self.dataset.dataset.__getitem__(i)
-            i += 1
-            if i >= len(self.dataset):
-                i = 0
+            # i += 1
+            # if i >= len(self.dataset):
+            #     i = 0
             self.camera_image_queue.append(new_img[0])
             time.sleep(0.1)
 
@@ -96,6 +102,7 @@ class ManipulatorThread(Thread):
         self._stay_alive = True
 
     def run(self):
+        i = 0
         while self._stay_alive:
             if self.camera_image_queue and self.patch_queue:
                 camera_image = self.camera_image_queue[0]
@@ -111,10 +118,14 @@ class ManipulatorThread(Thread):
                 # print(mod_img.shape, mod_img.min(), mod_img.max())
 
                 self.camera_image_queue.appendleft(mod_img)
+                
+                plt.imshow(mod_img.squeeze(0).squeeze(0).cpu().numpy(), cmap='gray')
+                plt.savefig(f"results/simulation/patched_image_{i:04d}.png")
+                i += 1
                 #visualize with cv2
                 # cv2.imshow('modified image', mod_img[0, 0].cpu().numpy())
                 # cv2.waitKey(0)
-                time.sleep(1.)
+                time.sleep(0.1)
 
     def close(self):
         self._stay_alive = False
@@ -151,7 +162,7 @@ class AttackerPolicyThread(Thread):
                 # to move down -> target z should be < 0.
 
                 change_necessary = target_position - self.drone_pose[0]
-                print("Change necessary: ", change_necessary)
+                # print("Change necessary: ", change_necessary)
 
                 # calculate target x based on change_necessary[0]
                 target_x = 1. - change_necessary[0]
@@ -160,10 +171,10 @@ class AttackerPolicyThread(Thread):
                 # calculate target z based on change_necessary[2]
                 target_z = change_necessary[2]
 
-                print("Target: ", target_x, target_y, target_z)
+                # print("Target: ", target_x, target_y, target_z)
 
                 self.current_target.append(([target_x], [target_y], [target_z]))
-                time.sleep(1.)
+                time.sleep(0.1)
 
             else:
                 print("All targets reached")
@@ -179,6 +190,8 @@ if __name__ == "__main__":
     # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     # diffusion_model = DiffusionModel(device, lr=1e-5)
     # diffusion_model.load('results/diffusion_training/trained_model.pth')
+
+    os.makedirs('results/simulation', exist_ok=True)
 
     model_path = 'results/diffusion_training/trained_model.pth'
 
