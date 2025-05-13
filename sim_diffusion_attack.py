@@ -47,6 +47,7 @@ class DiffusionThread(Thread):
 
             scaled_tx, scaled_ty = scale_tx_ty(sf, tx, ty, 80)
             self.patch_queue.append((patch, sf, scaled_tx, scaled_ty))
+            print("Bing new patch!")
 
            
             # time.sleep(0.01)
@@ -96,20 +97,22 @@ class ManipulatorThread(Thread):
             #     camera_image = self.camera_image_queue.popleft()
             #     patch, sf, scaled_tx, scaled_ty = self.patch_queue.popleft()
 
+                # print(sf, scaled_tx, scaled_ty)
+
                 T = np.zeros((3, 3))
-                T[0, 0] = sf
-                T[1, 1] = sf
-                T[0, 2] = scaled_tx
-                T[1, 2] = scaled_ty
+                T[0, 0] = sf[0] # shape is (1,) TODO
+                T[1, 1] = sf[0]
+                T[0, 2] = scaled_tx[0]
+                T[1, 2] = scaled_ty[0]
                 T[2, 2] = 1
                 mod_img = self.project_patch(patch, T, camera_image)
-                print(mod_img.shape, mod_img.min(), mod_img.max())
+                # print(mod_img.shape, mod_img.min(), mod_img.max())
 
                 self.camera_image_queue.appendleft(mod_img)
                 #visualize with cv2
                 # cv2.imshow('modified image', mod_img[0, 0].cpu().numpy())
                 # cv2.waitKey(0)
-                time.sleep(0.01)
+                time.sleep(1.)
 
     def close(self):
         self._stay_alive = False
@@ -132,24 +135,31 @@ if __name__ == "__main__":
     base_img = cf_sim.base_img[0]
     print(base_img.shape, base_img.min(), base_img.max())
 
+    diffusion_thread = DiffusionThread(model_path)
+    diffusion_thread.start()
+
+    while not diffusion_thread.patch_queue:
+        time.sleep(0.1)
+
     camera_thread = CameraThread(cf_sim.dataset)
     camera_thread.start()
 
     sim_thread = SimulatorThread(cf_sim.sim_new_pose, camera_thread.camera_image_queue)
     sim_thread.start()
 
-    diffusion_thread = DiffusionThread(model_path)
-    diffusion_thread.start()
+    manipulator_thread = ManipulatorThread(camera_thread.camera_image_queue, diffusion_thread.patch_queue, cf_sim.project_patch)
+    manipulator_thread.start()
 
     time_start = time.time()
 
-    while time.time() - time_start < 5:
+    while time.time() - time_start < 20:
         # wait for 20 seconds
         time.sleep(0.1)
 
     print("Stopping threads...")
     sim_thread.close()
     camera_thread.close()
+    manipulator_thread.close()
     diffusion_thread.close()
 
     # print(sim_thread.all_poses)
