@@ -8,7 +8,12 @@ import time
 
 from util import scale_tx_ty
 
-def DiffusionThread(Thread):
+import cv2
+
+from threading import Thread
+from collections import deque
+
+class DiffusionThread(Thread):
     def __init__(self, diffusion_model_path):
         super().__init__()
         # self.camera_image_queue = camera_image_queue
@@ -18,15 +23,15 @@ def DiffusionThread(Thread):
         self.diffusion_model = DiffusionModel(self.device, lr=1e-5)
         self.diffusion_model.load(diffusion_model_path)
 
-        self.patch_queue = deque(10)
+        self.patch_queue = deque(maxlen=1)
 
         self._stay_alive = True
 
     def run(self):
         while self._stay_alive:
             if not self.camera_image_queue.empty():
-                camera_image = self.camera_image_queue.popleft()
-                print(camera_image.shape, camera_image.min(), camera_image.max())
+                # camera_image = self.camera_image_queue.popleft()
+                # print(camera_image.shape, camera_image.min(), camera_image.max())
 
                 sf = np.random.uniform(0.4,0.8,n_samples)
                 tx = np.random.uniform(0.,1.,n_samples)
@@ -61,17 +66,23 @@ def DiffusionThread(Thread):
         self._stay_alive = False
         self.join()
 
-def CameraThread(Thread):
-    def __init__(self, camera_image_queue, dataset):
+class CameraThread(Thread):
+    def __init__(self, dataset):
         super().__init__()
-        self.camera_image_queue = camera_image_queue
+        self.camera_image_queue = deque(maxlen=1)
         self.dataset = dataset
         self._stay_alive = True
 
     def run(self):
+        i = 0
         while self._stay_alive:
-            rnd_idx = np.random.randint(0, len(self.dataset))
-            new_img, _ self.dataset.__getitem__(rand_idx)
+            # rnd_idx = np.random.randint(0, len(self.dataset))
+            # new_img, _ = self.dataset.dataset.__getitem__(rnd_idx)
+
+            new_img, _ = self.dataset.dataset.__getitem__(i)
+            i += 1
+            if i >= len(self.dataset):
+                i = 0
             self.camera_image_queue.append(new_img[0])
             time.sleep(0.1)
 
@@ -79,7 +90,7 @@ def CameraThread(Thread):
         self._stay_alive = False
         self.join()    
 
-def ManipulatorThread(Thread):
+class ManipulatorThread(Thread):
     def __init__(self, camera_image_queue, patch_queue, project_patch):
         super().__init__()
         self.camera_image_queue = camera_image_queue
@@ -89,9 +100,12 @@ def ManipulatorThread(Thread):
 
     def run(self):
         while self._stay_alive:
-            if not self.camera_image_queue.empty() and not self.patch_queue.empty():
-                camera_image = self.camera_image_queue.popleft()
-                patch, sf, scaled_tx, scaled_ty = self.patch_queue.popleft()
+            if self.camera_image_queue and self.patch_queue:
+                camera_image = self.camera_image_queue[0]
+                patch, sf, scaled_tx, scaled_ty = self.patch_queue[0]
+            # if not self.camera_image_queue.empty() and not self.patch_queue.empty():
+            #     camera_image = self.camera_image_queue.popleft()
+            #     patch, sf, scaled_tx, scaled_ty = self.patch_queue.popleft()
 
                 T = np.zeros((3, 3))
                 T[0, 0] = sf
@@ -102,12 +116,15 @@ def ManipulatorThread(Thread):
                 mod_img = self.project_patch(patch, T, camera_image)
                 print(mod_img.shape, mod_img.min(), mod_img.max())
 
-                self.camera_image_queue.append(mod_img)
+                self.camera_image_queue.appendleft(mod_img)
+                #visualize with cv2
+                # cv2.imshow('modified image', mod_img[0, 0].cpu().numpy())
+                # cv2.waitKey(0)
                 time.sleep(0.01)
 
     def close(self):
         self._stay_alive = False
-        self.join()
+        # self.join()
 
 
 if __name__ == "__main__":
@@ -126,7 +143,40 @@ if __name__ == "__main__":
     base_img = cf_sim.base_img[0]
     print(base_img.shape, base_img.min(), base_img.max())
 
-    # sim_thread = SimulatorThread(cf_sim, diffusion_model, device)
+    camera_thread = CameraThread(cf_sim.dataset)
+    camera_thread.start()
+
+    sim_thread = SimulatorThread(cf_sim.sim_new_pose, camera_thread.camera_image_queue)
+    sim_thread.start()
+
+    time_start = time.time()
+
+    while time.time() - time_start < 5:
+        # wait for 20 seconds
+        time.sleep(0.1)
+
+    sim_thread.close()
+    camera_thread.close()
+
+    # print(sim_thread.all_poses)
+
+    all_poses = np.array(sim_thread.all_poses)
+    # print(all_poses.shape)
+
+    # plot 3d positions stored in all_poses (consists of (timestamp, pose))  with matplotlib
+    from mpl_toolkits.mplot3d import Axes3D
+    import matplotlib.pyplot as plt
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    # ax.scatter(all_poses[:, 1], all_poses[:, 2], all_poses[:, 3])
+    # as trajectory
+    ax.plot(all_poses[:, 1], all_poses[:, 2], all_poses[:, 3])
+    ax.set_xlabel('Y')
+    ax.set_ylabel('X')
+    ax.set_zlabel('Z')
+    fig.savefig('3d_positions.png')
+
+
     # sim_thread.start()
 
     # sim_thread.update(cf_sim.base_img[0])

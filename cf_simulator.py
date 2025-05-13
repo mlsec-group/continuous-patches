@@ -45,7 +45,7 @@ class CFSim():
         # self.target_trajectory = target_trajectory
 
         # might be deleted later, the dataset is only loaded to get a suitable background image
-        self.dataset = self.load_dataset(dataset_path, train=False) # we need to test on the test set
+        self.dataset = self.load_dataset(dataset_path, train=False, shuffle=False) # we need to test on the test set
         base_img, gt = self.dataset.dataset.__getitem__(0)
         self.base_img = base_img#.squeeze(0).numpy()
 
@@ -158,7 +158,7 @@ class CFSim():
 
         predicted_pose = predicted_pose.detach().cpu().numpy()
 
-        print("predicted pose", predicted_pose, predicted_pose.shape)
+        # print("predicted pose", predicted_pose, predicted_pose.shape)
         
         # calculate controller output
         new_setpoint = self._controller_setpoint(predicted_pose)
@@ -207,15 +207,17 @@ class CFSim():
         l2_distances = np.linalg.norm((pose - desired_pose), ord=2)#, axis=1)
         return l2_distances
     
-def SimulatorThread(Thread):
-    def __init__(self, sim_new_pose):
+class SimulatorThread(Thread):
+    def __init__(self, sim_new_pose, camera_images):
         super().__init__()
         self.simulator = sim_new_pose
-        self.drone_pose = deque(1)
+        self.drone_pose = deque(maxlen=1)
+        self.drone_pose.append(np.array([0., 0., 0., 0.])) # x, y, z, yaw
 
         self.all_poses = []
 
-        self.camera_images = deque(10)
+        # self.camera_images = deque(maxlen=1)
+        self.camera_images = camera_images
         self.current_image = None
 
         self._stay_alive = True
@@ -224,17 +226,19 @@ def SimulatorThread(Thread):
 
     def run(self):
         while self._stay_alive:
-            if len(self.camera_images) > 0:
-                self.current_image = self.camera_images.popleft()
+            if self.camera_images:
+                # self.current_image = self.camera_images.popleft()
             
-            if self.current_image is not None:
-                current_setpoint = self.simulator(self.current_image)[0]
-            
-            if self.drone_pose[0] != current_setpoint:
-                current_pose = self.drone_pose[0] + (current_setpoint * 0.1)
+            # if self.current_image is not None:
+                current_setpoint = self.simulator(self.camera_images[0])[0]
+                print("current setpoint:", current_setpoint)
+
+            if self.drone_pose and not np.allclose(self.drone_pose[0], current_setpoint):
+                current_pose = self.drone_pose[0] + ((current_setpoint- self.drone_pose[0]) * 0.1)
+                print("current pose after added setpoint: ", current_pose)
                 self.drone_pose.append(current_pose)
 
-            self.all_poses.append((time.time(), *self.drone_pose))
+            self.all_poses.append([time.time(), *self.drone_pose[0].tolist()])
             time.sleep(self.dt)
 
     def update(self, image):
@@ -242,7 +246,7 @@ def SimulatorThread(Thread):
 
     def close(self):
         self._stay_alive = False
-        self.join()
+        # self.join()
 
 
 if __name__ == '__main__':
