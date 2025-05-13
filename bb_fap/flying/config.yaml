@@ -1,0 +1,5 @@
+mocap:
+  host_name: '141.23.110.143'
+  type: 'optitrack'
+  rigid_body_name: 'cf21'
+uri: 'radio://0/80/2M/E7E7E7E712'
