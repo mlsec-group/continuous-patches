@@ -1,6 +1,0 @@
-[submodule "simulators/pulp-frontnet"]
-	path = simulators/pulp-frontnet
-	url = git@github.com:idsia-robotics/pulp-frontnet.git
-[submodule "BayesianOptimization"]
-	path = BayesianOptimization
-	url = git@github.com:bayesian-optimization/BayesianOptimization.git
