@@ -29,38 +29,27 @@ class DiffusionThread(Thread):
 
     def run(self):
         while self._stay_alive:
-            if not self.camera_image_queue.empty():
-                # camera_image = self.camera_image_queue.popleft()
-                # print(camera_image.shape, camera_image.min(), camera_image.max())
+            sf = np.random.uniform(0.4,0.8,1)
+            tx = np.random.uniform(0.,1.,1)
+            ty = np.random.uniform(0.,1.,1)
+            #TODO: generate target based on target trajectory
+            # x = np.random.uniform(0,2,1)
+            # y = np.random.uniform(-1,1,1,)
+            # z = np.random.uniform(-0.5,0.5,1,)
+            x = np.array([1.])
+            y = np.array([0.])
+            z = np.array([0.])
 
-                sf = np.random.uniform(0.4,0.8,n_samples)
-                tx = np.random.uniform(0.,1.,n_samples)
-                ty = np.random.uniform(0.,1.,n_samples)
-                #TODO: generate target based on target trajectory
-                x = np.random.uniform(0,2,n_samples)
-                y = np.random.uniform(-1,1,n_samples,)
-                z = np.random.uniform(-0.5,0.5,n_samples,)
+            r_targets = torch.tensor(np.stack((sf, tx, ty, x, y, z)).T, dtype=torch.float32)
 
-                r_targets = torch.tensor(np.stack((sf, tx, ty, x, y, z)).T, dtype=torch.float32)
+            samples = self.diffusion_model.sample(1, r_targets, self.device, patch_size=[80,80], n_steps=1_000).detach().to('cpu').numpy()
+            patch = samples[0, 0] * 255.
 
-                samples = diffusion_model.sample(n_samples, r_targets, device, patch_size=[80,80], n_steps=1_000).detach().to('cpu').numpy()
-                patch = samples[0, 0] * 255.
+            scaled_tx, scaled_ty = scale_tx_ty(sf, tx, ty, 80)
+            self.patch_queue.append((patch, sf, scaled_tx, scaled_ty))
 
-                scaled_tx, scaled_ty = scale_tx_ty(sf, tx, ty, 80)
-                self.patch_queue.append((patch, sf, scaled_tx, scaled_ty))
-
-                # T = np.zeros((3, 3))
-                # T[0, 0] = sf
-                # T[1, 1] = sf
-                # T[0, 2] = scaled_tx
-                # T[1, 2] = scaled_ty
-                # T[2, 2] = 1
-
-                # mod_img = self.project_patch(patch, T, camera_image)
-                # print(mod_img.shape, mod_img.min(), mod_img.max())
-
-                # self.camera_image_queue.append(mod_img)
-                # time.sleep(0.01)
+           
+            # time.sleep(0.01)
 
     def close(self):
         self._stay_alive = False
@@ -149,14 +138,19 @@ if __name__ == "__main__":
     sim_thread = SimulatorThread(cf_sim.sim_new_pose, camera_thread.camera_image_queue)
     sim_thread.start()
 
+    diffusion_thread = DiffusionThread(model_path)
+    diffusion_thread.start()
+
     time_start = time.time()
 
     while time.time() - time_start < 5:
         # wait for 20 seconds
         time.sleep(0.1)
 
+    print("Stopping threads...")
     sim_thread.close()
     camera_thread.close()
+    diffusion_thread.close()
 
     # print(sim_thread.all_poses)
 

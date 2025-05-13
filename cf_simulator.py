@@ -231,11 +231,11 @@ class SimulatorThread(Thread):
             
             # if self.current_image is not None:
                 current_setpoint = self.simulator(self.camera_images[0])[0]
-                print("current setpoint:", current_setpoint)
+                # print("current setpoint:", current_setpoint)
 
             if self.drone_pose and not np.allclose(self.drone_pose[0], current_setpoint):
                 current_pose = self.drone_pose[0] + ((current_setpoint- self.drone_pose[0]) * 0.1)
-                print("current pose after added setpoint: ", current_pose)
+                # print("current pose after added setpoint: ", current_pose)
                 self.drone_pose.append(current_pose)
 
             self.all_poses.append([time.time(), *self.drone_pose[0].tolist()])
