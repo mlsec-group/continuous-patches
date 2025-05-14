@@ -231,6 +231,7 @@ class SimulatorThread(Thread):
     def run(self):
         i = 0
         while self._stay_alive:
+            self.all_poses.append([time.time(), *self.drone_pose[0].tolist()])
             if self.camera_images:
                 # self.current_image = self.camera_images.popleft()
             
@@ -242,12 +243,7 @@ class SimulatorThread(Thread):
 
 
                 print(self.camera_images[0].shape)
-                plt.suptitle(prediction_relative[0, :3])
-                plt.imshow(self.camera_images[0], cmap='gray')
-                plt.scatter(point[0], point[1], color='red')
-                plt.savefig(f"results/simulation/patched_image_{i:04d}.png")
-                plt.close()
-                i += 1
+
 
                 # print("current setpoint:", current_setpoint)
 
@@ -258,6 +254,35 @@ class SimulatorThread(Thread):
 
 
             self.all_poses.append([time.time(), *self.drone_pose[0].tolist()])
+
+            if self.camera_images and self.drone_pose:
+                fig = plt.figure(figsize=(10, 5))
+
+                # Left subplot: Image with scattered point
+                ax1 = fig.add_subplot(1, 2, 1)
+                ax1.set_title(f"Frontnet Prediction: {prediction_relative[0, :3]}")
+                ax1.imshow(self.camera_images[0], cmap='gray')
+                ax1.scatter(point[0], point[1], color='red')
+
+                # Right subplot: Drone position in 3D
+                ax2 = fig.add_subplot(1, 2, 2, projection='3d')
+                ax2.set_title("Drone Position in 3D")
+                drone_positions = np.array(self.all_poses)[:, 1:4]  # Extract x, y, z positions
+                ax2.plot(drone_positions[:, 0], drone_positions[:, 1], drone_positions[:, 2], label="Drone Path")
+                ax2.scatter(current_setpoint[0][0], current_setpoint[0][1], current_setpoint[0][2], color='red', label="Current Setpoint")
+                ax2.set_xlabel("X")
+                ax2.set_ylabel("Y")
+                ax2.set_zlabel("Z")
+                # set ax2 limits
+                ax2.set_xlim([-0.5, 2.5])
+                ax2.set_ylim([-1.5, 1.5])
+                ax2.set_zlim([0, 2.5])
+                ax2.legend()
+
+                plt.tight_layout()
+                plt.savefig(f"results/simulation/patched_image_{i:04d}.png")
+                plt.close()
+                i += 1
             time.sleep(1.)
 
     def update(self, image):

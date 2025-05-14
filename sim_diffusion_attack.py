@@ -95,7 +95,7 @@ class CameraThread(Thread):
             # if i >= len(self.dataset):
             #     i = 0
             self.camera_image_queue.append(new_img[0])
-            time.sleep(0.1)
+            time.sleep(5)
 
     def close(self):
         self._stay_alive = False
@@ -205,7 +205,7 @@ if __name__ == "__main__":
 
     os.makedirs('results/simulation', exist_ok=True)
 
-    model_path = 'results/diffusion_training/frontnet_100ds_10kepochs.pth'
+    model_path = 'results/diffusion_training/frontnet1k_1kds_2kepochs.pth'
 
 
     dataset_path = "pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"
@@ -259,7 +259,7 @@ if __name__ == "__main__":
 
     time_start = time.time()
 
-    while time.time() - time_start < 20:
+    while time.time() - time_start < 30:
         # wait for 20 seconds
         time.sleep(0.1)
 
