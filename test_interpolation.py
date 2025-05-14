@@ -5,6 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from tqdm import tqdm
+from scipy.optimize import linprog
 
 from util import scale_tx_ty
 from attacks import calc_eval_loss, get_transformation
@@ -40,23 +41,26 @@ if __name__ == "__main__":
 
     def dist(c1, c2):
         elementwise = torch.square(c1 - c2)
-        elementwise * np.asarray([1, 1, 2, 2/.4, 2, 2])
-        return torch.mean(elementwise, axis=-1)
+        elementwise * torch.tensor([1, 1, 2, 2/.4, 2, 2])
+        return torch.sqrt(torch.sum(elementwise, axis=-1))
 
     def interpolated_patch(target, transformation):
         combined = torch.hstack([target, transformation]).squeeze()
         distances = dist(combined, combineds)
         order = torch.argsort(distances)
-        n = 1
-        ordered_combined = combineds[order]
-        while n < 10:
-            coeffs = torch.linalg.lstsq(ordered_combined[:n].T, combined).solution
-            candidate_combined = (ordered_combined[:n].T * coeffs).sum(axis=-1)
-            error = (candidate_combined - combined).abs().sum()
-            if error < 1e-5:
+        combined = combined.numpy()
+        ordered_combined = combineds[order].numpy()
+        for n in range(1, max(100, len(order))):
+            result = linprog(
+                bounds=[(0,1)]*n,
+                c=np.ones(n),
+                A_eq=ordered_combined[:n].T,
+                b_eq=combined,
+            )
+            if result.success and result.fun <= 1:
+                coeffs = torch.as_tensor(result.x)
                 candidate = (patches[order][:n].permute(1, 2, 0) * coeffs[None, None, :]).sum(axis=-1)
                 return candidate.float(), combineds[order[0]]
-            n += 1
         return patches[order[0]], combineds[order[0]]
 
     xs = np.random.uniform(0., 2., N)
