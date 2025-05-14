@@ -39,9 +39,15 @@ class DiffusionThread(Thread):
             if not self.target_queue:
                 time.sleep(0.01)
                 continue
-            sf = np.random.uniform(0.4,0.8,1)
-            tx = np.random.uniform(0.,1.,1)
-            ty = np.random.uniform(0.,1.,1)
+            # sf = np.random.uniform(0.4,0.8,1)
+            # tx = np.random.uniform(0.,1.,1)
+            # ty = np.random.uniform(0.,1.,1)
+
+            sf = np.array([0.6])
+            tx = np.array([0.5])
+            ty = np.array([0.5])
+
+
             #TODO: generate target based on target trajectory
             # x = np.random.uniform(0,2,1)
             # y = np.random.uniform(-1,1,1,)
@@ -83,6 +89,8 @@ class CameraThread(Thread):
 
             # TODO: sticking to first image for now
             new_img, _ = self.dataset.dataset.__getitem__(i)
+            # print(new_img.shape, new_img.min(), new_img.max())
+            # new_img = torch.ones((1, 96, 160), dtype=torch.float32) * 255.
             # i += 1
             # if i >= len(self.dataset):
             #     i = 0
@@ -102,7 +110,7 @@ class ManipulatorThread(Thread):
         self._stay_alive = True
 
     def run(self):
-        i = 0
+        # i = 0
         while self._stay_alive:
             if self.camera_image_queue and self.patch_queue:
                 camera_image = self.camera_image_queue[0]
@@ -119,13 +127,13 @@ class ManipulatorThread(Thread):
 
                 self.camera_image_queue.appendleft(mod_img)
                 
-                plt.imshow(mod_img.squeeze(0).squeeze(0).cpu().numpy(), cmap='gray')
-                plt.savefig(f"results/simulation/patched_image_{i:04d}.png")
-                i += 1
+                # plt.imshow(mod_img.squeeze(0).squeeze(0).cpu().numpy(), cmap='gray')
+                # plt.savefig(f"results/simulation/patched_image_{i:04d}.png")
+                # i += 1
                 #visualize with cv2
                 # cv2.imshow('modified image', mod_img[0, 0].cpu().numpy())
                 # cv2.waitKey(0)
-                time.sleep(0.1)
+                time.sleep(0.01)
 
     def close(self):
         self._stay_alive = False
@@ -165,11 +173,15 @@ class AttackerPolicyThread(Thread):
                 # print("Change necessary: ", change_necessary)
 
                 # calculate target x based on change_necessary[0]
-                target_x = 1. - change_necessary[0]
+                # keep in range [0, 2]
+                target_x = np.maximum(np.minimum(1. - change_necessary[0], 2.), 0.0)
                 # calculate target y based on change_necessary[1]
-                target_y = change_necessary[1]
+                # keep in range [-1, 1]
+                target_y = np.maximum(np.minimum(0. - change_necessary[1], 1.), -1.0)
+
                 # calculate target z based on change_necessary[2]
-                target_z = change_necessary[2]
+                # keep in range [-0.5, 0.5]
+                target_z = np.maximum(np.minimum(0. - change_necessary[2], 0.5), -0.5)
 
                 # print("Target: ", target_x, target_y, target_z)
 
@@ -193,7 +205,7 @@ if __name__ == "__main__":
 
     os.makedirs('results/simulation', exist_ok=True)
 
-    model_path = 'results/diffusion_training/trained_model.pth'
+    model_path = 'results/diffusion_training/frontnet_100ds_10kepochs.pth'
 
 
     dataset_path = "pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"
@@ -203,7 +215,11 @@ if __name__ == "__main__":
     camera_thread = CameraThread(cf_sim.dataset)
     # camera_thread.start()
 
-    sim_thread = SimulatorThread(cf_sim.sim_new_pose, camera_thread.camera_image_queue)
+
+    from camera import Camera
+    cam = Camera('camera_calibration.yaml')
+
+    sim_thread = SimulatorThread(cf_sim.sim_new_pose, camera_thread.camera_image_queue, cam.point_from_xyz)
     # sim_thread.start()
 
 
@@ -235,6 +251,7 @@ if __name__ == "__main__":
         time.sleep(0.1)
 
     camera_thread.start()
+    time.sleep(0.01)
     sim_thread.start()
 
     manipulator_thread = ManipulatorThread(camera_thread.camera_image_queue, diffusion_thread.patch_queue, cf_sim.project_patch)
@@ -265,8 +282,9 @@ if __name__ == "__main__":
     ax = fig.add_subplot(111, projection='3d')
     # ax.scatter(all_poses[:, 1], all_poses[:, 2], all_poses[:, 3])
     ax.plot(all_poses[:, 1], all_poses[:, 2], all_poses[:, 3])
-    ax.set_xlabel('Y')
-    ax.set_ylabel('X')
+    ax.plot(target_trajectory[:, 0], target_trajectory[:, 1], target_trajectory[:, 2], color='red', linestyle='dotted') 
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
     ax.set_zlabel('Z')
     fig.savefig('3d_positions.png')
 

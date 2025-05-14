@@ -24,6 +24,9 @@ from collections import deque
 
 import time
 
+import matplotlib.pyplot as plt
+
+
 class CFSim():
     def __init__(self, model='frontnet', dataset_path="pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -163,7 +166,7 @@ class CFSim():
         # calculate controller output
         new_setpoint = self._controller_setpoint(predicted_pose)
 
-        return new_setpoint
+        return new_setpoint, predicted_pose
 
     def _controller_setpoint(self, predicted_poses):
         setpoints = []
@@ -208,7 +211,7 @@ class CFSim():
         return l2_distances
     
 class SimulatorThread(Thread):
-    def __init__(self, sim_new_pose, camera_images):
+    def __init__(self, sim_new_pose, camera_images, point_from_xyz):
         super().__init__()
         self.simulator = sim_new_pose
         self.drone_pose = deque(maxlen=1)
@@ -219,27 +222,43 @@ class SimulatorThread(Thread):
         # self.camera_images = deque(maxlen=1)
         self.camera_images = camera_images
         self.current_image = None
+        self.point_from_xyz = point_from_xyz
 
         self._stay_alive = True
 
         self.dt = 0.1
 
     def run(self):
+        i = 0
         while self._stay_alive:
             if self.camera_images:
                 # self.current_image = self.camera_images.popleft()
             
             # if self.current_image is not None:
-                current_setpoint = self.simulator(self.camera_images[0])[0]
+                current_setpoint, prediction_relative = self.simulator(self.camera_images[0])
+                print(current_setpoint, current_setpoint.shape, prediction_relative, prediction_relative.shape)
+                homogeneous_coords = np.hstack((prediction_relative[0, :3], 1.))
+                point = self.point_from_xyz(homogeneous_coords)
+
+
+                print(self.camera_images[0].shape)
+                plt.suptitle(prediction_relative[0, :3])
+                plt.imshow(self.camera_images[0], cmap='gray')
+                plt.scatter(point[0], point[1], color='red')
+                plt.savefig(f"results/simulation/patched_image_{i:04d}.png")
+                plt.close()
+                i += 1
+
                 # print("current setpoint:", current_setpoint)
 
-            if self.drone_pose and not np.allclose(self.drone_pose[0], current_setpoint):
-                current_pose = self.drone_pose[0] + ((current_setpoint- self.drone_pose[0]) * 0.1)
+            if self.drone_pose and not np.allclose(self.drone_pose[0], current_setpoint[0]):
+                current_pose = self.drone_pose[0] + ((current_setpoint[0] - self.drone_pose[0]) * 0.1)
                 # print("current pose after added setpoint: ", current_pose)
                 self.drone_pose.append(current_pose)
 
+
             self.all_poses.append([time.time(), *self.drone_pose[0].tolist()])
-            time.sleep(self.dt)
+            time.sleep(1.)
 
     def update(self, image):
         self.camera_images.append(image)

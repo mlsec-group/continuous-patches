@@ -437,7 +437,7 @@ if __name__ == '__main__':
 
     # training
     print("Start training..")
-    all_losses = model.train(loader, device, nepochs=args.epochs, denoising_steps=500)
+    all_losses = model.train(loader, device, nepochs=args.epochs, denoising_steps=1_000)
     
     os.makedirs('results/diffusion_training', exist_ok=True)
     model.save(f'results/diffusion_training/{args.output}')
@@ -452,7 +452,7 @@ if __name__ == '__main__':
 
     r_targets = torch.tensor(np.stack((sf, tx, ty, x, y, z)).T, dtype=torch.float32)
 
-    samples = model.sample(n_samples, r_targets, device, patch_size=patch_size, n_steps=500).detach().to('cpu').numpy()
+    samples = model.sample(n_samples, r_targets, device, patch_size=patch_size, n_steps=1_000).detach().to('cpu').numpy()
     print(samples.min(), samples.max())
 
     

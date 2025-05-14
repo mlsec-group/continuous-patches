@@ -7,7 +7,7 @@
 # import pickle
 # import argparse
 
-# import torch
+import torch
 # from patch_placement import place_patch
 # from util import load_model, load_dataset
 
@@ -91,6 +91,8 @@ def get_best_target_pos(patch, patch_path, dataset, model, device):
 
 
 def train(idx_start=0, idx_end=100, model='frontnet'):
+    # missing_indices = np.load('missing_indices.npy')
+    # for i in missing_indices:
     for i in range(idx_start, idx_end):
         with open('dataset.yaml') as f:
             settings = yaml.load(f, Loader=yaml.FullLoader)
@@ -118,9 +120,9 @@ def train(idx_start=0, idx_end=100, model='frontnet'):
         with open(path / 'settings.yaml', 'w') as f:
             yaml.dump(settings, f)
 
-        command = shlex.split(f"sbatch dataset.sh {str(path / 'settings.yaml')} {model}")
-        print(command)
-        # command = shlex.split(f"python attacks.py --file {str(path / 'settings.yaml')} --model {model}")
+        # command = shlex.split(f"sbatch dataset.sh {str(path / 'settings.yaml')} {model}")
+        # print(command)
+        command = shlex.split(f"python attacks.py --file {str(path / 'settings.yaml')} --model {model}")
         subprocess.run(command)
         del settings
 
@@ -135,6 +137,14 @@ def read_data(path, idx_start=0, idx_end=100, model='frontnet', idx=-1):
     file_paths.sort(key=lambda path: int(path.parent.name))
 
     print(len(file_paths))
+
+    # figure out which indices are missing if we should have 0-999 in file paths
+    # missing_indices = []
+    # for i in range(0, 1000):
+    #     if i not in [int(path.parent.name) for path in file_paths]:
+    #         missing_indices.append(i)
+
+    # np.save('missing_indices.npy', missing_indices)
 
     # from util import load_dataset
     # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
