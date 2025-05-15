@@ -51,14 +51,13 @@ if __name__ == "__main__":
 
     def generated_patch(target, transformation):
         r_targets = torch.hstack([transformation, target])
-        samples = diffusion_model.sample(1, r_targets, DEVICE, patch_size=(80, 80), n_steps=2).detach()
+        samples = diffusion_model.sample(1, r_targets, DEVICE, patch_size=(80, 80), n_steps=10).detach()
 
         combined = torch.hstack([target, transformation]).squeeze()
         distances = dist(combined, combineds)
         order = torch.argsort(distances)
         combined = combined.numpy()
-        # return samples.squeeze(), combineds[order[0]]
-        return torch.randn_like(patches[order[0]]), combineds[order[0]]
+        return samples.squeeze(), combineds[order[0]]
 
     xs = np.random.uniform(0., 2., N)
     ys = np.random.uniform(-1., 1., N)
