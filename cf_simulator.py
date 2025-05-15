@@ -37,6 +37,7 @@ class CFSim():
         
         if self.model == 'frontnet':
             self.pose_estimator = self.load_frontnet_model(path='pulp-frontnet/PyTorch/Models/Frontnet160x32.pt', device=self.device, config='160x32')
+            self.pose_estimator.eval()
         elif self.model == 'yolov5':
             self.pose_estimator = self.load_yolo_model()
         else:

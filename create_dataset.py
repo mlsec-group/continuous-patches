@@ -100,8 +100,8 @@ def train(idx_start=0, idx_end=100, model='frontnet'):
         path = Path(f"{settings['path']}/{model}/{patch_size[0]}x{patch_size[1]}/{i}/")
         print(path)
 
-        targets = [values for _, values in settings['targets'].items()]
-        targets = np.array(targets, dtype=float).T
+        # targets = [values for _, values in settings['targets'].items()]
+        # targets = np.array(targets, dtype=float).T
 
         number_targets = 1#np.random.randint(1, 4)
 
@@ -111,7 +111,7 @@ def train(idx_start=0, idx_end=100, model='frontnet'):
 
         # overwrite settings
         settings['path'] = str(path)
-        settings['targets']['x'] =  random_target_x.tolist()
+        settings['targets']['x'] = random_target_x.tolist()
         settings['targets']['y'] = random_target_y.tolist()
         settings['targets']['z'] = random_target_z.tolist()
         settings['patch']['size'] = patch_size
@@ -143,6 +143,10 @@ def read_data(path, idx_start=0, idx_end=100, model='frontnet', idx=-1):
     # for i in range(0, 1000):
     #     if i not in [int(path.parent.name) for path in file_paths]:
     #         missing_indices.append(i)
+    # print(f"Missing indices: {missing_indices}")
+    # # np.save('missing_indices.npy', missing_indices)
+
+    # return
 
     # np.save('missing_indices.npy', missing_indices)
 
