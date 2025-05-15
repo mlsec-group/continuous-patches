@@ -606,7 +606,7 @@ if __name__=="__main__":
             from util import load_quantized
             model_path = 'misc/Frontnet.onnx'
             model = load_quantized(path=model_path, device=device)
-    
+        model.eval() # CRUCIAL!!!
     if args.model == 'yolov5':
         model = YOLOBox()
     
