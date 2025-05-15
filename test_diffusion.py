@@ -30,6 +30,7 @@ if __name__ == "__main__":
     model_path = 'pulp-frontnet/PyTorch/Models/Frontnet160x32.pt'
     model_config = '160x32'
     model = load_model(path=model_path, device=DEVICE, config=model_config)
+    model.eval()
 
     with open("/shares/datasets/continuous_patches/frontnet1k.pickle", "rb") as f:
         patch_dataset = pickle.load(f)
@@ -50,13 +51,14 @@ if __name__ == "__main__":
 
     def generated_patch(target, transformation):
         r_targets = torch.hstack([transformation, target])
-        samples = diffusion_model.sample(1, r_targets, DEVICE, patch_size=(80, 80), n_steps=25).detach()
+        samples = diffusion_model.sample(1, r_targets, DEVICE, patch_size=(80, 80), n_steps=2).detach()
 
         combined = torch.hstack([target, transformation]).squeeze()
         distances = dist(combined, combineds)
         order = torch.argsort(distances)
         combined = combined.numpy()
-        return samples.squeeze(), combineds[order[0]]
+        # return samples.squeeze(), combineds[order[0]]
+        return torch.randn_like(patches[order[0]]), combineds[order[0]]
 
     xs = np.random.uniform(0., 2., N)
     ys = np.random.uniform(-1., 1., N)
@@ -100,4 +102,4 @@ if __name__ == "__main__":
     stds = np.asarray([1.64*np.std(losses[mask])/np.sqrt(np.sum(mask)) for mask in masks if np.sum(mask) > 0])
     ax2.plot(midpoints, means, c="b")
     ax2.fill_between(midpoints, means-stds, means+stds, color="b", alpha=0.2)
-    fig.savefig("interpolation_results.png")
+    fig.savefig("diffusion_results.png")
