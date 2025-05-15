@@ -286,9 +286,6 @@ class DiffusionModel():
         self.model = UNet(in_size=self.in_size, out_size=self.out_size, device=self.device).to(device)
 
     def denoised_prediction(self, x, conditioning, sigma):
-        x = (2 * x) - 1
-        sigma = sigma
-
         c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
         c_out = sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2).sqrt()
         c_in = 1 / (self.sigma_data ** 2 + sigma ** 2).sqrt()
@@ -299,9 +296,10 @@ class DiffusionModel():
         return D_x
     
     def train(self, data_loader: torch.utils.data.DataLoader, device: torch.device, nepochs: int = 10):
-        """Alg 1 from the DDPM paper"""
         P_mean = 1.2
         P_std = 1.2
+        p_unconditioned = 0.1
+
         self.model.train()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, eps=1e-4)
         all_losses = []
@@ -312,16 +310,15 @@ class DiffusionModel():
                 patches = (2 * patches.to(device)) - 1
                 conditioning = conditioning.to(device)
                 optimizer.zero_grad()
-                # Fwd pass
                 sigmas = P_std * torch.randn(patches.shape[0], 1, 1, 1, device=patches.device) + P_mean
                 sigmas = sigmas.exp()
 
-                noise = torch.randn_like(patches) * sigmas   # Sample DIFFERENT random noise for each datapoint
+                noise = torch.randn_like(patches) * sigmas # Sample DIFFERENT random noise for each datapoint
                 
-                model_in = patches + noise   # Noise corrupt the data (eq14)
+                model_in = patches + noise # Noise corrupt the data 
                 out = self.denoised_prediction(model_in, conditioning, sigmas)
                 weight = (sigmas ** 2 + self.sigma_data ** 2) / (sigmas * self.sigma_data) ** 2
-                loss = torch.mean(weight * (patches - out)**2)     # Compute loss on prediction (eq14)
+                loss = torch.mean(weight * (patches - out)**2) # Compute loss on predictio
                 losses.append(loss.detach().cpu().numpy())
                 all_losses.append(loss.detach().cpu().numpy())
 
@@ -359,12 +356,11 @@ class DiffusionModel():
         sigmas = sigmas.float().to(device)
         x_t = torch.randn(n_samples, 1, *patch_size).to(device) * sigmas[0]
         for i, (sigma_cur, sigma_next) in enumerate(zip(sigmas, sigmas[1:])):
-            model_prediction = self.model(x_t, targets, sigma_cur)
-            x_t = x_t + (sigma_next - sigma_cur) * (x_t - model_prediction) / sigma_cur
-            if torch.any(sigma_next < sigma_min):
-                x_t = model_prediction
+            model_prediction = self.denoised_prediction(x_t, targets, sigma_cur)
+            d_cur = (x_t - model_prediction) / sigma_cur
+            x_t = x_t + (sigma_next - sigma_cur) * d_cur
 
-        x_t = torch.stack([(x - torch.min(x)) / (torch.max(x) - torch.min(x)) for x in x_t]) # normalize
+        x_t = torch.stack([(x + 1) / 2 for x in x_t]).clamp(min=0,max=1) # normalize
         return x_t
 
 
@@ -446,14 +442,15 @@ if __name__ == '__main__':
 
     r_targets = torch.tensor(np.stack((sf, tx, ty, x, y, z)).T, dtype=torch.float32)
 
-    samples = model.sample(n_samples, r_targets, device, patch_size=patch_size, n_steps=10).detach().to('cpu').numpy()
+    samples = model.sample(n_samples, r_targets, device, patch_size=patch_size, n_steps=25).detach().to('cpu').numpy()
     
 
-    fig = plt.figure(constrained_layout=True)
+    fig = plt.figure(constrained_layout=True, figsize=(n_samples*5, 5))
     axs_samples = fig.subplots(1, n_samples)
     for i, sample in enumerate(samples):
         ax = axs_samples[i] if n_samples > 1 else axs_samples
         ax.imshow(sample[0], cmap='gray')
         ax.set_title(f'sample {i}')
+        ax.set_axis_off()
     fig.savefig(f'results/diffusion_training/samples1.png', dpi=200)
     plt.show()
