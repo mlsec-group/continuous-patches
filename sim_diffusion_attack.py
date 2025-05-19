@@ -43,9 +43,9 @@ class DiffusionThread(Thread):
             # tx = np.random.uniform(0.,1.,1)
             # ty = np.random.uniform(0.,1.,1)
 
-            sf = np.array([0.6])
-            tx = np.array([0.5])
-            ty = np.array([0.5])
+            # sf = np.array([0.6])
+            # tx = np.array([0.5])
+            # ty = np.array([0.5])
 
 
             #TODO: generate target based on target trajectory
@@ -56,19 +56,22 @@ class DiffusionThread(Thread):
             # y = np.array([0.])
             # z = np.array([0.])
 
-            x, y, z = self.target_queue[0]
+            sf, tx, ty, x, y, z = self.target_queue[0]
+            # print(sf, tx, ty, x, y, z)
+            
 
             r_targets = torch.tensor(np.stack((sf, tx, ty, x, y, z)).T, dtype=torch.float32)
+            # print(r_targets.shape)
 
-            samples = self.diffusion_model.sample(1, r_targets, self.device, patch_size=[80,80], n_steps=1_000).detach().to('cpu').numpy()
+            samples = self.diffusion_model.sample(1, r_targets, self.device, patch_size=[80,80], n_steps=25).detach().to('cpu').numpy()
             patch = samples[0, 0] * 255.
 
             scaled_tx, scaled_ty = scale_tx_ty(sf, tx, ty, 80)
             self.patch_queue.append((patch, sf, scaled_tx, scaled_ty))
-            print("Bing new patch!")
+            # print("Bing new patch!")
 
            
-            # time.sleep(0.01)
+            time.sleep(0.05)
 
     def close(self):
         self._stay_alive = False
@@ -95,7 +98,7 @@ class CameraThread(Thread):
             # if i >= len(self.dataset):
             #     i = 0
             self.camera_image_queue.append(new_img[0])
-            time.sleep(5)
+            time.sleep(0.11)
 
     def close(self):
         self._stay_alive = False
@@ -169,8 +172,10 @@ class AttackerPolicyThread(Thread):
                 # to move up -> target z should be > 0.
                 # to move down -> target z should be < 0.
 
+                print("Target position: ", target_position)
+
                 change_necessary = target_position - self.drone_pose[0]
-                # print("Change necessary: ", change_necessary)
+                print("Change necessary: ", change_necessary)
 
                 # calculate target x based on change_necessary[0]
                 # keep in range [0, 2]
@@ -183,15 +188,39 @@ class AttackerPolicyThread(Thread):
                 # keep in range [-0.5, 0.5]
                 target_z = np.maximum(np.minimum(0. - change_necessary[2], 0.5), -0.5)
 
-                # print("Target: ", target_x, target_y, target_z)
+                print("Target for frontnet: ", target_x, target_y, target_z)
 
-                self.current_target.append(([target_x], [target_y], [target_z]))
+                # possible position decision:
+                # if target_x closer 2.: sf should be closer to 0.4
+                # if target_x closer 0.: sf should be closer to 0.8
+                # if target_y closer 1.: tx should be closer to 0
+                # if target_y closer -1.: tx should be closer to 1
+                # if target_z closer 0.5: ty should be closer to 0
+                # if target_z closer -0.5: ty should be closer to 1
+
+
+                sf = 0.8#0.8 - 0.4 * self.sigmoid(target_x, x0=1.0, k=5.0)
+                tx = 0.1#1 - self.sigmoid(target_y, x0=0.0, k=-5.0)
+                ty = 0.5#1 - self.sigmoid(target_z, x0=0.0, k=10.0)
+
+                sf = np.clip(sf, 0.4, 0.8)
+                tx = np.clip(tx, 0.0, 1.0)
+                ty = np.clip(ty, 0.0, 1.0)
+
+                print("Position patch: ", sf, tx, ty)
+
+
+                self.current_target.append(np.array([[sf], [tx], [ty], [target_x], [target_y], [target_z]]))
                 time.sleep(0.1)
 
             else:
                 print("All targets reached")
                 self._stay_alive = False
                 break
+
+    def sigmoid(self, x, x0=0.0, k=10.0):
+        """Sigmoid function centered at x0 with steepness k"""
+        return 1 / (1 + np.exp(-k * (x - x0)))
 
     def close(self):
         self._stay_alive = False
@@ -205,7 +234,7 @@ if __name__ == "__main__":
 
     os.makedirs('results/simulation', exist_ok=True)
 
-    model_path = 'results/diffusion_training/frontnet1k_1kds_2kepochs.pth'
+    model_path = 'results/diffusion_training/edm_frontnet_1k_25ds_2ke.pth'
 
 
     dataset_path = "pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"
@@ -259,7 +288,7 @@ if __name__ == "__main__":
 
     time_start = time.time()
 
-    while time.time() - time_start < 30:
+    while time.time() - time_start < 10:
         # wait for 20 seconds
         time.sleep(0.1)
 
