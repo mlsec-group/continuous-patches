@@ -229,6 +229,24 @@ class SimulatorThread(Thread):
 
         self.dt = 0.1
 
+        # only for debug plots
+        self.target_trajectory = np.array([[0.0, 0.25, 1., 0.0],
+                                  [0.0, 0.50, 1., 0.0],
+                                  [0.0, 0.75, 1., 0.0],
+                                  [0.0, 1.00, 1., 0.0],
+                                  [0.0, 0.75, 1., 0.0],
+                                  [0.0, 0.50, 1., 0.0],
+                                  [0.0, 0.25, 1., 0.0],
+                                  [0.0, 0.00, 1., 0.0],
+                                  [0.0, -0.25, 1., 0.0],
+                                  [0.0, -0.50, 1., 0.0],
+                                  [0.0, -0.75, 1., 0.0],
+                                  [0.0, -1.00, 1., 0.0],
+                                  [0.0, -0.75, 1., 0.0],
+                                  [0.0, -0.50, 1., 0.0],
+                                  [0.0, -0.25, 1., 0.0],
+                                  [0.0, 0.00, 1., 0.0]])
+
     def run(self):
         i = 0
         while self._stay_alive:
@@ -270,10 +288,12 @@ class SimulatorThread(Thread):
                 ax2.set_title("Drone Position in 3D")
                 drone_positions = np.array(self.all_poses)[:, 1:4]  # Extract x, y, z positions
                 ax2.plot(drone_positions[:, 0], drone_positions[:, 1], drone_positions[:, 2], label="Drone Path")
+                ax2.plot(self.target_trajectory[:, 0], self.target_trajectory[:, 1], self.target_trajectory[:, 2], label="Target Trajectory", color='green')
                 ax2.scatter(current_setpoint[0][0], current_setpoint[0][1], current_setpoint[0][2], color='red', label="Current Setpoint")
                 ax2.set_xlabel("X")
                 ax2.set_ylabel("Y")
                 ax2.set_zlabel("Z")
+
                 # set ax2 limits
                 ax2.set_xlim([-0.5, 2.5])
                 ax2.set_ylim([-1.5, 1.5])
@@ -284,7 +304,7 @@ class SimulatorThread(Thread):
                 plt.savefig(f"results/simulation/patched_image_{i:04d}.png")
                 plt.close()
                 i += 1
-            time.sleep(1.)
+            time.sleep(0.1)
 
     def update(self, image):
         self.camera_images.append(image)
