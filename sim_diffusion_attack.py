@@ -28,6 +28,13 @@ class DiffusionThread(Thread):
         self.diffusion_model = DiffusionModel(self.device, lr=1e-5)
         self.diffusion_model.load(diffusion_model_path)
 
+        # gt_dataset = pickle.load("frontnet1k.pickle")
+        # self.patches = torch.as_tensor(np.array([patch for patch, target, transformation in patch_dataset])).float()
+        # targets = torch.as_tensor([target.tolist() for patch, target, transformation in patch_dataset]).squeeze().float()
+        # transformations = torch.as_tensor([transformation.tolist() for patch, target, transformation in patch_dataset]).squeeze().float()
+        # self.combined = torch.hstack([targets, transformations])
+
+
         self.patch_queue = deque(maxlen=1)
 
         self.target_queue = target_queue
@@ -56,7 +63,16 @@ class DiffusionThread(Thread):
             # y = np.array([0.])
             # z = np.array([0.])
 
-            sf, tx, ty, x, y, z = self.target_queue[0]
+            sf, tx, ty, x, y, z  = self.target_queue[0]
+
+            # print(self.combined.shape)
+            # # element wise l2 distance
+            # distances = torch.sqrt(torch.sum(torch.square(self.combined - conditioning), axis=-1))
+            # print("Distances: ", distances)
+            # idx = torch.argmin(distances)
+            # print("Index: ", idx)
+
+
             # print(sf, tx, ty, x, y, z)
             
 
@@ -68,7 +84,7 @@ class DiffusionThread(Thread):
 
             scaled_tx, scaled_ty = scale_tx_ty(sf, tx, ty, 80)
             self.patch_queue.append((patch, sf, scaled_tx, scaled_ty))
-            # print("Bing new patch!")
+            print("Bing new patch!")
 
            
             time.sleep(0.05)
@@ -98,7 +114,7 @@ class CameraThread(Thread):
             # if i >= len(self.dataset):
             #     i = 0
             self.camera_image_queue.append(new_img[0])
-            time.sleep(0.11)
+            time.sleep(0.2)
 
     def close(self):
         self._stay_alive = False
@@ -158,7 +174,7 @@ class AttackerPolicyThread(Thread):
                 target_position = self.target_trajectory[self.index_reached]
 
                 # check if the drone pose is close to the target
-                if np.linalg.norm(self.drone_pose - target_position) < 0.1:
+                if np.linalg.norm(self.drone_pose - target_position) < 0.3:
                     self.index_reached += 1
                     print("Target reached: ", target_position)
                     target_position = self.target_trajectory[self.index_reached]
@@ -172,23 +188,27 @@ class AttackerPolicyThread(Thread):
                 # to move up -> target z should be > 0.
                 # to move down -> target z should be < 0.
 
-                print("Target position: ", target_position)
+                # print("Target position: ", target_position)
 
                 change_necessary = target_position - self.drone_pose[0]
-                print("Change necessary: ", change_necessary)
+                # print("Change necessary: ", change_necessary)
 
                 # calculate target x based on change_necessary[0]
                 # keep in range [0, 2]
                 target_x = np.maximum(np.minimum(1. - change_necessary[0], 2.), 0.0)
-                # calculate target y based on change_necessary[1]
-                # keep in range [-1, 1]
+                # # calculate target y based on change_necessary[1]
+                # # keep in range [-1, 1]
                 target_y = np.maximum(np.minimum(0. - change_necessary[1], 1.), -1.0)
 
-                # calculate target z based on change_necessary[2]
-                # keep in range [-0.5, 0.5]
+                # # calculate target z based on change_necessary[2]
+                # # keep in range [-0.5, 0.5]
                 target_z = np.maximum(np.minimum(0. - change_necessary[2], 0.5), -0.5)
 
-                print("Target for frontnet: ", target_x, target_y, target_z)
+                # print("Target for frontnet: ", target_x, target_y, target_z)
+
+                # target_x = 0.8
+                # target_y = 0.0
+                # target_z = 0.0
 
                 # possible position decision:
                 # if target_x closer 2.: sf should be closer to 0.4
@@ -199,7 +219,7 @@ class AttackerPolicyThread(Thread):
                 # if target_z closer -0.5: ty should be closer to 1
 
 
-                sf = 0.8#0.8 - 0.4 * self.sigmoid(target_x, x0=1.0, k=5.0)
+                sf = 0.6#0.8 - 0.4 * self.sigmoid(target_x, x0=1.0, k=5.0)
                 tx = 0.1#1 - self.sigmoid(target_y, x0=0.0, k=-5.0)
                 ty = 0.5#1 - self.sigmoid(target_z, x0=0.0, k=10.0)
 
@@ -288,7 +308,7 @@ if __name__ == "__main__":
 
     time_start = time.time()
 
-    while time.time() - time_start < 10:
+    while time.time() - time_start < 20.:
         # wait for 20 seconds
         time.sleep(0.1)
 

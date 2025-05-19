@@ -142,7 +142,7 @@ class CFSim():
 
         return modified_image
     
-    def sim_new_pose(self, image: np.ndarray):
+    def sim_new_pose(self, image: np.ndarray, drone_pose):
         # make sure images (plural if working with batches) are of correct shape
         assert np.prod(image.shape) % (96 * 160) == 0 
         image_t = torch.tensor(image).to(self.device)
@@ -165,22 +165,30 @@ class CFSim():
         # print("predicted pose", predicted_pose, predicted_pose.shape)
         
         # calculate controller output
-        new_setpoint = self._controller_setpoint(predicted_pose)
+        new_setpoint = self._controller_setpoint(predicted_pose, drone_pose)
 
         return new_setpoint, predicted_pose
 
-    def _controller_setpoint(self, predicted_poses):
+    def _controller_setpoint(self, predicted_poses, drone_pose):
         setpoints = []
         for predicted_pose in predicted_poses:
-            quats = rowan.from_euler(0., 0., self.pose[3], convention='xyz') # returns qw, qx, qy, qz
+            # predicted_pose = [1., 0., 0., 0.]
+            print("Drone pose in world: ", drone_pose)
+            print("Predicted pose in body: ", predicted_pose)
+            quats = rowan.from_euler(0., 0., drone_pose[3], convention='xyz') # returns qw, qx, qy, qz
             rotated_desired = rowan.rotate(quats, predicted_pose[:3])
-            target_pos = predicted_pose[:3] + rotated_desired
+            print("Predicted pose in world: ", rotated_desired)
+            target_pos = drone_pose[:3] + rotated_desired
+            print("Target pose in world: ", target_pos)
 
             # predicted yaw angles are discarded since they are very faulty
-            global_pos = target_pos - self.pose[:3]
+            global_pos = target_pos - drone_pose[:3]
             target_yaw = np.arctan2(global_pos[1], global_pos[0]) - np.pi
 
             new_setpoint = target_pos + self._calc_heading_vec(1., target_yaw)
+            new_setpoint[2] = 1.
+            print("New setpoint in world: ", new_setpoint, target_yaw)
+
             setpoints.append([*new_setpoint, target_yaw])
         
         return np.array(setpoints)
@@ -255,7 +263,7 @@ class SimulatorThread(Thread):
                 # self.current_image = self.camera_images.popleft()
             
             # if self.current_image is not None:
-                current_setpoint, prediction_relative = self.simulator(self.camera_images[0])
+                current_setpoint, prediction_relative = self.simulator(self.camera_images[0], self.drone_pose[0])
                 print(current_setpoint, current_setpoint.shape, prediction_relative, prediction_relative.shape)
                 homogeneous_coords = np.hstack((prediction_relative[0, :3], 1.))
                 point = self.point_from_xyz(homogeneous_coords)
