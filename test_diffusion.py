@@ -32,17 +32,19 @@ if __name__ == "__main__":
     model = load_model(path=model_path, device=DEVICE, config=model_config)
     model.eval()
 
-    with open("/shares/datasets/continuous_patches/frontnet1k.pickle", "rb") as f:
+    with open("frontnet1k.pickle", "rb") as f:
         patch_dataset = pickle.load(f)
     
     diffusion_model = DiffusionModel(DEVICE)
-    diffusion_model.load(f'results/diffusion_training/trained_model.pth')
+    diffusion_model.load(f'results/diffusion_training/edm_frontnet_1k_25ds_2ke.pth')
 
     print(f"Successfully loaded, using device {DEVICE}")
     patches = torch.as_tensor(np.array([patch for patch, target, transformation in patch_dataset])).float()
     targets = torch.as_tensor([target.tolist() for patch, target, transformation in patch_dataset]).squeeze().float()
     transformations = torch.as_tensor([transformation.tolist() for patch, target, transformation in patch_dataset]).squeeze().float()
     combineds = torch.hstack([targets, transformations])
+
+    print(targets.shape, transformations.shape)
 
     def dist(c1, c2):
         elementwise = torch.square(c1 - c2)
@@ -51,7 +53,7 @@ if __name__ == "__main__":
 
     def generated_patch(target, transformation):
         r_targets = torch.hstack([transformation, target])
-        samples = diffusion_model.sample(1, r_targets, DEVICE, patch_size=(80, 80), n_steps=10).detach()
+        samples = diffusion_model.sample(1, r_targets, DEVICE, patch_size=(80, 80), n_steps=100).detach()
 
         combined = torch.hstack([target, transformation]).squeeze()
         distances = dist(combined, combineds)
@@ -68,6 +70,8 @@ if __name__ == "__main__":
 
     eval_targets = torch.as_tensor(np.stack([xs, ys, zs]).T).float()
     eval_transformations = torch.as_tensor(np.stack([sfs, txs, tys]).T).float()
+
+    # print(eval_targets.shape, eval_transformations.shape)
 
     losses = []
     distances = []

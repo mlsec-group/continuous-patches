@@ -296,7 +296,7 @@ class DiffusionModel():
         return D_x
     
     def train(self, data_loader: torch.utils.data.DataLoader, device: torch.device, nepochs: int = 10):
-        P_mean = 1.2
+        P_mean = -1.2
         P_std = 1.2
         p_unconditioned = 0.1
 
