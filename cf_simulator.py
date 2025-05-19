@@ -172,22 +172,22 @@ class CFSim():
     def _controller_setpoint(self, predicted_poses, drone_pose):
         setpoints = []
         for predicted_pose in predicted_poses:
-            # predicted_pose = [1., 0., 0., 0.]
-            print("Drone pose in world: ", drone_pose)
-            print("Predicted pose in body: ", predicted_pose)
+            # predicted_pose = [1., -1., 0., 0.]
+            # print("Drone pose in world: ", drone_pose)
+            # print("Predicted pose in body: ", predicted_pose)
             quats = rowan.from_euler(0., 0., drone_pose[3], convention='xyz') # returns qw, qx, qy, qz
             rotated_desired = rowan.rotate(quats, predicted_pose[:3])
-            print("Predicted pose in world: ", rotated_desired)
+            # print("Predicted pose in world: ", rotated_desired)
             target_pos = drone_pose[:3] + rotated_desired
-            print("Target pose in world: ", target_pos)
+            # print("Target pose in world: ", target_pos)
 
             # predicted yaw angles are discarded since they are very faulty
             global_pos = target_pos - drone_pose[:3]
-            target_yaw = np.arctan2(global_pos[1], global_pos[0]) - np.pi
+            target_yaw = np.arctan2(global_pos[1], global_pos[0]) #- np.pi
 
-            new_setpoint = target_pos + self._calc_heading_vec(1., target_yaw)
+            new_setpoint = target_pos + self._calc_heading_vec(1., target_yaw-np.pi)
             new_setpoint[2] = 1.
-            print("New setpoint in world: ", new_setpoint, target_yaw)
+            print("New setpoint in world: ", new_setpoint, 0.)
 
             setpoints.append([*new_setpoint, target_yaw])
         
@@ -254,6 +254,12 @@ class SimulatorThread(Thread):
                                   [0.0, -0.50, 1., 0.0],
                                   [0.0, -0.25, 1., 0.0],
                                   [0.0, 0.00, 1., 0.0]])
+    # t = np.linspace(0, 2 * np.pi, 30)
+    # x = 2 * np.sin(t)  # Horizontal figure 8
+    # y = 1.5 * np.sin(2 * t)  # Vertical figure 8
+    # z = np.ones_like(t) + 1  # Constant height at 1
+    # yaw = np.zeros_like(t)  # Constant yaw
+    # target_trajectory = np.column_stack((x, y, z, yaw))
 
     def run(self):
         i = 0
@@ -264,12 +270,12 @@ class SimulatorThread(Thread):
             
             # if self.current_image is not None:
                 current_setpoint, prediction_relative = self.simulator(self.camera_images[0], self.drone_pose[0])
-                print(current_setpoint, current_setpoint.shape, prediction_relative, prediction_relative.shape)
+                # print(current_setpoint, current_setpoint.shape, prediction_relative, prediction_relative.shape)
                 homogeneous_coords = np.hstack((prediction_relative[0, :3], 1.))
                 point = self.point_from_xyz(homogeneous_coords)
 
 
-                print(self.camera_images[0].shape)
+                # print(self.camera_images[0].shape)
 
 
                 # print("current setpoint:", current_setpoint)
@@ -291,21 +297,24 @@ class SimulatorThread(Thread):
                 ax1.imshow(self.camera_images[0], cmap='gray')
                 ax1.scatter(point[0], point[1], color='red')
 
-                # Right subplot: Drone position in 3D
-                ax2 = fig.add_subplot(1, 2, 2, projection='3d')
+                # Right subplot: Drone position in 2d
+                ax2 = fig.add_subplot(1, 2, 2)
                 ax2.set_title("Drone Position in 3D")
                 drone_positions = np.array(self.all_poses)[:, 1:4]  # Extract x, y, z positions
-                ax2.plot(drone_positions[:, 0], drone_positions[:, 1], drone_positions[:, 2], label="Drone Path")
-                ax2.plot(self.target_trajectory[:, 0], self.target_trajectory[:, 1], self.target_trajectory[:, 2], label="Target Trajectory", color='green')
-                ax2.scatter(current_setpoint[0][0], current_setpoint[0][1], current_setpoint[0][2], color='red', label="Current Setpoint")
+                # ax2.plot(drone_positions[:, 0], drone_positions[:, 1], drone_positions[:, 2], label="Drone Path")
+                # ax2.plot(self.target_trajectory[:, 0], self.target_trajectory[:, 1], self.target_trajectory[:, 2], label="Target Trajectory", color='green')
+                # ax2.scatter(current_setpoint[0][0], current_setpoint[0][1], current_setpoint[0][2], color='red', label="Current Setpoint")
+                ax2.plot(drone_positions[:, 0], drone_positions[:, 1], label="Drone Path")
+                ax2.plot(self.target_trajectory[:, 0], self.target_trajectory[:, 1], label="Target Trajectory", color='green')
+                ax2.scatter(current_setpoint[0][0], current_setpoint[0][1], color='red', label="Current Setpoint")
                 ax2.set_xlabel("X")
                 ax2.set_ylabel("Y")
-                ax2.set_zlabel("Z")
+                # ax2.set_zlabel("Z")
 
                 # set ax2 limits
                 ax2.set_xlim([-0.5, 2.5])
                 ax2.set_ylim([-1.5, 1.5])
-                ax2.set_zlim([0, 2.5])
+                # ax2.set_zlim([0, 2.5])
                 ax2.legend()
 
                 plt.tight_layout()
