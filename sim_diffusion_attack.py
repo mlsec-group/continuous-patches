@@ -9,6 +9,7 @@ import time
 from util import scale_tx_ty
 
 import cv2
+import rowan
 
 from threading import Thread
 from collections import deque
@@ -198,28 +199,36 @@ class AttackerPolicyThread(Thread):
 
 
                 print("Drone pose: ", self.drone_pose[0])
-                change_necessary = target_position - self.drone_pose[0]
-                print("Change necessary: ", change_necessary)
+                # change_necessary = target_position - self.drone_pose[0]
+                # print("Change necessary: ", change_necessary)
 
                 # calculate target x based on change_necessary[0]
                 # keep in range [0, 2]
                 # target_x = np.maximum(np.minimum(1. - change_necessary[0], 2.), 0.0)
-                target_x = 1.
+                # target_x = 1.
 
 
                 # # calculate target y based on change_necessary[1]
                 # # keep in range [-1, 1]
                 # target_y = np.maximum(np.minimum(change_necessary[1], 1.), -1.0)
-                if change_necessary[1] > 0.1:
-                    target_y = 1.
-                elif change_necessary[1] < -0.1:
-                    target_y = -1.
-                else:
-                    target_y = 0.
+                # if change_necessary[1] > 0.1:
+                #     target_y = 1.
+                # elif change_necessary[1] < -0.1:
+                #     target_y = -1.
+                # else:
+                #     target_y = 0.
 
                 # # calculate target z based on change_necessary[2]
                 # # keep in range [-0.5, 0.5]
-                target_z = np.maximum(np.minimum(0. - change_necessary[2], 0.5), -0.5)
+                # target_z = np.maximum(np.minimum(0. - change_necessary[2], 0.5), -0.5)
+
+                target_direction = (target_position[:3] - self.drone_pose[0][:3])
+                target_direction /= np.linalg.norm(target_direction)
+                world_pose = target_position[:3] + 1*target_direction
+                relative_pose = world_pose - self.drone_pose[0][:3]
+                quats = rowan.from_euler(0., 0., -self.drone_pose[0][3], convention='xyz') # returns qw, qx, qy, qz
+                rotated_pose = rowan.rotate(quats, relative_pose)
+                target_x, target_y, target_z = rotated_pose.tolist()
 
                 print("Target for frontnet: ", target_x, target_y, target_z)
 
@@ -277,7 +286,7 @@ if __name__ == "__main__":
 
     os.makedirs('results/simulation', exist_ok=True)
 
-    model_path = 'results/diffusion_training/edm_frontnet_1k_25ds_2ke.pth'
+    model_path = 'results/diffusion_training.bak/trained_model.pth'
 
 
     dataset_path = "pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"
