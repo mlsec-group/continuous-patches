@@ -185,11 +185,13 @@ class CFSim():
             global_pos = target_pos - drone_pose[:3]
             target_yaw = np.arctan2(global_pos[1], global_pos[0]) #- np.pi
 
-            new_setpoint = target_pos + self._calc_heading_vec(1., target_yaw-np.pi)
-            new_setpoint[2] = 1.
-            print("New setpoint in world: ", new_setpoint, 0.)
+            frontnet_yaw = -np.pi
 
-            setpoints.append([*new_setpoint, target_yaw])
+            new_setpoint = target_pos + self._calc_heading_vec(1., frontnet_yaw)
+            new_setpoint[2] = 1.
+            print("New setpoint in world: ", new_setpoint, target_yaw)
+
+            setpoints.append([*new_setpoint, 0.]) 
         
         return np.array(setpoints)
 
@@ -254,12 +256,12 @@ class SimulatorThread(Thread):
                                   [0.0, -0.50, 1., 0.0],
                                   [0.0, -0.25, 1., 0.0],
                                   [0.0, 0.00, 1., 0.0]])
-    # t = np.linspace(0, 2 * np.pi, 30)
-    # x = 2 * np.sin(t)  # Horizontal figure 8
-    # y = 1.5 * np.sin(2 * t)  # Vertical figure 8
-    # z = np.ones_like(t) + 1  # Constant height at 1
-    # yaw = np.zeros_like(t)  # Constant yaw
-    # target_trajectory = np.column_stack((x, y, z, yaw))
+        # t = np.linspace(0, 2 * np.pi, 30)
+        # x = 2 * np.sin(t)  # Horizontal figure 8
+        # y = 1.5 * np.sin(2 * t)  # Vertical figure 8
+        # z = np.ones_like(t)  # Constant height at 1
+        # yaw = np.zeros_like(t)  # Constant yaw
+        # self.target_trajectory = np.column_stack((x, y, z, yaw))
 
     def run(self):
         i = 0
@@ -312,7 +314,7 @@ class SimulatorThread(Thread):
                 # ax2.set_zlabel("Z")
 
                 # set ax2 limits
-                ax2.set_xlim([-0.5, 2.5])
+                ax2.set_xlim([-2.5, 2.5])
                 ax2.set_ylim([-1.5, 1.5])
                 # ax2.set_zlim([0, 2.5])
                 ax2.legend()
