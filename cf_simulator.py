@@ -175,24 +175,45 @@ class CFSim():
             # predicted_pose = [1., -1., 0., 0.]
             # print("Drone pose in world: ", drone_pose)
             # print("Predicted pose in body: ", predicted_pose)
-            quats = rowan.from_euler(0., 0., drone_pose[3], convention='xyz') # returns qw, qx, qy, qz
-            rotated_desired = rowan.rotate(quats, predicted_pose[:3])
-            # print("Predicted pose in world: ", rotated_desired)
-            target_pos = drone_pose[:3] + rotated_desired
-            # print("Target pose in world: ", target_pos)
+            # quats = rowan.from_euler(0., 0., drone_pose[3], convention='xyz') # returns qw, qx, qy, qz
+            # rotated_desired = rowan.rotate(quats, predicted_pose[:3])
+            # # print("Predicted pose in world: ", rotated_desired)
+            # target_pos = drone_pose[:3] + rotated_desired
+            # # print("Target pose in world: ", target_pos)
 
-            # predicted yaw angles are discarded since they are very faulty
-            global_pos = target_pos - drone_pose[:3]
-            target_yaw = np.arctan2(global_pos[1], global_pos[0]) #- np.pi
+            # # predicted yaw angles are discarded since they are very faulty
+            # global_pos = target_pos - drone_pose[:3]
+            # target_yaw = np.arctan2(global_pos[1], global_pos[0]) #- np.pi
 
-            frontnet_yaw = -np.pi
+            # frontnet_yaw = -np.pi
 
-            new_setpoint = target_pos + self._calc_heading_vec(1., frontnet_yaw)
-            new_setpoint[2] = 1.
-            print("New setpoint in world: ", new_setpoint, target_yaw)
+            # new_setpoint = target_pos + self._calc_heading_vec(1., frontnet_yaw)
+            # new_setpoint[2] = 1.
+            # print("New setpoint in world: ", new_setpoint, target_yaw)
 
-            setpoints.append([*new_setpoint, 0.]) 
-        
+            # setpoints.append([*new_setpoint, 0.]) 
+
+            predicted_pose[3] = -np.pi  # TODO: we manually set the yaw right now 
+            # -> frontnet predictions were always faulty, yolo doesn't output an angle yet
+
+            T_pred_drone = np.eye(4)
+            T_pred_drone[:3, :3] = rowan.to_matrix(rowan.from_euler(0., 0., predicted_pose[3], convention='xyz'))
+            T_pred_drone[:3, 3] = predicted_pose[:3]
+
+            T_drone_world = np.eye(4)
+            T_drone_world[:3, :3] = rowan.to_matrix(rowan.from_euler(0., 0., drone_pose[3], convention='xyz'))
+            T_drone_world[:3, 3] = drone_pose[:3]
+
+            T_pred_world = T_drone_world @ T_pred_drone
+
+            T_direction_world = np.eye(4)
+            T_direction_world[:3, 3] = self._calc_heading_vec(1., predicted_pose[3])
+
+            T_setpoint_world = T_direction_world @ T_pred_world
+            setpoint_yaw = rowan.to_euler(rowan.from_matrix(T_setpoint_world[:3, :3]), convention='xyz')[2]
+
+            setpoint = np.array([*T_setpoint_world[:3, 3], setpoint_yaw])
+            setpoints.append(setpoint)
         return np.array(setpoints)
 
     def _calc_heading_vec(self, radius, angle):
@@ -240,33 +261,37 @@ class SimulatorThread(Thread):
         self.dt = 0.1
 
         # only for debug plots
-        self.target_trajectory = np.array([[0.0, 0.25, 1., 0.0],
-                                  [0.0, 0.50, 1., 0.0],
-                                  [0.0, 0.75, 1., 0.0],
-                                  [0.0, 1.00, 1., 0.0],
-                                  [0.0, 0.75, 1., 0.0],
-                                  [0.0, 0.50, 1., 0.0],
-                                  [0.0, 0.25, 1., 0.0],
-                                  [0.0, 0.00, 1., 0.0],
-                                  [0.0, -0.25, 1., 0.0],
-                                  [0.0, -0.50, 1., 0.0],
-                                  [0.0, -0.75, 1., 0.0],
-                                  [0.0, -1.00, 1., 0.0],
-                                  [0.0, -0.75, 1., 0.0],
-                                  [0.0, -0.50, 1., 0.0],
-                                  [0.0, -0.25, 1., 0.0],
-                                  [0.0, 0.00, 1., 0.0]])
-        # t = np.linspace(0, 2 * np.pi, 30)
-        # x = 2 * np.sin(t)  # Horizontal figure 8
-        # y = 1.5 * np.sin(2 * t)  # Vertical figure 8
-        # z = np.ones_like(t)  # Constant height at 1
-        # yaw = np.zeros_like(t)  # Constant yaw
-        # self.target_trajectory = np.column_stack((x, y, z, yaw))
+        # self.target_trajectory = np.array([[0.0, 0.25, 1., 0.0],
+        #                           [0.0, 0.50, 1., 0.0],
+        #                           [0.0, 0.75, 1., 0.0],
+        #                           [0.0, 1.00, 1., 0.0],
+        #                           [0.0, 0.75, 1., 0.0],
+        #                           [0.0, 0.50, 1., 0.0],
+        #                           [0.0, 0.25, 1., 0.0],
+        #                           [0.0, 0.00, 1., 0.0],
+        #                           [0.0, -0.25, 1., 0.0],
+        #                           [0.0, -0.50, 1., 0.0],
+        #                           [0.0, -0.75, 1., 0.0],
+        #                           [0.0, -1.00, 1., 0.0],
+        #                           [0.0, -0.75, 1., 0.0],
+        #                           [0.0, -0.50, 1., 0.0],
+        #                           [0.0, -0.25, 1., 0.0],
+        #                           [0.0, 0.00, 1., 0.0]])
+        t = np.linspace(0, 2 * np.pi, 20)
+        x = 0.5 * np.sin(2 * t)  # Horizontal figure 8
+        y = 1.5 * np.sin(t)  # Vertical figure 8
+        z = np.ones_like(t)  # Constant height at 1
+        yaw = np.zeros_like(t)  # Constant yaw
+        self.target_trajectory = np.column_stack((x, y, z, yaw))
 
     def run(self):
         i = 0
         while self._stay_alive:
             self.all_poses.append([time.time(), *self.drone_pose[0].tolist()])
+            print("Current drone pose:", self.drone_pose[0])
+            current_setpoint = np.array([self.drone_pose[0]])
+
+            # print(current_setpoint, current_setpoint.shape)
             if self.camera_images:
                 # self.current_image = self.camera_images.popleft()
             
@@ -281,8 +306,11 @@ class SimulatorThread(Thread):
 
 
                 # print("current setpoint:", current_setpoint)
+                
 
-            if self.drone_pose and not np.allclose(self.drone_pose[0], current_setpoint[0]):
+            #if self.drone_pose and not np.allclose(self.drone_pose[0], current_setpoint):
+                print("Current setpoint shortly before addition:", current_setpoint)
+                print("Current drone pose before added setpoint: ", self.drone_pose[0])
                 current_pose = self.drone_pose[0] + ((current_setpoint[0] - self.drone_pose[0]) * 0.1)
                 # print("current pose after added setpoint: ", current_pose)
                 self.drone_pose.append(current_pose)

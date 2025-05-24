@@ -118,6 +118,10 @@ T_setpoint_world = T_direction_world @ T_fn_world
 print("T setpoint world: ", np.round(T_setpoint_world, 2))
 setpoint_yaw = rowan.to_euler(rowan.from_matrix(T_setpoint_world[:3, :3]), convention='xyz')[2]
 
+print("Setpoint yaw: ", setpoint_yaw)
+setpoint = np.array([*T_setpoint_world[:3, 3], setpoint_yaw])
+print(setpoint)
+
 new_setpoint = target_pos + direction_vector
 
 
