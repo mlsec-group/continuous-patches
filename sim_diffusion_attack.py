@@ -9,6 +9,7 @@ import time
 from util import scale_tx_ty
 
 import cv2
+import rowan
 
 from threading import Thread
 from collections import deque
@@ -135,8 +136,8 @@ class ManipulatorThread(Thread):
         while self._stay_alive:
             # if self.camera_image_queue and self.patch_queue:
             if self.patch_queue:
-                # camera_image = self.dataset.dataset.__getitem__(i)[0]#self.camera_image_queue[0]
-                camera_image = torch.ones((96, 160), dtype=torch.float32) * 255.
+                camera_image = self.dataset.dataset.__getitem__(0)[0][0]#self.camera_image_queue[0]
+                # camera_image = torch.ones((96, 160), dtype=torch.float32) * 255.
                 patch, sf, scaled_tx, scaled_ty = self.patch_queue[0]
 
                 T = np.zeros((3, 3))
@@ -181,10 +182,11 @@ class AttackerPolicyThread(Thread):
                 distance = np.linalg.norm(self.drone_pose[0][:2] - target_position[:2])
                 # print("current distance: ", distance)
                 if distance < 0.2:
-                    self.index_reached += 1
-                    print("Target reached: ", target_position)
-                    target_position = self.target_trajectory[self.index_reached]
-                    print("Moving towards: ", target_position)
+                    if self.index_reached < len(self.target_trajectory) - 1:
+                        self.index_reached += 1
+                        print("Target reached: ", target_position)
+                        target_position = self.target_trajectory[self.index_reached]
+                        print("Moving towards: ", target_position)
                 
                 # to keep x constant -> target x should be 1.
                 # to lower x -> target x should be > 1.
@@ -194,38 +196,39 @@ class AttackerPolicyThread(Thread):
                 # to move up -> target z should be > 0.
                 # to move down -> target z should be < 0.
 
-                print("Target position world: ", target_position)
-
-
                 print("Drone pose: ", self.drone_pose[0])
-                change_necessary = target_position - self.drone_pose[0]
-                print("Change necessary: ", change_necessary)
+                print("Checkpoint position world: ", target_position)
 
-                # calculate target x based on change_necessary[0]
-                # keep in range [0, 2]
-                # target_x = np.maximum(np.minimum(1. - change_necessary[0], 2.), 0.0)
-                target_x = 1.
+                quats_checkpoint = rowan.from_euler(0., 0., target_position[3], convention='xyz') # returns qw, qx, qy, qz
+                rot_matrix_checkpoint = rowan.to_matrix(quats_checkpoint)
+                T_checkpoint = np.eye(4)
+                T_checkpoint[:3, :3] = rot_matrix_checkpoint
+                T_checkpoint[:3, 3] = target_position[:3]
+
+                T_direction = np.eye(4)
+                T_direction[:3, 3] = [1. * np.cos(np.pi), 1. * np.sin(np.pi), 0.]   # TODO: Calculate the angle, such that the drone will be facing the center of the monitor
+
+                
+                T_prediction_world = np.linalg.inv(T_direction) @ T_checkpoint
 
 
-                # # calculate target y based on change_necessary[1]
-                # # keep in range [-1, 1]
-                # target_y = np.maximum(np.minimum(change_necessary[1], 1.), -1.0)
-                if change_necessary[1] > 0.1:
-                    target_y = 1.
-                elif change_necessary[1] < -0.1:
-                    target_y = -1.
-                else:
-                    target_y = 0.
+               
+                quats = rowan.from_euler(0., 0., self.drone_pose[0][3], convention='xyz') # returns qw, qx, qy, qz
+                # TODO: yaw might need to change once we switch to having the monitor at fixed position
 
-                # # calculate target z based on change_necessary[2]
-                # # keep in range [-0.5, 0.5]
-                target_z = np.maximum(np.minimum(0. - change_necessary[2], 0.5), -0.5)
+                rot_matrix = rowan.to_matrix(quats)
+                transformation_matrix = np.eye(4)
+                transformation_matrix[:3, :3] = rot_matrix
+                transformation_matrix[:3, 3] = self.drone_pose[0][:3]
 
-                print("Target for frontnet: ", target_x, target_y, target_z)
 
-                # target_x = 0.8
-                # target_y = 0.0
-                # target_z = 0.0
+                T_prediction_drone = np.linalg.inv(transformation_matrix) @ T_prediction_world
+
+                print("Checkpoint position frontnet in drone frame: ", T_prediction_drone[:3, 3])
+                target_yaw = rowan.to_euler(rowan.from_matrix(T_prediction_drone[:3, :3]), convention='xyz')[2]
+
+                target_x, target_y, target_z = T_prediction_drone[:3, 3].tolist()
+
 
                 # possible position decision:
                 # if target_x closer 2.: sf should be closer to 0.4
@@ -240,7 +243,7 @@ class AttackerPolicyThread(Thread):
                 tx = self.sigmoid(target_y, x0=0.0, k=-5.0)
                 ty = 1 - self.sigmoid(target_z, x0=0.0, k=10.0)
 
-                # print("Position patch: ", sf, tx, ty)
+                print("Position patch: ", sf, tx, ty)
 
                 sf = np.clip(sf, 0.4, 0.8)
                 tx = np.clip(tx, 0.0, 1.0)
@@ -287,29 +290,29 @@ if __name__ == "__main__":
     # camera_thread = CameraThread(cf_sim.dataset)
     # camera_thread.start()
 
-    target_trajectory = np.array([[0.0, 0.25, 1., 0.0],
-                            [0.0, 0.50, 1., 0.0],
-                            [0.0, 0.75, 1., 0.0],
-                            [0.0, 1.00, 1., 0.0],
-                            [0.0, 0.75, 1., 0.0],
-                            [0.0, 0.50, 1., 0.0],
-                            [0.0, 0.25, 1., 0.0],
-                            [0.0, 0.00, 1., 0.0],
-                            [0.0, -0.25, 1., 0.0],
-                            [0.0, -0.50, 1., 0.0],
-                            [0.0, -0.75, 1., 0.0],
-                            [0.0, -1.00, 1., 0.0],
-                            [0.0, -0.75, 1., 0.0],
-                            [0.0, -0.50, 1., 0.0],
-                            [0.0, -0.25, 1., 0.0],
-                            [0.0, 0.00, 1., 0.0]])
+    # target_trajectory = np.array([#[0.0, 0.25, 1., 0.0],
+    #                         [0.0, 0.50, 1., 0.0],
+    #                         #[0.0, 0.75, 1., 0.0],
+    #                         [0.0, 1.00, 1., 0.0],
+    #                         #[0.0, 0.75, 1., 0.0],
+    #                         [0.0, 0.50, 1., 0.0],
+    #                         #[0.0, 0.25, 1., 0.0],
+    #                         [0.0, 0.00, 1., 0.0],
+    #                         #[0.0, -0.25, 1., 0.0],
+    #                         [0.0, -0.50, 1., 0.0],
+    #                         #[0.0, -0.75, 1., 0.0],
+    #                         [0.0, -1.00, 1., 0.0],
+    #                         #[0.0, -0.75, 1., 0.0],
+    #                         [0.0, -0.50, 1., 0.0],
+    #                         #[0.0, -0.25, 1., 0.0],
+    #                         [0.0, 0.00, 1., 0.0]])
 
-    # t = np.linspace(0, 2 * np.pi, 30)
-    # x = 2 * np.sin(t)  # Horizontal figure 8
-    # y = 1.5 * np.sin(2 * t)  # Vertical figure 8
-    # z = np.ones_like(t) + 1  # Constant height at 1
-    # yaw = np.zeros_like(t)  # Constant yaw
-    # target_trajectory = np.column_stack((x, y, z, yaw))
+    t = np.linspace(0, 2 * np.pi, 20)
+    x = 0.5 * np.sin(2 * t)  # Horizontal figure 8
+    y = 1.5 * np.sin(t)  # Vertical figure 8
+    z = np.ones_like(t)  # Constant height at 1
+    yaw = np.zeros_like(t)  # Constant yaw
+    target_trajectory = np.column_stack((x, y, z, yaw))
 
     from camera import Camera
     cam = Camera('camera_calibration.yaml')
