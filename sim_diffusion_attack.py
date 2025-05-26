@@ -52,10 +52,10 @@ class DiffusionThread(Thread):
             # print(sf, tx, ty, x, y, z)
             
 
-            r_targets = torch.tensor(np.stack(([sf], [tx], [ty], [x], [y], [z])).T, dtype=torch.float32)
-            # print(r_targets.shape)
+            condiditions = torch.tensor(np.stack(([sf], [tx], [ty], [x], [y], [z])).T, dtype=torch.float32)
+            # print(condiditions.shape)
 
-            samples = self.diffusion_model.sample(1, r_targets, self.device, patch_size=[80,80], n_steps=25).detach().to('cpu').numpy()
+            samples = self.diffusion_model.sample(1, condiditions, self.device, patch_size=[80,80], n_steps=25).detach().to('cpu').numpy()
             patch = samples[0, 0] * 255.
 
             scaled_tx, scaled_ty = scale_tx_ty(sf, tx, ty, 80, (projector_height, projector_width))
@@ -164,6 +164,8 @@ class AttackerPolicyThread(Thread):
         
         self.patch_size = 80
 
+        self.image_bb = (0, 0, 160, 96)  # camera image bounding box
+
         self._stay_alive = True
 
     def run(self):
@@ -194,7 +196,7 @@ class AttackerPolicyThread(Thread):
                 # to move down -> target z should be < 0.
 
                 # print("Drone pose: ", self.drone_pose[0])
-                # print("Checkpoint position world: ", target_position)
+                print("Checkpoint position world: ", target_position)
 
                 quats_checkpoint = rowan.from_euler(0., 0., target_position[3], convention='xyz') # returns qw, qx, qy, qz
                 rot_matrix_checkpoint = rowan.to_matrix(quats_checkpoint)
@@ -226,6 +228,8 @@ class AttackerPolicyThread(Thread):
 
                 target_x, target_y, target_z = T_prediction_drone[:3, 3].tolist()
 
+                print("Target for Frontnet: ", target_x, target_y, target_z)
+
 
                 # possible position decision:
                 # if target_x closer 2.: sf should be closer to 0.4
@@ -237,8 +241,13 @@ class AttackerPolicyThread(Thread):
 
 
                 # sf = 0.8 - 0.4 * self.sigmoid(target_x, x0=1.0, k=5.0)
-                tx = self.sigmoid(target_y, x0=0.0, k=-5.0)
-                ty = 1 - self.sigmoid(target_z, x0=0.0, k=10.0)
+                # tx = self.sigmoid(target_y, x0=0.0, k=-5.0)
+                # ty = 1 - self.sigmoid(target_z, x0=0.0, k=10.0)
+
+                # TODO: change back to smoother/different tx decision
+                tx = 1. if target_y < 0 else 0.
+
+                ty = 0.5
 
                 # print("Position patch: ", sf, tx, ty)
 
@@ -249,6 +258,11 @@ class AttackerPolicyThread(Thread):
                 # print("Position patch: ", sf, tx, ty)
 
                 possible_sf, patch_ul, visible_projector_dim = self.get_possible_scale_factor(T_drone_world)
+
+                print("Possible scale factor: ", possible_sf, "Patch upper left: ", patch_ul, "Visible projector dim: ", visible_projector_dim)
+                print("tx, ty: ", tx, ty)
+
+
                 if possible_sf is None:
                     print("No possible transformation found, skipping...")
                     time.sleep(0.1)
@@ -265,105 +279,48 @@ class AttackerPolicyThread(Thread):
     
 
     def get_possible_scale_factor(self, T_drone_world):
-        patch_area_image = self.get_possible_patch_area_image(T_drone_world)
-        if patch_area_image is None:
+        projector_area_image = self.get_projector_area(T_drone_world)
+        if projector_area_image is None:
             print("No overlap in image coordinates, cannot project patch area to image.")
-            return None, None, (None, None)
-        
-        
-        patch_image_ul, patch_image_ur, patch_image_ll, patch_image_lr = patch_area_image
-        max_width = np.abs(patch_image_ur[0] - patch_image_ul[0])
-        max_height = np.abs(patch_image_ll[1] - patch_image_ul[1])
-        max_dim = np.min((max_width, max_height))
-
-        possible_sf = np.clip(max_dim / self.patch_size, 0.4, 0.8)  # scale factor should be between 0.4 and 0.8
-        #scaled_tx, scaled_ty = scale_tx_ty(possible_sf, desired_tx, desired_ty, self.patch_size, (max_height, max_width))
-
-        # T_patch = np.zeros((3, 3))
-        # T_patch[0, 0] = possible_sf
-        # T_patch[1, 1] = possible_sf
-        # T_patch[0, 2] = scaled_tx + patch_image_ul[0]
-        # T_patch[1, 2] = scaled_ty + patch_image_ul[1]
-        # T_patch[2, 2] = 1
-
-
-        return possible_sf, patch_image_ul, (max_height, max_width)
-    
-    def get_possible_patch_area_image(self, T_drone_world):
-        patch_area_world = self.get_possible_patch_area_world(T_drone_world)
-        if patch_area_world is None:
-            print("No overlap in world coordinates, cannot project patch area to image.")
             return None
         
-        patch_area_drone =  np.array([(np.linalg.inv(T_drone_world) @ np.array([*patch_coords, 1.])) for patch_coords in patch_area_world]) 
-        # element-wise matrix multiplication to get each point in drone frame (in homogeneous coords)
 
-        patch_area_camera = np.array([(self.camera_extrinsic @ patch_coords)[:3] for patch_coords in patch_area_drone])  # camera_extrinsic is T_drone_camera
+        projector_ul_x, projector_ul_y, projector_height, projector_width = projector_area_image
+        max_dim = np.min((projector_height, projector_width))
+        
 
-        patch_area_image = np.array([(self.camera_intrinsic @ patch_coords) for patch_coords in patch_area_camera])      # camera_intrinsic is T_camera_image
+        possible_sf = np.clip(max_dim / self.patch_size, 0.4, 0.8)  # scale factor should be between 0.4 and 0.8
 
-        patch_image_ul, patch_image_ur, patch_image_ll, patch_image_lr = patch_area_image
+        return possible_sf, (projector_ul_x, projector_ul_y), (projector_height, projector_width)
 
-        patch_image_ul = np.array([patch_image_ul[0] / patch_image_ul[2], patch_image_ul[1] / patch_image_ul[2]])
-        patch_image_ur = np.array([patch_image_ur[0] / patch_image_ur[2], patch_image_ur[1] / patch_image_ur[2]])
-        patch_image_ll = np.array([patch_image_ll[0] / patch_image_ll[2], patch_image_ll[1] / patch_image_ll[2]])
-        patch_image_lr = np.array([patch_image_lr[0] / patch_image_lr[2], patch_image_lr[1] / patch_image_lr[2]])
+    def get_projector_area(self, T_drone_world):
 
-        return np.array([patch_image_ul, patch_image_ur, patch_image_ll, patch_image_lr])
+        projector_drone = np.array([np.linalg.inv(T_drone_world) @ np.array([*projector_coords, 1.]) for projector_coords in self.projector_world])
+        projector_camera = np.array([(self.camera_extrinsic @ patch_coords)[:3] for patch_coords in projector_drone])  # camera_extrinsic is T_drone_camera
+        projector_image = np.array([(self.camera_intrinsic @ patch_coords) for patch_coords in projector_camera])         # camera_intrinsic is T_camera_image
 
-
-    def get_possible_patch_area_world(self, T_drone_world):
-        # projecting the corners of the camera image to world coordinates
-        camera_image_bounding_box = (0, 0, 160, 96)
-        camera_center, ul_camera, ur_camera, ll_camera, lr_camera, _ = bb2camera(camera_image_bounding_box, self.camera_intrinsic, self.camera_distortion)
-
-        camera_center_drone = (np.linalg.inv(self.camera_extrinsic) @ np.array([*camera_center, 1.]))[:3]
-        ul_drone = (np.linalg.inv(self.camera_extrinsic) @ np.array([*ul_camera, 1.]))[:3]
-        ur_drone = (np.linalg.inv(self.camera_extrinsic) @ np.array([*ur_camera, 1.]))[:3]
-        ll_drone = (np.linalg.inv(self.camera_extrinsic) @ np.array([*ll_camera, 1.]))[:3]
-        lr_drone = (np.linalg.inv(self.camera_extrinsic) @ np.array([*lr_camera, 1.]))[:3]
-
-        camera_center_world = (T_drone_world @ np.array([*camera_center_drone, 1.]))[:3]
-        ul_world = (T_drone_world @ np.array([*ul_drone, 1.]))[:3]
-        ur_world = (T_drone_world @ np.array([*ur_drone, 1.]))[:3]
-        ll_world = (T_drone_world @ np.array([*ll_drone, 1.]))[:3]
-        lr_world = (T_drone_world @ np.array([*lr_drone, 1.]))[:3]
-
-        plane_normal = np.cross(self.projector_world[1] - self.projector_world[0], self.projector_world[2] - self.projector_world[0])
-        plane_point = self.projector_world[0]
-
-        intersection_ul = line_plane_intersection(plane_normal, plane_point, ul_world - camera_center_world, camera_center_world)
-        intersection_ur = line_plane_intersection(plane_normal, plane_point, ur_world - camera_center_world, camera_center_world)
-        intersection_ll = line_plane_intersection(plane_normal, plane_point, ll_world - camera_center_world, camera_center_world)
-        intersection_lr = line_plane_intersection(plane_normal, plane_point, lr_world - camera_center_world, camera_center_world)
-
-        # find overlap with projector area in world space
-
-        max_y = np.min((intersection_ul[1], intersection_ll[1]))
-        min_y = np.max((intersection_ur[1], intersection_lr[1]))
-
-        max_z = np.min((intersection_ul[2], intersection_ur[2]))
-        min_z = np.max((intersection_ll[2], intersection_lr[2]))
+        projector_image_ul, projector_image_ur, projector_image_ll, projector_image_lr = projector_image
+        projector_image_ul = np.array([projector_image_ul[0] / projector_image_ul[2], projector_image_ul[1] / projector_image_ul[2]])
+        projector_image_ur = np.array([projector_image_ur[0] / projector_image_ur[2], projector_image_ur[1] / projector_image_ur[2]])
+        projector_image_ll = np.array([projector_image_ll[0] / projector_image_ll[2], projector_image_ll[1] / projector_image_ll[2]])
+        projector_image_lr = np.array([projector_image_lr[0] / projector_image_lr[2], projector_image_lr[1] / projector_image_lr[2]])
 
 
-        if min_y <= self.projector_world[0, 1] and max_y >= self.projector_world[1, 1] and min_z <= self.projector_world[1, 2] and max_z >= self.projector_world[3, 2]:
-            patch_min_y = np.max((min_y, self.projector_world[0, 1]))
-            patch_max_y = np.min((max_y, self.projector_world[1, 1]))
+        # check for overlap with image
+        # x => width
+        # y => height
+        
+        intersection_min_x = np.max((projector_image_ul[0], self.image_bb[0]))
+        intersection_min_y = np.max((projector_image_ul[1], self.image_bb[1]))
+        intersection_max_x = np.min((projector_image_lr[0], self.image_bb[2]))
+        intersection_max_y = np.min((projector_image_ll[1], self.image_bb[3]))
 
-            patch_min_z = np.max((min_z, self.projector_world[3, 2]))
-            patch_max_z = np.min((max_z, self.projector_world[1, 2]))
-
-
-            patch_space_world = np.array([[2., patch_min_y, patch_max_z],
-                                        [2., patch_max_y, patch_max_z],
-                                        [2., patch_min_y, patch_min_z],
-                                        [2., patch_max_y, patch_min_z]])
-            
-            # print(patch_space_world)
-
-            return patch_space_world
+        if intersection_min_x < intersection_max_x and intersection_min_y < intersection_max_y:
+            height = intersection_max_y - intersection_min_y
+            width = intersection_max_x - intersection_min_x
+            return np.array((intersection_min_x, intersection_min_y, height, width))
         else:
-            print("no overlap")
+            print("No overlap with image bounding box")
             return None
 
     def close(self):
@@ -393,19 +350,19 @@ if __name__ == "__main__":
     # camera_thread.start()
 
     target_trajectory = np.array([#[0.0, 0.25, 1., 0.0],
-                            [0.0, 0.50, 1., 0.0],
+                            #[0.0, 0.50, 1., 0.0],
                             #[0.0, 0.75, 1., 0.0],
                             [0.0, 1.00, 1., 0.0],
                             #[0.0, 0.75, 1., 0.0],
-                            [0.0, 0.50, 1., 0.0],
+                            #[0.0, 0.50, 1., 0.0],
                             #[0.0, 0.25, 1., 0.0],
                             [0.0, 0.00, 1., 0.0],
                             #[0.0, -0.25, 1., 0.0],
-                            [0.0, -0.50, 1., 0.0],
+                            #[0.0, -0.50, 1., 0.0],
                             #[0.0, -0.75, 1., 0.0],
                             [0.0, -1.00, 1., 0.0],
                             #[0.0, -0.75, 1., 0.0],
-                            [0.0, -0.50, 1., 0.0],
+                            #[0.0, -0.50, 1., 0.0],
                             #[0.0, -0.25, 1., 0.0],
                             [0.0, 0.00, 1., 0.0]])
 
@@ -421,7 +378,7 @@ if __name__ == "__main__":
 
     camera_image_queue = deque(maxlen=1)
 
-    sim_thread = SimulatorThread(cf_sim.sim_new_pose, camera_image_queue, cam.point_from_xyz)
+    sim_thread = SimulatorThread(cf_sim.sim_new_pose, camera_image_queue, cam)
 
     attacker_policy = AttackerPolicyThread(sim_thread.drone_pose, target_trajectory, camera_data=cam)
 
