@@ -94,7 +94,7 @@ def targeted_attack_joint(dataset, patch, model, positions, assignment, targets,
     positions_t = positions.clone().requires_grad_(True)
     # print("Initial position inside joint attack: ", positions_t)
 
-    opt = torch.optim.Adam([patch_t], lr=lr)     # eps 1e-4
+    opt = torch.optim.Adam([patch_t, positions_t], lr=lr)     # eps 1e-4
 
     losses = []
 
@@ -218,7 +218,10 @@ def targeted_attack_joint(dataset, patch, model, positions, assignment, targets,
                 loss.backward()
                 opt.step()
 
-                patch_t.data.clamp_(0., 1.)      # evtl. 
+                patch_t.data.clamp_(0., 1.)
+                positions_t.data[0, 0, 0].clamp_(0.2, 1.)
+                positions_t.data[0, 0, 1].clamp_(0., 1.)
+                positions_t.data[0, 0, 2].clamp_(0., 1.)
             actual_loss /= len(dataset)
             stats /= len(dataset)
             stats_p /= len(dataset)
@@ -446,7 +449,7 @@ def calc_eval_loss(dataset, patch, transformation_matrix, model, target, model_n
             batch, _ = data
             batch = batch.to(patch.device) / 255. # limit images to range [0-1]
 
-            mod_img = place_patch(batch, patch, transformation_matrix)
+            mod_img = place_patch(batch, patch, transformation_matrix, random_perspection=False)
             mod_img *= 255. # convert input images back to range [0-255.]
             mod_img.clamp_(0., 255.)
             if quantized:
@@ -606,7 +609,7 @@ if __name__=="__main__":
             from util import load_quantized
             model_path = 'misc/Frontnet.onnx'
             model = load_quantized(path=model_path, device=device)
-    
+        model.eval() # CRUCIAL!!!
     if args.model == 'yolov5':
         model = YOLOBox()
     

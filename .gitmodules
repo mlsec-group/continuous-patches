@@ -1,3 +1,6 @@
 [submodule "pulp-frontnet"]
 	path = pulp-frontnet
 	url = git@github.com:idsia-robotics/pulp-frontnet.git
+[submodule "uav_trajectories"]
+	path = uav_trajectories
+	url = git@github.com:phanfeld/uav_trajectories.git

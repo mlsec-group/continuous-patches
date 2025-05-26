@@ -24,6 +24,9 @@ from collections import deque
 
 import time
 
+import matplotlib.pyplot as plt
+
+
 class CFSim():
     def __init__(self, model='frontnet', dataset_path="pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -34,6 +37,7 @@ class CFSim():
         
         if self.model == 'frontnet':
             self.pose_estimator = self.load_frontnet_model(path='pulp-frontnet/PyTorch/Models/Frontnet160x32.pt', device=self.device, config='160x32')
+            self.pose_estimator.eval()
         elif self.model == 'yolov5':
             self.pose_estimator = self.load_yolo_model()
         else:
@@ -45,7 +49,7 @@ class CFSim():
         # self.target_trajectory = target_trajectory
 
         # might be deleted later, the dataset is only loaded to get a suitable background image
-        self.dataset = self.load_dataset(dataset_path, train=False) # we need to test on the test set
+        self.dataset = self.load_dataset(dataset_path, train=False, shuffle=False) # we need to test on the test set
         base_img, gt = self.dataset.dataset.__getitem__(0)
         self.base_img = base_img#.squeeze(0).numpy()
 
@@ -138,7 +142,7 @@ class CFSim():
 
         return modified_image
     
-    def sim_new_pose(self, image: np.ndarray):
+    def sim_new_pose(self, image: np.ndarray, drone_pose):
         # make sure images (plural if working with batches) are of correct shape
         assert np.prod(image.shape) % (96 * 160) == 0 
         image_t = torch.tensor(image).to(self.device)
@@ -158,27 +162,58 @@ class CFSim():
 
         predicted_pose = predicted_pose.detach().cpu().numpy()
 
-        print("predicted pose", predicted_pose, predicted_pose.shape)
+        # print("predicted pose", predicted_pose, predicted_pose.shape)
         
         # calculate controller output
-        new_setpoint = self._controller_setpoint(predicted_pose)
+        new_setpoint = self._controller_setpoint(predicted_pose, drone_pose)
 
-        return new_setpoint
+        return new_setpoint, predicted_pose
 
-    def _controller_setpoint(self, predicted_poses):
+    def _controller_setpoint(self, predicted_poses, drone_pose):
         setpoints = []
         for predicted_pose in predicted_poses:
-            quats = rowan.from_euler(0., 0., self.pose[3], convention='xyz') # returns qw, qx, qy, qz
-            rotated_desired = rowan.rotate(quats, predicted_pose[:3])
-            target_pos = predicted_pose[:3] + rotated_desired
+            # predicted_pose = [1., -1., 0., 0.]
+            # print("Drone pose in world: ", drone_pose)
+            # print("Predicted pose in body: ", predicted_pose)
+            # quats = rowan.from_euler(0., 0., drone_pose[3], convention='xyz') # returns qw, qx, qy, qz
+            # rotated_desired = rowan.rotate(quats, predicted_pose[:3])
+            # # print("Predicted pose in world: ", rotated_desired)
+            # target_pos = drone_pose[:3] + rotated_desired
+            # # print("Target pose in world: ", target_pos)
 
-            # predicted yaw angles are discarded since they are very faulty
-            global_pos = target_pos - self.pose[:3]
-            target_yaw = np.arctan2(global_pos[1], global_pos[0]) - np.pi
+            # # predicted yaw angles are discarded since they are very faulty
+            # global_pos = target_pos - drone_pose[:3]
+            # target_yaw = np.arctan2(global_pos[1], global_pos[0]) #- np.pi
 
-            new_setpoint = target_pos + self._calc_heading_vec(1., target_yaw)
-            setpoints.append([*new_setpoint, target_yaw])
-        
+            # frontnet_yaw = -np.pi
+
+            # new_setpoint = target_pos + self._calc_heading_vec(1., frontnet_yaw)
+            # new_setpoint[2] = 1.
+            # print("New setpoint in world: ", new_setpoint, target_yaw)
+
+            # setpoints.append([*new_setpoint, 0.]) 
+
+            predicted_pose[3] = -np.pi  # TODO: we manually set the yaw right now 
+            # -> frontnet predictions were always faulty, yolo doesn't output an angle yet
+
+            T_pred_drone = np.eye(4)
+            T_pred_drone[:3, :3] = rowan.to_matrix(rowan.from_euler(0., 0., predicted_pose[3], convention='xyz'))
+            T_pred_drone[:3, 3] = predicted_pose[:3]
+
+            T_drone_world = np.eye(4)
+            T_drone_world[:3, :3] = rowan.to_matrix(rowan.from_euler(0., 0., drone_pose[3], convention='xyz'))
+            T_drone_world[:3, 3] = drone_pose[:3]
+
+            T_pred_world = T_drone_world @ T_pred_drone
+
+            T_direction_world = np.eye(4)
+            T_direction_world[:3, 3] = self._calc_heading_vec(1., predicted_pose[3])
+
+            T_setpoint_world = T_direction_world @ T_pred_world
+            setpoint_yaw = rowan.to_euler(rowan.from_matrix(T_setpoint_world[:3, :3]), convention='xyz')[2]
+
+            setpoint = np.array([*T_setpoint_world[:3, 3], setpoint_yaw])
+            setpoints.append(setpoint)
         return np.array(setpoints)
 
     def _calc_heading_vec(self, radius, angle):
@@ -207,42 +242,123 @@ class CFSim():
         l2_distances = np.linalg.norm((pose - desired_pose), ord=2)#, axis=1)
         return l2_distances
     
-def SimulatorThread(Thread):
-    def __init__(self, sim_new_pose):
+class SimulatorThread(Thread):
+    def __init__(self, sim_new_pose, camera_images, point_from_xyz):
         super().__init__()
         self.simulator = sim_new_pose
-        self.drone_pose = deque(1)
+        self.drone_pose = deque(maxlen=1)
+        self.drone_pose.append(np.array([0., 0., 1., 0.])) # x, y, z, yaw
 
         self.all_poses = []
 
-        self.camera_images = deque(10)
+        # self.camera_images = deque(maxlen=1)
+        self.camera_images = camera_images
         self.current_image = None
+        self.point_from_xyz = point_from_xyz
 
         self._stay_alive = True
 
         self.dt = 0.1
 
+        # only for debug plots
+        # self.target_trajectory = np.array([[0.0, 0.25, 1., 0.0],
+        #                           [0.0, 0.50, 1., 0.0],
+        #                           [0.0, 0.75, 1., 0.0],
+        #                           [0.0, 1.00, 1., 0.0],
+        #                           [0.0, 0.75, 1., 0.0],
+        #                           [0.0, 0.50, 1., 0.0],
+        #                           [0.0, 0.25, 1., 0.0],
+        #                           [0.0, 0.00, 1., 0.0],
+        #                           [0.0, -0.25, 1., 0.0],
+        #                           [0.0, -0.50, 1., 0.0],
+        #                           [0.0, -0.75, 1., 0.0],
+        #                           [0.0, -1.00, 1., 0.0],
+        #                           [0.0, -0.75, 1., 0.0],
+        #                           [0.0, -0.50, 1., 0.0],
+        #                           [0.0, -0.25, 1., 0.0],
+        #                           [0.0, 0.00, 1., 0.0]])
+        t = np.linspace(0, 2 * np.pi, 20)
+        x = 0.5 * np.sin(2 * t)  # Horizontal figure 8
+        y = 1.5 * np.sin(t)  # Vertical figure 8
+        z = np.ones_like(t)  # Constant height at 1
+        yaw = np.zeros_like(t)  # Constant yaw
+        self.target_trajectory = np.column_stack((x, y, z, yaw))
+
     def run(self):
+        i = 0
         while self._stay_alive:
-            if len(self.camera_images) > 0:
-                self.current_image = self.camera_images.popleft()
+            self.all_poses.append([time.time(), *self.drone_pose[0].tolist()])
+            print("Current drone pose:", self.drone_pose[0])
+            current_setpoint = np.array([self.drone_pose[0]])
+
+            # print(current_setpoint, current_setpoint.shape)
+            if self.camera_images:
+                # self.current_image = self.camera_images.popleft()
             
-            if self.current_image is not None:
-                current_setpoint = self.simulator(self.current_image)[0]
-            
-            if self.drone_pose[0] != current_setpoint:
-                current_pose = self.drone_pose[0] + (current_setpoint * 0.1)
+            # if self.current_image is not None:
+                current_setpoint, prediction_relative = self.simulator(self.camera_images[0], self.drone_pose[0])
+                # print(current_setpoint, current_setpoint.shape, prediction_relative, prediction_relative.shape)
+                homogeneous_coords = np.hstack((prediction_relative[0, :3], 1.))
+                point = self.point_from_xyz(homogeneous_coords)
+
+
+                # print(self.camera_images[0].shape)
+
+
+                # print("current setpoint:", current_setpoint)
+                
+
+            #if self.drone_pose and not np.allclose(self.drone_pose[0], current_setpoint):
+                print("Current setpoint shortly before addition:", current_setpoint)
+                print("Current drone pose before added setpoint: ", self.drone_pose[0])
+                current_pose = self.drone_pose[0] + ((current_setpoint[0] - self.drone_pose[0]) * 0.1)
+                # print("current pose after added setpoint: ", current_pose)
                 self.drone_pose.append(current_pose)
 
-            self.all_poses.append((time.time(), *self.drone_pose))
-            time.sleep(self.dt)
+
+            self.all_poses.append([time.time(), *self.drone_pose[0].tolist()])
+
+            if self.camera_images and self.drone_pose:
+                fig = plt.figure(figsize=(10, 5))
+
+                # Left subplot: Image with scattered point
+                ax1 = fig.add_subplot(1, 2, 1)
+                ax1.set_title(f"Frontnet Prediction: {prediction_relative[0, :3]}")
+                ax1.imshow(self.camera_images[0], cmap='gray')
+                ax1.scatter(point[0], point[1], color='red')
+
+                # Right subplot: Drone position in 2d
+                ax2 = fig.add_subplot(1, 2, 2)
+                ax2.set_title("Drone Position in 3D")
+                drone_positions = np.array(self.all_poses)[:, 1:4]  # Extract x, y, z positions
+                # ax2.plot(drone_positions[:, 0], drone_positions[:, 1], drone_positions[:, 2], label="Drone Path")
+                # ax2.plot(self.target_trajectory[:, 0], self.target_trajectory[:, 1], self.target_trajectory[:, 2], label="Target Trajectory", color='green')
+                # ax2.scatter(current_setpoint[0][0], current_setpoint[0][1], current_setpoint[0][2], color='red', label="Current Setpoint")
+                ax2.plot(drone_positions[:, 0], drone_positions[:, 1], label="Drone Path")
+                ax2.plot(self.target_trajectory[:, 0], self.target_trajectory[:, 1], label="Target Trajectory", color='green')
+                ax2.scatter(current_setpoint[0][0], current_setpoint[0][1], color='red', label="Current Setpoint")
+                ax2.set_xlabel("X")
+                ax2.set_ylabel("Y")
+                # ax2.set_zlabel("Z")
+
+                # set ax2 limits
+                ax2.set_xlim([-2.5, 2.5])
+                ax2.set_ylim([-1.5, 1.5])
+                # ax2.set_zlim([0, 2.5])
+                ax2.legend()
+
+                plt.tight_layout()
+                plt.savefig(f"results/simulation/patched_image_{i:04d}.png")
+                plt.close()
+                i += 1
+            time.sleep(0.1)
 
     def update(self, image):
         self.camera_images.append(image)
 
     def close(self):
         self._stay_alive = False
-        self.join()
+        # self.join()
 
 
 if __name__ == '__main__':
