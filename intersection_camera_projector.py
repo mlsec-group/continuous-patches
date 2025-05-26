@@ -254,7 +254,7 @@ def line_plane_intersection(plane_normal, plane_point, ray_direction, ray_point,
 #         self.queue.append((patch, sf, tx, ty))
 #         # print("time passed:", time.time() - start_time)
     
-def bb_opt2transformation(drone_pose, cf_intrinsic, cf_extrinsic, cf_distortion, projector_world, projector_matrix, patch_size=80):
+def get_patch_area(drone_pose, cf_intrinsic, cf_extrinsic, cf_distortion, projector_world, projector_matrix, patch_size=80):
     # tx_scaled, ty_scaled = scale_tx_ty(sf_opt, tx_opt, ty_opt, patch_size, self.cf_im_size)
     # T = construct_T(sf_opt, tx_scaled, ty_scaled)
     # bounding_box = get_bbox(T, patch_size, self.cf_im_size)
@@ -301,17 +301,47 @@ def bb_opt2transformation(drone_pose, cf_intrinsic, cf_extrinsic, cf_distortion,
     intersection_ll = line_plane_intersection(plane_normal, plane_point, ll_world - camera_center_world, camera_center_world)
     intersection_lr = line_plane_intersection(plane_normal, plane_point, lr_world - camera_center_world, camera_center_world)
 
+    # print(intersection_ul)
+    # print(intersection_ur)
+    # print(intersection_ll)
+    # print(intersection_lr)
+    # # print(projector_matrix)
+    # print(projector_world)
+
+    max_y = np.min((intersection_ul[1], intersection_ll[1]))
+    min_y = np.max((intersection_ur[1], intersection_lr[1]))
+
+    max_z = np.min((intersection_ur[2], intersection_ul[2]))
+    min_z = np.max((intersection_lr[2], intersection_ll[2]))
+
+    # print(max_y, min_y)
+    # print(max_z, min_z)
 
 
-    patch_space_world_ul = [2., np.min(intersection_ul[1], projector_matrix[0, 1]), np.min(intersection_ul[2], projector_matrix[0, 2])]
-    patch_space_world_ur = [2., np.max(intersection_ur[1], projector_matrix[1, 1]), np.min(intersection_ur[2], projector_matrix[1, 2])]
-    patch_space_world_ll = [2., np.min(intersection_ll[1], projector_matrix[2, 1]), np.max(intersection_ll[2], projector_matrix[2, 2])]
-    patch_space_world_lr = [2., np.max(intersection_lr[1], projector_matrix[3, 1]), np.max(intersection_lr[2], projector_matrix[3, 2])]
+    if min_y <= projector_world[0, 1] and max_y >= projector_world[1, 1] and min_z <= projector_world[1, 2] and max_z >= projector_world[3, 2]:
+        print('overlap')
+
+        patch_min_y = np.max((min_y, projector_world[0, 1]))
+        patch_max_y = np.min((max_y, projector_world[1, 1]))
+
+        patch_min_z = np.max((min_z, projector_world[3, 2]))
+        patch_max_z = np.min((max_z, projector_world[1, 2]))
+
+
+        patch_space_world = np.array([[2., patch_min_y, patch_max_z],
+                                      [2., patch_max_y, patch_max_z],
+                                      [2., patch_min_y, patch_min_z],
+                                      [2., patch_max_y, patch_min_z]])
+        
+        # print(patch_space_world)
+
+        return patch_space_world
+    else:
+        print("no overlap")
+        return None
+
 
     
-    patch_space_world = np.array([patch_space_world_ul, patch_space_world_ur, patch_space_world_ll, patch_space_world_lr])
-    print(patch_space_world)
-
 
     # T = corners2transformation(intersection_ul, intersection_ur, intersection_ll, intersection_lr, projector_matrix)
     
@@ -359,7 +389,7 @@ def bb_opt2transformation(drone_pose, cf_intrinsic, cf_extrinsic, cf_distortion,
 
 if __name__ == "__main__":
 
-    drone_pose = np.array([0., 0., 0., 1., 0., 0., 0.])
+    drone_pose = np.array([0., 0., 1., 1., 0., 0., 0.])
 
     with open('camera_calibration.yaml') as f:
             camera_config = yaml.load(f, Loader=yaml.FullLoader)
@@ -377,7 +407,7 @@ if __name__ == "__main__":
 
     cf_im_size = (96, 160)
 
-    with open('data/projector_calibration.yaml') as f:
+    with open('projector_calibration.yaml') as f:
         projector_matrix = yaml.load(f, Loader=yaml.FullLoader)
 
     projector_matrix = np.array(projector_matrix['projector_calibration'])
@@ -389,4 +419,36 @@ if __name__ == "__main__":
                                     [2, -1.5, 0.8]]) #lr
 
 
+    patch_bb_world = get_patch_area(drone_pose, cf_intrinsic, cf_extrinsic, cf_distortion, projector_world, projector_matrix)
+
+    print(patch_bb_world)
+
+    T_drone_world = np.eye(4)
+    T_drone_world[:3, :3] = rowan.to_matrix(drone_pose[3:])
+    T_drone_world[:3, 3] = drone_pose[:3]
+
+    print(T_drone_world)
+
+    patch_bb_drone = np.array([(np.linalg.inv(T_drone_world) @ np.array([*patch_coords, 1.])) for patch_coords in patch_bb_world]) # element-wise matrix multiplication to get each point in drone frame (in homogeneous coords)
+    print(patch_bb_drone)
+
+    # print(patch_bb_drone)
     
+    patch_bb_camera = np.array([(np.linalg.inv(camera_extrinsic) @ patch_coords)[:3] for patch_coords in patch_bb_drone])
+
+
+    print(patch_bb_camera)
+
+    patch_bb_image = np.array([(cf_intrinsic @ patch_coords) for patch_coords in patch_bb_camera])
+
+    patch_image_ul, patch_image_ur, patch_image_ll, patch_image_lr = patch_bb_image
+
+    patch_image_ul = np.array([patch_image_ul[0] / patch_image_ul[2], patch_image_ul[1] / patch_image_ul[2]])
+    patch_image_ur = np.array([patch_image_ur[0] / patch_image_ur[2], patch_image_ur[1] / patch_image_ur[2]])
+    patch_image_ll = np.array([patch_image_ll[0] / patch_image_ll[2], patch_image_ll[1] / patch_image_ll[2]])
+    patch_image_lr = np.array([patch_image_lr[0] / patch_image_lr[2], patch_image_lr[1] / patch_image_lr[2]])
+
+    print(patch_image_ul)
+    print(patch_image_ur)
+    print(patch_image_ll)
+    print(patch_image_lr)
