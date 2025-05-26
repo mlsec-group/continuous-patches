@@ -1,11 +1,11 @@
 import torch
 import sys
 
-# sys.path.insert(0,'pulp-frontnet/PyTorch/')
-# from Frontnet.Frontnet import FrontnetModel
+sys.path.insert(0,'pulp-frontnet/PyTorch/')
+from Frontnet.Frontnet import FrontnetModel
 
-# from Frontnet.DataProcessor import DataProcessor
-# from Frontnet.Dataset import Dataset
+from Frontnet.DataProcessor import DataProcessor
+from Frontnet.Dataset import Dataset
 from torch.utils import data
 
 import rowan

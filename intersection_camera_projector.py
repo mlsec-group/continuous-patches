@@ -67,12 +67,6 @@ def bb2camera(bbox, intrinsic, dist_coeffs):
     lr_image = np.array([bbox[2], bbox[3]], dtype=np.float32)
     center_image = np.array([(ul_image[0] + lr_image[0])/2, (ul_image[1] + lr_image[1])/2], dtype=np.float32)
     
-    # ul_image = cv2.undistortPoints(ul_image, intrinsic, dist_coeffs, None, intrinsic).flatten()
-    # ur_image = cv2.undistortPoints(ur_image, intrinsic, dist_coeffs, None, intrinsic).flatten()
-    # ll_image = cv2.undistortPoints(ll_image, intrinsic, dist_coeffs, None, intrinsic).flatten()
-    # lr_image = cv2.undistortPoints(lr_image, intrinsic, dist_coeffs, None, intrinsic).flatten()
-    # center_image = cv2.undistortPoints(center_image, intrinsic, dist_coeffs, None, intrinsic).flatten()
-
 
     ul_camera = np.array([(ul_image[0]-ox)/fx, (ul_image[1]-oy)/fy, 1.0], dtype=np.float32)
     ur_camera = np.array([(ur_image[0]-ox)/fx, (ur_image[1]-oy)/fy, 1.0], dtype=np.float32)
@@ -454,10 +448,10 @@ if __name__ == "__main__":
         patch_image_ll = np.array([patch_image_ll[0] / patch_image_ll[2], patch_image_ll[1] / patch_image_ll[2]])
         patch_image_lr = np.array([patch_image_lr[0] / patch_image_lr[2], patch_image_lr[1] / patch_image_lr[2]])
 
-        print(patch_image_ul)
-        print(patch_image_ur)
-        print(patch_image_ll)
-        print(patch_image_lr)
+        # print(patch_image_ul)
+        # print(patch_image_ur)
+        # print(patch_image_ll)
+        # print(patch_image_lr)
 
 
         # plt.imshow(np.zeros((96, 160), dtype=np.uint8))

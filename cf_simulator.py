@@ -210,7 +210,7 @@ class CFSim():
             T_direction_world[:3, 3] = self._calc_heading_vec(1., predicted_pose[3])
 
             T_setpoint_world = T_direction_world @ T_pred_world
-            setpoint_yaw = rowan.to_euler(rowan.from_matrix(T_setpoint_world[:3, :3]), convention='xyz')[2]
+            setpoint_yaw = 0.#rowan.to_euler(rowan.from_matrix(T_setpoint_world[:3, :3]), convention='xyz')[2]  # TODO!
 
             setpoint = np.array([*T_setpoint_world[:3, 3], setpoint_yaw])
             setpoints.append(setpoint)
@@ -261,28 +261,28 @@ class SimulatorThread(Thread):
         self.dt = 0.1
 
         # only for debug plots
-        # self.target_trajectory = np.array([[0.0, 0.25, 1., 0.0],
-        #                           [0.0, 0.50, 1., 0.0],
-        #                           [0.0, 0.75, 1., 0.0],
-        #                           [0.0, 1.00, 1., 0.0],
-        #                           [0.0, 0.75, 1., 0.0],
-        #                           [0.0, 0.50, 1., 0.0],
-        #                           [0.0, 0.25, 1., 0.0],
-        #                           [0.0, 0.00, 1., 0.0],
-        #                           [0.0, -0.25, 1., 0.0],
-        #                           [0.0, -0.50, 1., 0.0],
-        #                           [0.0, -0.75, 1., 0.0],
-        #                           [0.0, -1.00, 1., 0.0],
-        #                           [0.0, -0.75, 1., 0.0],
-        #                           [0.0, -0.50, 1., 0.0],
-        #                           [0.0, -0.25, 1., 0.0],
-        #                           [0.0, 0.00, 1., 0.0]])
-        t = np.linspace(0, 2 * np.pi, 20)
-        x = 0.5 * np.sin(2 * t)  # Horizontal figure 8
-        y = 1.5 * np.sin(t)  # Vertical figure 8
-        z = np.ones_like(t)  # Constant height at 1
-        yaw = np.zeros_like(t)  # Constant yaw
-        self.target_trajectory = np.column_stack((x, y, z, yaw))
+        self.target_trajectory = np.array([[0.0, 0.25, 1., 0.0],
+                                  [0.0, 0.50, 1., 0.0],
+                                  [0.0, 0.75, 1., 0.0],
+                                  [0.0, 1.00, 1., 0.0],
+                                  [0.0, 0.75, 1., 0.0],
+                                  [0.0, 0.50, 1., 0.0],
+                                  [0.0, 0.25, 1., 0.0],
+                                  [0.0, 0.00, 1., 0.0],
+                                  [0.0, -0.25, 1., 0.0],
+                                  [0.0, -0.50, 1., 0.0],
+                                  [0.0, -0.75, 1., 0.0],
+                                  [0.0, -1.00, 1., 0.0],
+                                  [0.0, -0.75, 1., 0.0],
+                                  [0.0, -0.50, 1., 0.0],
+                                  [0.0, -0.25, 1., 0.0],
+                                  [0.0, 0.00, 1., 0.0]])
+        # t = np.linspace(0, 2 * np.pi, 20)
+        # x = 0.5 * np.sin(2 * t)  # Horizontal figure 8
+        # y = 1.5 * np.sin(t)  # Vertical figure 8
+        # z = np.ones_like(t)  # Constant height at 1
+        # yaw = np.zeros_like(t)  # Constant yaw
+        # self.target_trajectory = np.column_stack((x, y, z, yaw))
 
     def run(self):
         i = 0
@@ -309,8 +309,8 @@ class SimulatorThread(Thread):
                 
 
             #if self.drone_pose and not np.allclose(self.drone_pose[0], current_setpoint):
-                print("Current setpoint shortly before addition:", current_setpoint)
-                print("Current drone pose before added setpoint: ", self.drone_pose[0])
+                # print("Current setpoint shortly before addition:", current_setpoint)
+                # print("Current drone pose before added setpoint: ", self.drone_pose[0])
                 current_pose = self.drone_pose[0] + ((current_setpoint[0] - self.drone_pose[0]) * 0.1)
                 # print("current pose after added setpoint: ", current_pose)
                 self.drone_pose.append(current_pose)
@@ -329,7 +329,7 @@ class SimulatorThread(Thread):
 
                 # Right subplot: Drone position in 2d
                 ax2 = fig.add_subplot(1, 2, 2)
-                ax2.set_title("Drone Position in 3D")
+                ax2.set_title("Drone Position in 2D")
                 drone_positions = np.array(self.all_poses)[:, 1:4]  # Extract x, y, z positions
                 # ax2.plot(drone_positions[:, 0], drone_positions[:, 1], drone_positions[:, 2], label="Drone Path")
                 # ax2.plot(self.target_trajectory[:, 0], self.target_trajectory[:, 1], self.target_trajectory[:, 2], label="Target Trajectory", color='green')
