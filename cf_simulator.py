@@ -212,7 +212,7 @@ class CFSim():
             T_setpoint_world = T_direction_world @ T_pred_world
             setpoint_yaw = 0.#rowan.to_euler(rowan.from_matrix(T_setpoint_world[:3, :3]), convention='xyz')[2]  # TODO!
 
-            setpoint = np.array([*T_setpoint_world[:3, 3], setpoint_yaw])
+            setpoint = np.array([*T_setpoint_world[:2, 3], 1., setpoint_yaw])
             setpoints.append(setpoint)
         return np.array(setpoints)
 
@@ -243,7 +243,7 @@ class CFSim():
         return l2_distances
     
 class SimulatorThread(Thread):
-    def __init__(self, sim_new_pose, camera_images, point_from_xyz):
+    def __init__(self, sim_new_pose, camera_images, camera):
         super().__init__()
         self.simulator = sim_new_pose
         self.drone_pose = deque(maxlen=1)
@@ -254,7 +254,8 @@ class SimulatorThread(Thread):
         # self.camera_images = deque(maxlen=1)
         self.camera_images = camera_images
         self.current_image = None
-        self.point_from_xyz = point_from_xyz
+        self.camera = camera
+        self.point_from_xyz = camera.point_from_xyz
 
         self._stay_alive = True
 
@@ -283,6 +284,11 @@ class SimulatorThread(Thread):
         # z = np.ones_like(t)  # Constant height at 1
         # yaw = np.zeros_like(t)  # Constant yaw
         # self.target_trajectory = np.column_stack((x, y, z, yaw))
+
+        self.projector_world = np.array([[2, 1, 2.2],   # ul
+                                        [2, -1.5, 2.2], #ur
+                                        [2, 1, 0.8], # ll
+                                        [2, -1.5, 0.8]]) #lr
 
     def run(self):
         i = 0
@@ -318,6 +324,26 @@ class SimulatorThread(Thread):
 
             self.all_poses.append([time.time(), *self.drone_pose[0].tolist()])
 
+
+
+            # DEBUGGING
+            T_drone_world = np.eye(4)
+            T_drone_world[:3, :3] = rowan.to_matrix(rowan.from_euler(0., 0., self.drone_pose[0][3], convention='xyz'))
+            T_drone_world[:3, 3] = self.drone_pose[0][:3]
+            
+            projector_drone = np.array([np.linalg.inv(T_drone_world) @ np.array([*projector_coords, 1.]) for projector_coords in self.projector_world])
+            projector_camera = np.array([(self.camera.camera_extrinsic @ patch_coords)[:3] for patch_coords in projector_drone])  # camera_extrinsic is T_drone_camera
+            projector_image = np.array([(self.camera.camera_intrinsic @ patch_coords) for patch_coords in projector_camera])         # camera_intrinsic is T_camera_image
+
+            projector_image_ul, projector_image_ur, projector_image_ll, projector_image_lr = projector_image
+            projector_image_ul = np.array([projector_image_ul[0] / projector_image_ul[2], projector_image_ul[1] / projector_image_ul[2]])
+            projector_image_ur = np.array([projector_image_ur[0] / projector_image_ur[2], projector_image_ur[1] / projector_image_ur[2]])
+            projector_image_ll = np.array([projector_image_ll[0] / projector_image_ll[2], projector_image_ll[1] / projector_image_ll[2]])
+            projector_image_lr = np.array([projector_image_lr[0] / projector_image_lr[2], projector_image_lr[1] / projector_image_lr[2]])
+
+            print("Projector area with simpler calc: ", projector_image_ul, projector_image_ur, projector_image_ll, projector_image_lr)
+
+
             if self.camera_images and self.drone_pose:
                 fig = plt.figure(figsize=(10, 5))
 
@@ -326,6 +352,10 @@ class SimulatorThread(Thread):
                 ax1.set_title(f"Frontnet Prediction: {prediction_relative[0, :3]}")
                 ax1.imshow(self.camera_images[0], cmap='gray')
                 ax1.scatter(point[0], point[1], color='red')
+                ax1.scatter(projector_image_ul[0], projector_image_ul[1], color='blue', label='Projector corners')
+                ax1.scatter(projector_image_ur[0], projector_image_ur[1], color='blue')
+                ax1.scatter(projector_image_ll[0], projector_image_ll[1], color='blue')
+                ax1.scatter(projector_image_lr[0], projector_image_lr[1], color='blue')
 
                 # Right subplot: Drone position in 2d
                 ax2 = fig.add_subplot(1, 2, 2)
@@ -340,6 +370,16 @@ class SimulatorThread(Thread):
                 ax2.set_xlabel("X")
                 ax2.set_ylabel("Y")
                 # ax2.set_zlabel("Z")
+
+                # add current drone position as scatter with arrow for yaw
+                ax2.scatter(self.drone_pose[0][0], self.drone_pose[0][1], color='black')
+                ax2.arrow(self.drone_pose[0][0], self.drone_pose[0][1],
+                          0.3 * np.cos(self.drone_pose[0][3]), 0.3 * np.sin(self.drone_pose[0][3]),
+                          head_width=0.1, head_length=0.1, fc='black', ec='black')
+
+
+                ax2.scatter(2., 1., color='blue', label='Projector corners')
+                ax2.scatter(2., -1.5, color='blue')
 
                 # set ax2 limits
                 ax2.set_xlim([-2.5, 2.5])
