@@ -47,33 +47,8 @@ class DiffusionThread(Thread):
             if not self.target_queue:
                 time.sleep(0.01)
                 continue
-            # sf = np.random.uniform(0.4,0.8,1)
-            # tx = np.random.uniform(0.,1.,1)
-            # ty = np.random.uniform(0.,1.,1)
-
-            # sf = np.array([0.6])
-            # tx = np.array([0.5])
-            # ty = np.array([0.5])
-
-
-            #TODO: generate target based on target trajectory
-            # x = np.random.uniform(0,2,1)
-            # y = np.random.uniform(-1,1,1,)
-            # z = np.random.uniform(-0.5,0.5,1,)
-            # x = np.array([1.])
-            # y = np.array([0.])
-            # z = np.array([0.])
 
             sf, tx, ty, x, y, z  = self.target_queue[0]
-
-            # print(self.combined.shape)
-            # # element wise l2 distance
-            # distances = torch.sqrt(torch.sum(torch.square(self.combined - conditioning), axis=-1))
-            # print("Distances: ", distances)
-            # idx = torch.argmin(distances)
-            # print("Index: ", idx)
-
-
             # print(sf, tx, ty, x, y, z)
             
 
@@ -85,7 +60,7 @@ class DiffusionThread(Thread):
 
             scaled_tx, scaled_ty = scale_tx_ty(sf, tx, ty, 80)
             self.patch_queue.append((patch, sf, scaled_tx, scaled_ty))
-            print("Bing new patch!")
+            # print("Bing new patch!")
 
            
             time.sleep(0.05)
@@ -182,11 +157,15 @@ class AttackerPolicyThread(Thread):
                 distance = np.linalg.norm(self.drone_pose[0][:2] - target_position[:2])
                 # print("current distance: ", distance)
                 if distance < 0.2:
-                    if self.index_reached < len(self.target_trajectory) - 1:
+                    if self.index_reached < len(self.target_trajectory):
                         self.index_reached += 1
                         print("Target reached: ", target_position)
                         target_position = self.target_trajectory[self.index_reached]
                         print("Moving towards: ", target_position)
+                    else: 
+                        print("All targets reached")
+                        self._stay_alive = False
+                        break
                 
                 # to keep x constant -> target x should be 1.
                 # to lower x -> target x should be > 1.
@@ -196,8 +175,8 @@ class AttackerPolicyThread(Thread):
                 # to move up -> target z should be > 0.
                 # to move down -> target z should be < 0.
 
-                print("Drone pose: ", self.drone_pose[0])
-                print("Checkpoint position world: ", target_position)
+                # print("Drone pose: ", self.drone_pose[0])
+                # print("Checkpoint position world: ", target_position)
 
                 quats_checkpoint = rowan.from_euler(0., 0., target_position[3], convention='xyz') # returns qw, qx, qy, qz
                 rot_matrix_checkpoint = rowan.to_matrix(quats_checkpoint)
@@ -254,11 +233,6 @@ class AttackerPolicyThread(Thread):
 
                 self.current_target.append(np.array([[sf], [tx], [ty], [target_x], [target_y], [target_z]]))
                 time.sleep(0.1)
-
-            else:
-                print("All targets reached")
-                self._stay_alive = False
-                break
 
     def sigmoid(self, x, x0=0.0, k=10.0):
         """Sigmoid function centered at x0 with steepness k"""
