@@ -417,48 +417,99 @@ if __name__ == "__main__":
                                     [2, -1.5, 2.2], #ur
                                     [2, 1, 0.8], # ll
                                     [2, -1.5, 0.8]]) #lr
+    
+
+    target_x = 1.
+    target_y = 1.
+    target_z = 0.
 
 
     patch_bb_world = get_patch_area(drone_pose, cf_intrinsic, cf_extrinsic, cf_distortion, projector_world, projector_matrix)
 
-    print(patch_bb_world)
+    if patch_bb_world is not None:
+        print(patch_bb_world)
 
-    T_drone_world = np.eye(4)
-    T_drone_world[:3, :3] = rowan.to_matrix(drone_pose[3:])
-    T_drone_world[:3, 3] = drone_pose[:3]
+        T_drone_world = np.eye(4)
+        T_drone_world[:3, :3] = rowan.to_matrix(drone_pose[3:])
+        T_drone_world[:3, 3] = drone_pose[:3]
 
-    print(T_drone_world)
+        print(T_drone_world)
 
-    patch_bb_drone = np.array([(np.linalg.inv(T_drone_world) @ np.array([*patch_coords, 1.])) for patch_coords in patch_bb_world]) # element-wise matrix multiplication to get each point in drone frame (in homogeneous coords)
-    print(patch_bb_drone)
+        patch_bb_drone = np.array([(np.linalg.inv(T_drone_world) @ np.array([*patch_coords, 1.])) for patch_coords in patch_bb_world]) # element-wise matrix multiplication to get each point in drone frame (in homogeneous coords)
+        print(patch_bb_drone)
 
-    # print(patch_bb_drone)
-    
-    patch_bb_camera = np.array([(camera_extrinsic @ patch_coords)[:3] for patch_coords in patch_bb_drone])
-
-
-    print(patch_bb_camera)
-
-    patch_bb_image = np.array([(cf_intrinsic @ patch_coords) for patch_coords in patch_bb_camera])
-
-    patch_image_ul, patch_image_ur, patch_image_ll, patch_image_lr = patch_bb_image
-
-    patch_image_ul = np.array([patch_image_ul[0] / patch_image_ul[2], patch_image_ul[1] / patch_image_ul[2]])
-    patch_image_ur = np.array([patch_image_ur[0] / patch_image_ur[2], patch_image_ur[1] / patch_image_ur[2]])
-    patch_image_ll = np.array([patch_image_ll[0] / patch_image_ll[2], patch_image_ll[1] / patch_image_ll[2]])
-    patch_image_lr = np.array([patch_image_lr[0] / patch_image_lr[2], patch_image_lr[1] / patch_image_lr[2]])
-
-    print(patch_image_ul)
-    print(patch_image_ur)
-    print(patch_image_ll)
-    print(patch_image_lr)
+        # print(patch_bb_drone)
+        
+        patch_bb_camera = np.array([(camera_extrinsic @ patch_coords)[:3] for patch_coords in patch_bb_drone])  # camera_extrinsic is T_drone_camera
 
 
-    plt.imshow(np.zeros((96, 160), dtype=np.uint8))
-    plt.scatter(patch_image_ul[0], patch_image_ul[1], c='r', label='ul')
-    plt.scatter(patch_image_ur[0], patch_image_ur[1], c='g', label='ur')
-    plt.scatter(patch_image_ll[0], patch_image_ll[1], c='b', label='ll')
-    plt.scatter(patch_image_lr[0], patch_image_lr[1], c='y', label='lr')
-    plt.legend()
-    plt.show()
-    plt.savefig("patch_image_corners.png")
+        print(patch_bb_camera)
+
+        patch_bb_image = np.array([(cf_intrinsic @ patch_coords) for patch_coords in patch_bb_camera])         # camera_intrinsic is T_camera_image
+
+        patch_image_ul, patch_image_ur, patch_image_ll, patch_image_lr = patch_bb_image
+
+        patch_image_ul = np.array([patch_image_ul[0] / patch_image_ul[2], patch_image_ul[1] / patch_image_ul[2]])
+        patch_image_ur = np.array([patch_image_ur[0] / patch_image_ur[2], patch_image_ur[1] / patch_image_ur[2]])
+        patch_image_ll = np.array([patch_image_ll[0] / patch_image_ll[2], patch_image_ll[1] / patch_image_ll[2]])
+        patch_image_lr = np.array([patch_image_lr[0] / patch_image_lr[2], patch_image_lr[1] / patch_image_lr[2]])
+
+        print(patch_image_ul)
+        print(patch_image_ur)
+        print(patch_image_ll)
+        print(patch_image_lr)
+
+
+        # plt.imshow(np.zeros((96, 160), dtype=np.uint8))
+        # plt.scatter(patch_image_ul[0], patch_image_ul[1], c='r', label='ul')
+        # plt.scatter(patch_image_ur[0], patch_image_ur[1], c='g', label='ur')
+        # plt.scatter(patch_image_ll[0], patch_image_ll[1], c='b', label='ll')
+        # plt.scatter(patch_image_lr[0], patch_image_lr[1], c='y', label='lr')
+        # plt.legend()
+        # plt.show()
+        # plt.savefig("patch_image_corners.png")
+
+
+        # calc max patch size in patch_image bb
+        max_width = np.abs(patch_image_ur[0] - patch_image_ul[0])
+        max_height = np.abs(patch_image_ll[1] - patch_image_ul[1])
+        print("Max width:", max_width)
+        print("Max height:", max_height)
+
+        max_dim = np.min((max_width, max_height))
+        print("Max dimension:", max_dim)
+        patch_size = 80
+
+        sf_visible = np.clip(max_dim / patch_size, 0.4, 0.8)
+        print(sf_visible)
+
+        # normalize target_y between 0 and 1, larger target_y should be mapped to 0
+        tx = 0.5
+        ty = 0.5
+
+        scaled_tx, scaled_ty = scale_tx_ty(sf_visible, tx, ty, 80, (max_height, max_width))
+        print("Scaled tx:", scaled_tx)
+        print("Scaled ty:", scaled_ty)
+
+        T_patch = np.zeros((3, 3))
+        T_patch[0, 0] = sf_visible
+        T_patch[1, 1] = sf_visible
+        T_patch[0, 2] = scaled_tx + patch_image_ul[0] 
+        T_patch[1, 2] = scaled_ty + patch_image_ul[1]
+        T_patch[2, 2] = 1.
+
+        print("Transformation matrix for patch in image space:", T_patch)
+
+
+        # project example patch inside patch_bb_image
+        patch = np.ones((80, 80), dtype=np.uint8) * 255
+        background = np.zeros((96, 160), dtype=np.uint8)
+        projected_patch = cv2.warpPerspective(patch, T_patch, (160, 96))
+        plt.imshow(projected_patch, cmap='gray')
+        plt.scatter(patch_image_ul[0], patch_image_ul[1], c='r', label='ul')
+        plt.scatter(patch_image_ur[0], patch_image_ur[1], c='g', label='ur')
+        plt.scatter(patch_image_ll[0], patch_image_ll[1], c='b', label='ll')
+        plt.scatter(patch_image_lr[0], patch_image_lr[1], c='y', label='lr')
+        plt.legend()
+        plt.show()
+        plt.savefig("projected_patch_with_fixed_projector.png")
