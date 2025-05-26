@@ -389,7 +389,7 @@ def get_patch_area(drone_pose, cf_intrinsic, cf_extrinsic, cf_distortion, projec
 
 if __name__ == "__main__":
 
-    drone_pose = np.array([0., 0., 1., 1., 0., 0., 0.])
+    drone_pose = np.array([0., 0.5, 1., 1., 0., 0., 0.])
 
     with open('camera_calibration.yaml') as f:
             camera_config = yaml.load(f, Loader=yaml.FullLoader)
@@ -434,7 +434,7 @@ if __name__ == "__main__":
 
     # print(patch_bb_drone)
     
-    patch_bb_camera = np.array([(np.linalg.inv(camera_extrinsic) @ patch_coords)[:3] for patch_coords in patch_bb_drone])
+    patch_bb_camera = np.array([(camera_extrinsic @ patch_coords)[:3] for patch_coords in patch_bb_drone])
 
 
     print(patch_bb_camera)
@@ -452,3 +452,13 @@ if __name__ == "__main__":
     print(patch_image_ur)
     print(patch_image_ll)
     print(patch_image_lr)
+
+
+    plt.imshow(np.zeros((96, 160), dtype=np.uint8))
+    plt.scatter(patch_image_ul[0], patch_image_ul[1], c='r', label='ul')
+    plt.scatter(patch_image_ur[0], patch_image_ur[1], c='g', label='ur')
+    plt.scatter(patch_image_ll[0], patch_image_ll[1], c='b', label='ll')
+    plt.scatter(patch_image_lr[0], patch_image_lr[1], c='y', label='lr')
+    plt.legend()
+    plt.show()
+    plt.savefig("patch_image_corners.png")
