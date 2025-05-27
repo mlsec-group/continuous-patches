@@ -40,4 +40,4 @@ axs[1].set_ylim(-1, 1)
 # axs[2].set_ylim(-1, 1)
 
 fig.tight_layout()
-fig.savefig('results/diffusion/image_0/drone_poses.png', dpi=300)
+fig.savefig(path / 'drone_poses.png', dpi=300)

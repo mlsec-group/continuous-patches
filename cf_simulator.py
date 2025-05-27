@@ -243,13 +243,15 @@ class CFSim():
         return l2_distances
     
 class SimulatorThread(Thread):
-    def __init__(self, sim_new_pose, camera_images, camera):
+    def __init__(self, sim_new_pose, camera_images, camera, path):
         super().__init__()
         self.simulator = sim_new_pose
         self.drone_pose = deque(maxlen=1)
         self.drone_pose.append(np.array([0., 0., 1., 0.])) # x, y, z, yaw
 
         self.all_poses = []
+
+        self.path = Path(path)
 
         # self.camera_images = deque(maxlen=1)
         self.camera_images = camera_images
@@ -388,7 +390,7 @@ class SimulatorThread(Thread):
                 ax2.legend()
 
                 plt.tight_layout()
-                plt.savefig(f"results/diffusion/image_0/simulation_5/patched_image_{i:04d}.png")
+                plt.savefig(self.path / f"patched_image_{i:04d}.png")
                 plt.close()
                 i += 1
             time.sleep(0.1)
