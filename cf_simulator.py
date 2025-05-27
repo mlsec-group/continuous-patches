@@ -341,7 +341,7 @@ class SimulatorThread(Thread):
             projector_image_ll = np.array([projector_image_ll[0] / projector_image_ll[2], projector_image_ll[1] / projector_image_ll[2]])
             projector_image_lr = np.array([projector_image_lr[0] / projector_image_lr[2], projector_image_lr[1] / projector_image_lr[2]])
 
-            print("Projector area with simpler calc: ", projector_image_ul, projector_image_ur, projector_image_ll, projector_image_lr)
+            # print("Projector area with simpler calc: ", projector_image_ul, projector_image_ur, projector_image_ll, projector_image_lr)
 
 
             if self.camera_images and self.drone_pose:
@@ -388,7 +388,7 @@ class SimulatorThread(Thread):
                 ax2.legend()
 
                 plt.tight_layout()
-                plt.savefig(f"results/simulation/patched_image_{i:04d}.png")
+                plt.savefig(f"results/diffusion/image_0/simulation_5/patched_image_{i:04d}.png")
                 plt.close()
                 i += 1
             time.sleep(0.1)

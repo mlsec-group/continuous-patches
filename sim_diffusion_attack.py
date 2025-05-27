@@ -16,6 +16,10 @@ from collections import deque
 
 import os
 
+import sys
+sys.path.insert(0,'uav_trajectories/scripts')
+from uav_trajectory import Trajectory
+
 
 from matplotlib import pyplot as plt
 
@@ -67,7 +71,7 @@ class DiffusionThread(Thread):
             # print("Bing new patch!")
 
            
-            time.sleep(0.05)
+            # time.sleep(0.05)
 
     def close(self):
         self._stay_alive = False
@@ -151,6 +155,8 @@ class AttackerPolicyThread(Thread):
         self.current_target = deque(maxlen=1)
         self.index_reached = 0
 
+        self.all_drone_poses = []
+        self.all_target_poses = []
 
         self.projector_world = np.array([[2, 1, 2.2],   # ul
                                         [2, -1.5, 2.2], #ur
@@ -169,24 +175,32 @@ class AttackerPolicyThread(Thread):
         self._stay_alive = True
 
     def run(self):
+        start_time = time.time()
+        self.all_drone_poses.append((0., *self.drone_pose[0]))
+        e = self.target_trajectory.eval(0.)
+        target_position = np.array([e.pos[0], e.pos[1], e.pos[2], e.yaw])
+        self.all_target_poses.append((0., *target_position))
+        
         while self._stay_alive:
-            if self.index_reached < len(self.target_trajectory):
-                target_position = self.target_trajectory[self.index_reached]
+            # if self.index_reached < len(self.target_trajectory):
+            #     target_position = self.target_trajectory[self.index_reached]
 
-                # check if the drone pose is close to the target
-                distance = np.linalg.norm(self.drone_pose[0][:2] - target_position[:2])
-                # print("current distance: ", distance)
-                if distance < 0.2:
-                    if self.index_reached < len(self.target_trajectory):
-                        self.index_reached += 1
-                        print("Target reached: ", target_position)
-                        target_position = self.target_trajectory[self.index_reached]
-                        print("Moving towards: ", target_position)
-                    else: 
-                        print("All targets reached")
-                        self._stay_alive = False
-                        break
-                
+            #     # check if the drone pose is close to the target
+            #     distance = np.linalg.norm(self.drone_pose[0][:2] - target_position[:2])
+            #     # print("current distance: ", distance)
+            #     if distance < 0.2:
+            #         if self.index_reached < len(self.target_trajectory):
+            #             self.index_reached += 1
+            #             print("Target reached: ", target_position)
+            #             target_position = self.target_trajectory[self.index_reached]
+            #             print("Moving towards: ", target_position)
+            #         else: 
+            #             print("All targets reached")
+            #             self._stay_alive = False
+            #             break
+                time_elapsed = np.clip(time.time() - start_time, 0., self.target_trajectory.duration)
+                e = self.target_trajectory.eval(time_elapsed)
+                target_position = np.array([e.pos[0], e.pos[1], e.pos[2], e.yaw])
                 # to keep x constant -> target x should be 1.
                 # to lower x -> target x should be > 1.
                 # to increase x -> target x should be < 1.
@@ -245,32 +259,42 @@ class AttackerPolicyThread(Thread):
                 # ty = 1 - self.sigmoid(target_z, x0=0.0, k=10.0)
 
                 # TODO: change back to smoother/different tx decision
+                # tx = np.random.uniform(0., 1.)#1. if target_y < 0 else 0.
                 tx = 1. if target_y < 0 else 0.
-
                 ty = 0.5
+
+                # ty = np.random.uniform(0., 1.)
 
                 # print("Position patch: ", sf, tx, ty)
 
                 # sf = np.clip(sf, 0.4, 0.8)
-                tx = np.clip(tx, 0.0, 1.0)
-                ty = np.clip(ty, 0.0, 1.0)
+                # tx = np.clip(tx, 0.0, 1.0)
+                # ty = np.clip(ty, 0.0, 1.0)
 
                 # print("Position patch: ", sf, tx, ty)
 
                 possible_sf, patch_ul, visible_projector_dim = self.get_possible_scale_factor(T_drone_world)
-
-                print("Possible scale factor: ", possible_sf, "Patch upper left: ", patch_ul, "Visible projector dim: ", visible_projector_dim)
-                print("tx, ty: ", tx, ty)
-
-
                 if possible_sf is None:
                     print("No possible transformation found, skipping...")
                     time.sleep(0.1)
                     continue
 
+                #sf = np.random.uniform(0.4, possible_sf)
+                sf = possible_sf
+
+
+                print("Scale factor: ", sf, "Patch upper left: ", patch_ul, "Visible projector dim: ", visible_projector_dim)
+                print("tx, ty: ", tx, ty)
+
+
                 # print(possible_sf, tx, ty, *patch_ul, *visible_projector_dim, target_x, target_y, target_z)
 
-                self.current_target.append(np.array([possible_sf, tx, ty, *patch_ul, *visible_projector_dim, target_x, target_y, target_z]))
+                self.current_target.append(np.array([sf, tx, ty, *patch_ul, *visible_projector_dim, target_x, target_y, target_z]))
+                
+                
+                
+                self.all_drone_poses.append((time_elapsed, *self.drone_pose[0]))
+                self.all_target_poses.append((time_elapsed, *target_position))
                 time.sleep(0.1)
 
     def sigmoid(self, x, x0=0.0, k=10.0):
@@ -327,17 +351,42 @@ class AttackerPolicyThread(Thread):
         self._stay_alive = False
         self.join()
 
+        drone_poses = np.array(self.all_drone_poses)
+        target_poses = np.array(self.all_target_poses)
+
+        np.save('results/diffusion/image_0/simulation_5/drone_poses.npy', drone_poses)
+        np.save('results/diffusion/image_0/simulation_5/target_poses.npy', target_poses)
+
+        fig, axs = plt.subplots(3, 1)
+        axs[0].plot(drone_poses[:, 0], drone_poses[:, 1], label='Drone')
+        axs[0].plot(target_poses[:, 0], target_poses[:, 1], label='Target', linestyle='dotted')
+
+        axs[1].plot(drone_poses[:, 0], drone_poses[:, 2], label='Drone')
+        axs[1].plot(target_poses[:, 0], target_poses[:, 2], label='Target', linestyle='dotted')
+
+        axs[2].plot(drone_poses[:, 0], drone_poses[:, 3], label='Drone')
+        axs[2].plot(target_poses[:, 0], target_poses[:, 3], label='Target', linestyle='dotted')
+
+        axs[2].set_xlabel('Time (s)')
+        axs[0].set_ylabel('X Position (m)')
+        axs[1].set_ylabel('Y Position (m)')
+        axs[2].set_ylabel('Z Position (m)')
+
+        axs[2].legend()
+        fig.tight_layout()
+        fig.savefig('results/diffusion/image_0/simulation_5/drone_target_poses.png')
+
 if __name__ == "__main__":
 
     # set a seed for reproducibility
-    torch.manual_seed(4242)
-    np.random.seed(4242)
+    # torch.manual_seed(4242)
+    # np.random.seed(4242)
 
     # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     # diffusion_model = DiffusionModel(device, lr=1e-5)
     # diffusion_model.load('results/diffusion_training/trained_model.pth')
 
-    os.makedirs('results/simulation', exist_ok=True)
+    os.makedirs('results/diffusion/image_0/simulation_5/', exist_ok=True)
 
     model_path = 'results/diffusion_training/edm_frontnet_1k_25ds_2ke.pth'
 
@@ -349,22 +398,26 @@ if __name__ == "__main__":
     # camera_thread = CameraThread(cf_sim.dataset)
     # camera_thread.start()
 
-    target_trajectory = np.array([#[0.0, 0.25, 1., 0.0],
-                            #[0.0, 0.50, 1., 0.0],
-                            #[0.0, 0.75, 1., 0.0],
-                            [0.0, 1.00, 1., 0.0],
-                            #[0.0, 0.75, 1., 0.0],
-                            #[0.0, 0.50, 1., 0.0],
-                            #[0.0, 0.25, 1., 0.0],
-                            [0.0, 0.00, 1., 0.0],
-                            #[0.0, -0.25, 1., 0.0],
-                            #[0.0, -0.50, 1., 0.0],
-                            #[0.0, -0.75, 1., 0.0],
-                            [0.0, -1.00, 1., 0.0],
-                            #[0.0, -0.75, 1., 0.0],
-                            #[0.0, -0.50, 1., 0.0],
-                            #[0.0, -0.25, 1., 0.0],
-                            [0.0, 0.00, 1., 0.0]])
+    target_trajectory = Trajectory()
+    target_trajectory.loadcsv("uav_trajectories/traj_change_y.csv")
+    target_trajectory.stretchtime(10)
+
+    # target_trajectory = np.array([#[0.0, 0.25, 1., 0.0],
+    #                         #[0.0, 0.50, 1., 0.0],
+    #                         #[0.0, 0.75, 1., 0.0],
+    #                         [0.0, 1.00, 1., 0.0],
+    #                         #[0.0, 0.75, 1., 0.0],
+    #                         #[0.0, 0.50, 1., 0.0],
+    #                         #[0.0, 0.25, 1., 0.0],
+    #                         [0.0, 0.00, 1., 0.0],
+    #                         #[0.0, -0.25, 1., 0.0],
+    #                         #[0.0, -0.50, 1., 0.0],
+    #                         #[0.0, -0.75, 1., 0.0],
+    #                         [0.0, -1.00, 1., 0.0],
+    #                         #[0.0, -0.75, 1., 0.0],
+    #                         #[0.0, -0.50, 1., 0.0],
+    #                         #[0.0, -0.25, 1., 0.0],
+    #                         [0.0, 0.00, 1., 0.0]])
 
     # t = np.linspace(0, 2 * np.pi, 20)
     # x = 0.5 * np.sin(2 * t)  # Horizontal figure 8
@@ -408,7 +461,7 @@ if __name__ == "__main__":
 
     time_start = time.time()
 
-    while time.time() - time_start < 120.:
+    while time.time() - time_start < target_trajectory.duration:
         # wait for 20 seconds
         time.sleep(0.1)
         if not attacker_policy._stay_alive:
@@ -428,17 +481,17 @@ if __name__ == "__main__":
     # print(all_poses.shape)
 
     # plot 3d positions stored in all_poses (consists of (timestamp, pose))  with matplotlib
-    from mpl_toolkits.mplot3d import Axes3D
-    import matplotlib.pyplot as plt
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-    # ax.scatter(all_poses[:, 1], all_poses[:, 2], all_poses[:, 3])
-    ax.plot(all_poses[:, 1], all_poses[:, 2], all_poses[:, 3])
-    ax.plot(target_trajectory[:, 0], target_trajectory[:, 1], target_trajectory[:, 2], color='red', linestyle='dotted') 
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-    fig.savefig('3d_positions.png')
+    # from mpl_toolkits.mplot3d import Axes3D
+    # import matplotlib.pyplot as plt
+    # fig = plt.figure()
+    # ax = fig.add_subplot(111, projection='3d')
+    # # ax.scatter(all_poses[:, 1], all_poses[:, 2], all_poses[:, 3])
+    # ax.plot(all_poses[:, 1], all_poses[:, 2], all_poses[:, 3])
+    # ax.plot(target_trajectory[:, 0], target_trajectory[:, 1], target_trajectory[:, 2], color='red', linestyle='dotted') 
+    # ax.set_xlabel('X')
+    # ax.set_ylabel('Y')
+    # ax.set_zlabel('Z')
+    # fig.savefig('3d_positions.png')
 
 
     # sim_thread.start()
