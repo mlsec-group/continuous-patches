@@ -169,11 +169,12 @@ class InterpolatedPatchThread(Thread):
                 continue
 
             sf, tx, ty, patch_ul_x, patch_ul_y, projector_height, projector_width, x, y, z  = self.target_queue[0]
-            combined = torch.tensor(np.stack(([x], [y], [z], [sf], [tx], [ty])).T, dtype=torch.float32)
+            combined = torch.tensor(np.stack((x, y, z, sf, tx, ty)).T, dtype=torch.float32)
             distances = InterpolatedPatchThread.dist(combined, self.combineds)
             order = torch.argsort(distances)
-            ordered_combined = self.combineds[order].numpy()
-            patch = self.patches[order[0]].numpy()
+            ordered_combined = self.combineds[order].clone().numpy()
+            patch = self.patches[order[0]].clone().numpy()
+            # print("Patch min/max before loop: ", patch.min(), patch.max(), self.patches.max())
             for n in range(1, len(order)):
                 result = linprog(
                     bounds=[(0,1)]*n,
@@ -181,13 +182,16 @@ class InterpolatedPatchThread(Thread):
                     A_eq=ordered_combined[:n].T,
                     b_eq=combined,
                 )
-                if result.success and result.fun <= 1:
+                print(n, result.success, result.fun)
+                if result.success and result.fun <= 1.:
                     coeffs = torch.as_tensor(result.x)
+                    print(coeffs.sum())
                     candidate = (self.patches[order][:n].permute(1, 2, 0) * coeffs[None, None, :]).sum(axis=-1)
                     patch = candidate.float().numpy()
                     break
+            # print("Patch min/max right after loop: ", patch.min(), patch.max())
             patch *= 255.
-            patch = np.clip(patch, 0, 255.)
+            # print("Patch min/max after multiply: ", patch.min(), patch.max())
             
             scaled_tx, scaled_ty = scale_tx_ty(sf, tx, ty, 80, (projector_height, projector_width))
 
@@ -514,9 +518,9 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Simulate a drone attack using diffusion models.')
     parser.add_argument('--trajectory', type=str, default='change_y', choices=['change_y', 'change_x']) # TODO: include rectangle, figure8
-    parser.add_argument('--mode', type=str, default='diffusion', choices=['diffusion', 'closest', 'interpolated']) # TODO: include gt, interpolation, random, black/white?
+    parser.add_argument('--mode', type=str, default='diffusion', choices=['diffusion', 'closest', 'interpolated', 'none'])
     parser.add_argument('--model', type=str, default='frontnet', choices=['frontnet', 'yolov5'])
-    # parser.add_argument('--diffusion_model_path', type=str, default='results/diffusion_training/edm_frontnet_1k_25ds_2ke.pth')
+    parser.add_argument('--diffusion_model_path', type=str, default='results/diffusion_training/edm_frontnet_1k_25ds_2ke.pth')
     parser.add_argument('--n_images', type=int, default=1, help='Index of the image to use for the simulation.')
     parser.add_argument('--n_sim_runs', type=int, default=1, help='Number of simulation runs to perform.')
     
@@ -524,13 +528,12 @@ if __name__ == "__main__":
     torch.manual_seed(424242)
     np.random.seed(424242)
 
-    model_path = 'results/diffusion_training/edm_frontnet_1k_25ds_2ke.pth'
+    args = parser.parse_args()
 
     dataset_path = "pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"
-    model_type = 'frontnet'
+    model_type = args.model
     cf_sim = CFSim(model_type, dataset_path)
 
-    args = parser.parse_args()
     n_sim_runs = args.n_sim_runs
 
     len_dataset = len(cf_sim.dataset.dataset)
@@ -566,11 +569,12 @@ if __name__ == "__main__":
 
             match args.mode:
                 case 'diffusion':
+                    model_path = args.diffusion_model_path
                     patch_gen_thread = DiffusionThread(model_path, attacker_policy.current_target)
                 case 'closest':
-                    patch_gen_thread = ClosestPatchThread("frontnet1k.pickle", attacker_policy.current_target)
+                    patch_gen_thread = ClosestPatchThread(f"{args.model}1k.pickle", attacker_policy.current_target)
                 case 'interpolated':
-                    patch_gen_thread = InterpolatedPatchThread("frontnet1k.pickle", attacker_policy.current_target)
+                    patch_gen_thread = InterpolatedPatchThread(f"{args.model}1k.pickle", attacker_policy.current_target)
 
             manipulator_thread = ManipulatorThread(camera_image_queue, patch_gen_thread.patch_queue, cf_sim.project_patch, cf_sim.dataset, background_idx=background_image_idx)
 
