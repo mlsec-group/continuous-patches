@@ -3,6 +3,8 @@ import os, sys
 import cv2
 import numpy as np
 
+# sys.path.insert(0,'uav_trajectories/scripts')
+# from uav_trajectory import Trajectory
 
 # sys.path.append('simulators/pulp-frontnet/PyTorch/Frontnet')
 
@@ -211,8 +213,12 @@ class CFSim():
 
             T_setpoint_world = T_direction_world @ T_pred_world
             setpoint_yaw = 0.#rowan.to_euler(rowan.from_matrix(T_setpoint_world[:3, :3]), convention='xyz')[2]  # TODO!
+            setpoint_x = np.clip(T_setpoint_world[0, 3], -2.5, 2.0)  # limit x to [-2.5, 2.5]
+            setpoint_y = np.clip(T_setpoint_world[1, 3], -2.5, 2.5)  # limit y to [-1.5, 1.5]
+            setpoint_z = 1.0  # constant height
 
-            setpoint = np.array([*T_setpoint_world[:2, 3], 1., setpoint_yaw])
+
+            setpoint = np.array([setpoint_x, setpoint_y, setpoint_z, setpoint_yaw])
             setpoints.append(setpoint)
         return np.array(setpoints)
 
@@ -243,13 +249,15 @@ class CFSim():
         return l2_distances
     
 class SimulatorThread(Thread):
-    def __init__(self, sim_new_pose, camera_images, camera):
+    def __init__(self, sim_new_pose, camera_images, camera, path, trajectory):
         super().__init__()
         self.simulator = sim_new_pose
         self.drone_pose = deque(maxlen=1)
         self.drone_pose.append(np.array([0., 0., 1., 0.])) # x, y, z, yaw
 
         self.all_poses = []
+
+        self.path = Path(path)
 
         # self.camera_images = deque(maxlen=1)
         self.camera_images = camera_images
@@ -261,23 +269,33 @@ class SimulatorThread(Thread):
 
         self.dt = 0.1
 
-        # only for debug plots
-        self.target_trajectory = np.array([[0.0, 0.25, 1., 0.0],
-                                  [0.0, 0.50, 1., 0.0],
-                                  [0.0, 0.75, 1., 0.0],
-                                  [0.0, 1.00, 1., 0.0],
-                                  [0.0, 0.75, 1., 0.0],
-                                  [0.0, 0.50, 1., 0.0],
-                                  [0.0, 0.25, 1., 0.0],
-                                  [0.0, 0.00, 1., 0.0],
-                                  [0.0, -0.25, 1., 0.0],
-                                  [0.0, -0.50, 1., 0.0],
-                                  [0.0, -0.75, 1., 0.0],
-                                  [0.0, -1.00, 1., 0.0],
-                                  [0.0, -0.75, 1., 0.0],
-                                  [0.0, -0.50, 1., 0.0],
-                                  [0.0, -0.25, 1., 0.0],
-                                  [0.0, 0.00, 1., 0.0]])
+        match trajectory:
+            # load from csv file into a numpy array
+            case 'change_y':
+                self.target_trajectory = np.genfromtxt('uav_trajectories/attack_trajectories/change_y.csv', delimiter=',')
+            case 'change_x':
+                self.target_trajectory = np.genfromtxt('uav_trajectories/attack_trajectories/change_x.csv', delimiter=',')
+
+        # add a column of 0 to the right of self.target_trajectory
+        #self.target_trajectory = np.hstack((self.target_trajectory, np.zeros((self.target_trajectory.shape[0], 1))))  # add a column of zeros for yaw
+
+        # only for  debug plots
+        # self.target_trajectory = np.array([[0.0, 0.25, 1., 0.0],
+        #                           [0.0, 0.50, 1., 0.0],
+        #                           [0.0, 0.75, 1., 0.0],
+        #                           [0.0, 1.00, 1., 0.0],
+        #                           [0.0, 0.75, 1., 0.0],
+        #                           [0.0, 0.50, 1., 0.0],
+        #                           [0.0, 0.25, 1., 0.0],
+        #                           [0.0, 0.00, 1., 0.0],
+        #                           [0.0, -0.25, 1., 0.0],
+        #                           [0.0, -0.50, 1., 0.0],
+        #                           [0.0, -0.75, 1., 0.0],
+        #                           [0.0, -1.00, 1., 0.0],
+        #                           [0.0, -0.75, 1., 0.0],
+        #                           [0.0, -0.50, 1., 0.0],
+        #                           [0.0, -0.25, 1., 0.0],
+        #                           [0.0, 0.00, 1., 0.0]])
         # t = np.linspace(0, 2 * np.pi, 20)
         # x = 0.5 * np.sin(2 * t)  # Horizontal figure 8
         # y = 1.5 * np.sin(t)  # Vertical figure 8
@@ -341,7 +359,8 @@ class SimulatorThread(Thread):
             projector_image_ll = np.array([projector_image_ll[0] / projector_image_ll[2], projector_image_ll[1] / projector_image_ll[2]])
             projector_image_lr = np.array([projector_image_lr[0] / projector_image_lr[2], projector_image_lr[1] / projector_image_lr[2]])
 
-            print("Projector area with simpler calc: ", projector_image_ul, projector_image_ur, projector_image_ll, projector_image_lr)
+
+            # print("Projector area with simpler calc: ", projector_image_ul, projector_image_ur, projector_image_ll, projector_image_lr)
 
 
             if self.camera_images and self.drone_pose:
@@ -352,10 +371,14 @@ class SimulatorThread(Thread):
                 ax1.set_title(f"Frontnet Prediction: {prediction_relative[0, :3]}")
                 ax1.imshow(self.camera_images[0], cmap='gray')
                 ax1.scatter(point[0], point[1], color='red')
-                ax1.scatter(projector_image_ul[0], projector_image_ul[1], color='blue', label='Projector corners')
-                ax1.scatter(projector_image_ur[0], projector_image_ur[1], color='blue')
-                ax1.scatter(projector_image_ll[0], projector_image_ll[1], color='blue')
-                ax1.scatter(projector_image_lr[0], projector_image_lr[1], color='blue')
+                
+                # only plot the dots for the projector if they are within image space:
+                if projector_image_ul[0] > 0. and  projector_image_ul[1] > 0. and \
+                   projector_image_lr[0] <= 160. and projector_image_lr[1] <= 96.:
+                    ax1.scatter(projector_image_ul[0], projector_image_ul[1], color='blue', label='Projector corners')
+                    ax1.scatter(projector_image_ur[0], projector_image_ur[1], color='blue')
+                    ax1.scatter(projector_image_ll[0], projector_image_ll[1], color='blue')
+                    ax1.scatter(projector_image_lr[0], projector_image_lr[1], color='blue')
 
                 # Right subplot: Drone position in 2d
                 ax2 = fig.add_subplot(1, 2, 2)
@@ -388,7 +411,7 @@ class SimulatorThread(Thread):
                 ax2.legend()
 
                 plt.tight_layout()
-                plt.savefig(f"results/simulation/patched_image_{i:04d}.png")
+                plt.savefig(self.path / f"patched_image_{i:04d}.png", dpi=300)
                 plt.close()
                 i += 1
             time.sleep(0.1)
@@ -428,7 +451,7 @@ if __name__ == '__main__':
     # plot the modified image
     from matplotlib import pyplot as plt
     plt.imshow(mod_img.squeeze(0).squeeze(0).cpu().numpy(), cmap='gray')
-    plt.savefig("patched_image.png")
+    plt.savefig("patched_image.pgf", dpi=300)
 
 
     predicted_pose = cf_sim.sim_new_pose(mod_img)
