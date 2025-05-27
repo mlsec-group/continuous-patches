@@ -169,6 +169,11 @@ class InterpolatedPatchThread(Thread):
                 continue
 
             sf, tx, ty, patch_ul_x, patch_ul_y, projector_height, projector_width, x, y, z  = self.target_queue[0]
+            if tx < 5e-2:
+                tx = 5e-2
+            if tx > (1 - 5e-2):
+                tx = 1 - 5e-2
+            
             combined = torch.tensor(np.stack((x, y, z, sf, tx, ty)).T, dtype=torch.float32)
             distances = InterpolatedPatchThread.dist(combined, self.combineds)
             order = torch.argsort(distances)
