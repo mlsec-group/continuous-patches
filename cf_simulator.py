@@ -3,6 +3,8 @@ import os, sys
 import cv2
 import numpy as np
 
+# sys.path.insert(0,'uav_trajectories/scripts')
+# from uav_trajectory import Trajectory
 
 # sys.path.append('simulators/pulp-frontnet/PyTorch/Frontnet')
 
@@ -247,7 +249,7 @@ class CFSim():
         return l2_distances
     
 class SimulatorThread(Thread):
-    def __init__(self, sim_new_pose, camera_images, camera, path):
+    def __init__(self, sim_new_pose, camera_images, camera, path, trajectory):
         super().__init__()
         self.simulator = sim_new_pose
         self.drone_pose = deque(maxlen=1)
@@ -267,23 +269,33 @@ class SimulatorThread(Thread):
 
         self.dt = 0.1
 
-        # only for debug plots
-        self.target_trajectory = np.array([[0.0, 0.25, 1., 0.0],
-                                  [0.0, 0.50, 1., 0.0],
-                                  [0.0, 0.75, 1., 0.0],
-                                  [0.0, 1.00, 1., 0.0],
-                                  [0.0, 0.75, 1., 0.0],
-                                  [0.0, 0.50, 1., 0.0],
-                                  [0.0, 0.25, 1., 0.0],
-                                  [0.0, 0.00, 1., 0.0],
-                                  [0.0, -0.25, 1., 0.0],
-                                  [0.0, -0.50, 1., 0.0],
-                                  [0.0, -0.75, 1., 0.0],
-                                  [0.0, -1.00, 1., 0.0],
-                                  [0.0, -0.75, 1., 0.0],
-                                  [0.0, -0.50, 1., 0.0],
-                                  [0.0, -0.25, 1., 0.0],
-                                  [0.0, 0.00, 1., 0.0]])
+        match trajectory:
+            # load from csv file into a numpy array
+            case 'change_y':
+                self.target_trajectory = np.genfromtxt('uav_trajectories/attack_trajectories/change_y.csv', delimiter=',')
+            case 'change_x':
+                self.target_trajectory = np.genfromtxt('uav_trajectories/attack_trajectories/change_x.csv', delimiter=',')
+
+        # add a column of 0 to the right of self.target_trajectory
+        #self.target_trajectory = np.hstack((self.target_trajectory, np.zeros((self.target_trajectory.shape[0], 1))))  # add a column of zeros for yaw
+
+        # only for  debug plots
+        # self.target_trajectory = np.array([[0.0, 0.25, 1., 0.0],
+        #                           [0.0, 0.50, 1., 0.0],
+        #                           [0.0, 0.75, 1., 0.0],
+        #                           [0.0, 1.00, 1., 0.0],
+        #                           [0.0, 0.75, 1., 0.0],
+        #                           [0.0, 0.50, 1., 0.0],
+        #                           [0.0, 0.25, 1., 0.0],
+        #                           [0.0, 0.00, 1., 0.0],
+        #                           [0.0, -0.25, 1., 0.0],
+        #                           [0.0, -0.50, 1., 0.0],
+        #                           [0.0, -0.75, 1., 0.0],
+        #                           [0.0, -1.00, 1., 0.0],
+        #                           [0.0, -0.75, 1., 0.0],
+        #                           [0.0, -0.50, 1., 0.0],
+        #                           [0.0, -0.25, 1., 0.0],
+        #                           [0.0, 0.00, 1., 0.0]])
         # t = np.linspace(0, 2 * np.pi, 20)
         # x = 0.5 * np.sin(2 * t)  # Horizontal figure 8
         # y = 1.5 * np.sin(t)  # Vertical figure 8
@@ -399,7 +411,7 @@ class SimulatorThread(Thread):
                 ax2.legend()
 
                 plt.tight_layout()
-                plt.savefig(self.path / f"patched_image_{i:04d}.png")
+                plt.savefig(self.path / f"patched_image_{i:04d}.png", dpi=300)
                 plt.close()
                 i += 1
             time.sleep(0.1)
@@ -439,7 +451,7 @@ if __name__ == '__main__':
     # plot the modified image
     from matplotlib import pyplot as plt
     plt.imshow(mod_img.squeeze(0).squeeze(0).cpu().numpy(), cmap='gray')
-    plt.savefig("patched_image.png")
+    plt.savefig("patched_image.pgf", dpi=300)
 
 
     predicted_pose = cf_sim.sim_new_pose(mod_img)

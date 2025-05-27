@@ -1,9 +1,11 @@
 import numpy as np
+# import matplotlib as mpl
+# mpl.use('pgf')
 from matplotlib import pyplot as plt
 
 from pathlib import Path
 
-path = Path('results/diffusion/image_42/')
+path = Path('results/diffusion/image_72/')
 # results/diffusion/image_0/simulation_2/drone_poses.npy
 
 # get all files with name drone_poses.npy from results/diffusion/image_0/simulation_[0-9]/
@@ -40,4 +42,4 @@ axs[1].set_ylim(-1, 1)
 # axs[2].set_ylim(-1, 1)
 
 fig.tight_layout()
-fig.savefig(path / 'drone_poses.png', dpi=300)
+fig.savefig(path / 'drone_poses.pgf', dpi=300)
