@@ -1,5 +1,9 @@
 import torch
+import pickle
 import numpy as np
+
+from scipy.optimize import linprog
+
 from diffusion.diffusion_model import DiffusionModel
 
 from cf_simulator import CFSim, SimulatorThread
@@ -80,6 +84,123 @@ class DiffusionThread(Thread):
     def close(self):
         self._stay_alive = False
         self.join()
+
+
+class ClosestPatchThread(Thread):
+    def __init__(self, patches_path, target_queue):
+        super().__init__()
+
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.diffusion_model = DiffusionModel(self.device, lr=1e-5)
+        with open(patches_path, "rb") as f:
+            patch_dataset = pickle.load(f)
+
+        self.patches = np.array([patch for patch, target, transformation in patch_dataset], dtype=np.float32)
+        targets = torch.as_tensor([target.tolist() for patch, target, transformation in patch_dataset]).squeeze().float()
+        transformations = torch.as_tensor([transformation.tolist() for patch, target, transformation in patch_dataset]).squeeze().float()
+        self.combineds = torch.hstack([targets, transformations])
+
+
+        self.patch_queue = deque(maxlen=1)
+        self.target_queue = target_queue
+        self._stay_alive = True
+
+    @staticmethod
+    def dist(c1, c2):
+        elementwise = torch.square(c1 - c2)
+        elementwise * torch.tensor([1, 1, 2, 2/.4, 2, 2])
+        return torch.sqrt(torch.sum(elementwise, axis=-1))
+
+    def run(self):
+        while self._stay_alive:
+            if not self.target_queue:
+                time.sleep(0.01)
+                continue
+
+            sf, tx, ty, patch_ul_x, patch_ul_y, projector_height, projector_width, x, y, z  = self.target_queue[0]
+            combined = torch.tensor(np.stack(([x], [y], [z], [sf], [tx], [ty])).T, dtype=torch.float32)
+            distances = ClosestPatchThread.dist(combined, self.combineds)
+            closest = torch.argmin(distances)
+            patch = self.patches[closest] * 255.
+
+            scaled_tx, scaled_ty = scale_tx_ty(sf, tx, ty, 80, (projector_height, projector_width))
+
+            tx_img = patch_ul_x + scaled_tx
+            ty_img = patch_ul_y + scaled_ty
+
+            self.patch_queue.append((patch, sf, tx_img, ty_img))
+            # print("Bing new patch!")
+            # time.sleep(0.05)
+
+    def close(self):
+        self._stay_alive = False
+        self.join()
+
+
+class InterpolatedPatchThread(Thread):
+    def __init__(self, patches_path, target_queue):
+        super().__init__()
+
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.diffusion_model = DiffusionModel(self.device, lr=1e-5)
+        with open(patches_path, "rb") as f:
+            patch_dataset = pickle.load(f)
+
+        self.patches = torch.as_tensor(np.array([patch for patch, target, transformation in patch_dataset])).float()
+        targets = torch.as_tensor([target.tolist() for patch, target, transformation in patch_dataset]).squeeze().float()
+        transformations = torch.as_tensor([transformation.tolist() for patch, target, transformation in patch_dataset]).squeeze().float()
+        self.combineds = torch.hstack([targets, transformations])
+
+
+        self.patch_queue = deque(maxlen=1)
+        self.target_queue = target_queue
+        self._stay_alive = True
+
+    @staticmethod
+    def dist(c1, c2):
+        elementwise = torch.square(c1 - c2)
+        elementwise * torch.tensor([1, 1, 2, 2/.4, 2, 2])
+        return torch.sqrt(torch.sum(elementwise, axis=-1))
+
+    def run(self):
+        while self._stay_alive:
+            if not self.target_queue:
+                time.sleep(0.01)
+                continue
+
+            sf, tx, ty, patch_ul_x, patch_ul_y, projector_height, projector_width, x, y, z  = self.target_queue[0]
+            combined = torch.tensor(np.stack(([x], [y], [z], [sf], [tx], [ty])).T, dtype=torch.float32)
+            distances = InterpolatedPatchThread.dist(combined, self.combineds)
+            order = torch.argsort(distances)
+            ordered_combined = self.combineds[order].numpy()
+            patch = self.patches[order[0]].numpy()
+            for n in range(1, len(order)):
+                result = linprog(
+                    bounds=[(0,1)]*n,
+                    c=np.ones(n),
+                    A_eq=ordered_combined[:n].T,
+                    b_eq=combined,
+                )
+                if result.success and result.fun <= 1:
+                    coeffs = torch.as_tensor(result.x)
+                    candidate = (self.patches[order][:n].permute(1, 2, 0) * coeffs[None, None, :]).sum(axis=-1)
+                    patch = candidate.float().numpy()
+                    break
+            patch *= 255.
+            patch = np.clip(patch, 0, 255.)
+            
+            scaled_tx, scaled_ty = scale_tx_ty(sf, tx, ty, 80, (projector_height, projector_width))
+
+            tx_img = patch_ul_x + scaled_tx
+            ty_img = patch_ul_y + scaled_ty
+
+            self.patch_queue.append((patch, sf, tx_img, ty_img))
+            # print("Bing new patch!")
+            # time.sleep(0.05)
+    def close(self):
+        self._stay_alive = False
+        self.join()
+
 
 class CameraThread(Thread):
     def __init__(self, dataset):
@@ -393,7 +514,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Simulate a drone attack using diffusion models.')
     parser.add_argument('--trajectory', type=str, default='change_y', choices=['change_y', 'change_x']) # TODO: include rectangle, figure8
-    parser.add_argument('--mode', type=str, default='diffusion', choices=['diffusion']) # TODO: include gt, interpolation, random, black/white?
+    parser.add_argument('--mode', type=str, default='diffusion', choices=['diffusion', 'closest', 'interpolated']) # TODO: include gt, interpolation, random, black/white?
     parser.add_argument('--model', type=str, default='frontnet', choices=['frontnet', 'yolov5'])
     # parser.add_argument('--diffusion_model_path', type=str, default='results/diffusion_training/edm_frontnet_1k_25ds_2ke.pth')
     parser.add_argument('--n_images', type=int, default=1, help='Index of the image to use for the simulation.')
@@ -404,7 +525,6 @@ if __name__ == "__main__":
     np.random.seed(424242)
 
     model_path = 'results/diffusion_training/edm_frontnet_1k_25ds_2ke.pth'
-
 
     dataset_path = "pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"
     model_type = 'frontnet'
@@ -429,6 +549,7 @@ if __name__ == "__main__":
             # camera_thread = CameraThread(cf_sim.dataset)
             # camera_thread.start()
 
+   
             target_trajectory = Trajectory()
             target_trajectory.loadcsv(f"uav_trajectories/traj_{args.trajectory}.csv")
             target_trajectory.stretchtime(10)
@@ -442,10 +563,16 @@ if __name__ == "__main__":
 
             attacker_policy = AttackerPolicyThread(sim_thread.drone_pose, target_trajectory, camera_data=cam, path=save_directory)
 
-            diffusion_thread = DiffusionThread(model_path, attacker_policy.current_target)
 
+            match args.mode:
+                case 'diffusion':
+                    patch_gen_thread = DiffusionThread(model_path, attacker_policy.current_target)
+                case 'closest':
+                    patch_gen_thread = ClosestPatchThread("frontnet1k.pickle", attacker_policy.current_target)
+                case 'interpolated':
+                    patch_gen_thread = InterpolatedPatchThread("frontnet1k.pickle", attacker_policy.current_target)
 
-            manipulator_thread = ManipulatorThread(camera_image_queue, diffusion_thread.patch_queue, cf_sim.project_patch, cf_sim.dataset, background_idx=background_image_idx)
+            manipulator_thread = ManipulatorThread(camera_image_queue, patch_gen_thread.patch_queue, cf_sim.project_patch, cf_sim.dataset, background_idx=background_image_idx)
 
 
 
@@ -456,9 +583,9 @@ if __name__ == "__main__":
             attacker_policy.start()
 
 
-            diffusion_thread.start()
+            patch_gen_thread.start()
 
-            while not diffusion_thread.patch_queue:
+            while not patch_gen_thread.patch_queue:
                 time.sleep(0.1)
 
             # camera_thread.start()
@@ -479,7 +606,7 @@ if __name__ == "__main__":
             sim_thread.close()
             # camera_thread.close()
             manipulator_thread.close()
-            diffusion_thread.close()
+            patch_gen_thread.close()
             attacker_policy.close()
 
             # print(sim_thread.all_poses)
