@@ -177,3 +177,4 @@ results/
 *.pickle
 *.pt
 *.png
+*.sif
