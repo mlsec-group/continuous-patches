@@ -211,8 +211,12 @@ class CFSim():
 
             T_setpoint_world = T_direction_world @ T_pred_world
             setpoint_yaw = 0.#rowan.to_euler(rowan.from_matrix(T_setpoint_world[:3, :3]), convention='xyz')[2]  # TODO!
+            setpoint_x = np.clip(T_setpoint_world[0, 3], -2.5, 2.0)  # limit x to [-2.5, 2.5]
+            setpoint_y = np.clip(T_setpoint_world[1, 3], -2.5, 2.5)  # limit y to [-1.5, 1.5]
+            setpoint_z = 1.0  # constant height
 
-            setpoint = np.array([*T_setpoint_world[:2, 3], 1., setpoint_yaw])
+
+            setpoint = np.array([setpoint_x, setpoint_y, setpoint_z, setpoint_yaw])
             setpoints.append(setpoint)
         return np.array(setpoints)
 
@@ -343,6 +347,7 @@ class SimulatorThread(Thread):
             projector_image_ll = np.array([projector_image_ll[0] / projector_image_ll[2], projector_image_ll[1] / projector_image_ll[2]])
             projector_image_lr = np.array([projector_image_lr[0] / projector_image_lr[2], projector_image_lr[1] / projector_image_lr[2]])
 
+
             # print("Projector area with simpler calc: ", projector_image_ul, projector_image_ur, projector_image_ll, projector_image_lr)
 
 
@@ -354,10 +359,14 @@ class SimulatorThread(Thread):
                 ax1.set_title(f"Frontnet Prediction: {prediction_relative[0, :3]}")
                 ax1.imshow(self.camera_images[0], cmap='gray')
                 ax1.scatter(point[0], point[1], color='red')
-                ax1.scatter(projector_image_ul[0], projector_image_ul[1], color='blue', label='Projector corners')
-                ax1.scatter(projector_image_ur[0], projector_image_ur[1], color='blue')
-                ax1.scatter(projector_image_ll[0], projector_image_ll[1], color='blue')
-                ax1.scatter(projector_image_lr[0], projector_image_lr[1], color='blue')
+                
+                # only plot the dots for the projector if they are within image space:
+                if projector_image_ul[0] > 0. and  projector_image_ul[1] > 0. and \
+                   projector_image_lr[0] <= 160. and projector_image_lr[1] <= 96.:
+                    ax1.scatter(projector_image_ul[0], projector_image_ul[1], color='blue', label='Projector corners')
+                    ax1.scatter(projector_image_ur[0], projector_image_ur[1], color='blue')
+                    ax1.scatter(projector_image_ll[0], projector_image_ll[1], color='blue')
+                    ax1.scatter(projector_image_lr[0], projector_image_lr[1], color='blue')
 
                 # Right subplot: Drone position in 2d
                 ax2 = fig.add_subplot(1, 2, 2)

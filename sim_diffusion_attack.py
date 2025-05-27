@@ -124,6 +124,7 @@ class ManipulatorThread(Thread):
         while self._stay_alive:
             # if self.camera_image_queue and self.patch_queue:
             if self.patch_queue:
+                # print("Background image idx: ", self.background_idx)
                 camera_image = self.dataset.dataset.__getitem__(self.background_idx)[0][0]#self.camera_image_queue[0]
                 # camera_image = torch.ones((96, 160), dtype=torch.float32) * 255.
                 patch, sf, scaled_tx, scaled_ty = self.patch_queue[0]
@@ -281,10 +282,10 @@ class AttackerPolicyThread(Thread):
                 # print("Position patch: ", sf, tx, ty)
 
                 possible_sf, patch_ul, visible_projector_dim = self.get_possible_scale_factor(T_drone_world)
-                if possible_sf is None:
-                    print("No possible transformation found, skipping...")
-                    time.sleep(0.1)
-                    continue
+                # if possible_sf is None:
+                #     print("No possible transformation found, skipping...")
+                #     time.sleep(0.1)
+                #     continue
 
                 #sf = np.random.uniform(0.4, possible_sf)
                 sf = possible_sf
@@ -311,9 +312,9 @@ class AttackerPolicyThread(Thread):
 
     def get_possible_scale_factor(self, T_drone_world):
         projector_area_image = self.get_projector_area(T_drone_world)
-        if projector_area_image is None:
+        if projector_area_image[0] == 0.:
             print("No overlap in image coordinates, cannot project patch area to image.")
-            return None
+            return 0., (0., 0.), (0., 0.)
         
 
         projector_ul_x, projector_ul_y, projector_height, projector_width = projector_area_image
@@ -352,7 +353,7 @@ class AttackerPolicyThread(Thread):
             return np.array((intersection_min_x, intersection_min_y, height, width))
         else:
             print("No overlap with image bounding box")
-            return None
+            return np.array((0., 0., 0., 0.))
 
     def close(self):
         self._stay_alive = False
@@ -459,7 +460,7 @@ if __name__ == "__main__":
         diffusion_thread = DiffusionThread(model_path, attacker_policy.current_target)
 
 
-        manipulator_thread = ManipulatorThread(camera_image_queue, diffusion_thread.patch_queue, cf_sim.project_patch, cf_sim.dataset)
+        manipulator_thread = ManipulatorThread(camera_image_queue, diffusion_thread.patch_queue, cf_sim.project_patch, cf_sim.dataset, background_idx=background_image_idx)
 
 
 

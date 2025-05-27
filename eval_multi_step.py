@@ -3,7 +3,7 @@ from matplotlib import pyplot as plt
 
 from pathlib import Path
 
-path = Path('results/diffusion/image_0/')
+path = Path('results/diffusion/image_42/')
 # results/diffusion/image_0/simulation_2/drone_poses.npy
 
 # get all files with name drone_poses.npy from results/diffusion/image_0/simulation_[0-9]/
