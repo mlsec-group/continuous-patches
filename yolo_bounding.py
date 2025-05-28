@@ -93,7 +93,7 @@ class YOLOBox(nn.Module):
 
                 cv2.imwrite(f'person_new_{i}.png', og_img)
 
-        print('selected boxes shape', selected_boxes.shape)
+        # print('selected boxes shape', selected_boxes.shape)
         xyzs = self.cam.batch_xyz_from_boxes(selected_boxes.squeeze(1))  # only using squeeze() here will cause all dimensions to be deleted if there's only one input image
         return xyzs
     
