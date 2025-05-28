@@ -5,6 +5,7 @@ from typing import Callable, Optional
 import numpy as np
 
 from tqdm import trange
+import os
 
 # source for UNet: https://github.com/jbergq/simple-diffusion-model/
 
