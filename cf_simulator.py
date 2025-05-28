@@ -279,6 +279,8 @@ class SimulatorThread(Thread):
                 self.target_trajectory = np.genfromtxt('uav_trajectories/attack_trajectories/change_y.csv', delimiter=',')
             case 'change_x':
                 self.target_trajectory = np.genfromtxt('uav_trajectories/attack_trajectories/change_x.csv', delimiter=',')
+            case 'figure8':
+                self.target_trajectory = np.genfromtxt('uav_trajectories/attack_trajectories/figure8.csv', delimiter=',')
 
         # add a column of 0 to the right of self.target_trajectory
         #self.target_trajectory = np.hstack((self.target_trajectory, np.zeros((self.target_trajectory.shape[0], 1))))  # add a column of zeros for yaw
