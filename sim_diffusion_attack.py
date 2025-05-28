@@ -67,7 +67,7 @@ class DiffusionThread(Thread):
             condiditions = torch.tensor(np.stack(([sf], [tx], [ty], [x], [y], [z])).T, dtype=torch.float32)
             # print(condiditions.shape)
 
-            samples = self.diffusion_model.sample(1, condiditions, self.device, patch_size=[80,80], n_steps=50).detach().to('cpu').numpy()
+            samples = self.diffusion_model.sample(1, condiditions, self.device, patch_size=[80,80], n_steps=100).detach().to('cpu').numpy()
             patch = samples[0, 0] * 255.
 
             scaled_tx, scaled_ty = scale_tx_ty(sf, tx, ty, 80, (projector_height, projector_width))
@@ -319,30 +319,35 @@ class AttackerPolicyThread(Thread):
     def run(self):
         start_time = time.time()
         self.all_drone_poses.append((0., *self.drone_pose[0]))
-        e = self.target_trajectory.eval(0.)
-        target_position = np.array([e.pos[0], e.pos[1], e.pos[2], e.yaw])
-        self.all_target_poses.append((0., *target_position))
+        # e = self.target_trajectory.eval(0.)
+        # target_position = np.array([e.pos[0], e.pos[1], e.pos[2], e.yaw])
+        # self.all_target_poses.append((0., *target_position))
+        self.all_target_poses.append((0., *self.target_trajectory[0]))
         
         while self._stay_alive:
-            # if self.index_reached < len(self.target_trajectory):
-            #     target_position = self.target_trajectory[self.index_reached]
 
-            #     # check if the drone pose is close to the target
-            #     distance = np.linalg.norm(self.drone_pose[0][:2] - target_position[:2])
-            #     # print("current distance: ", distance)
-            #     if distance < 0.2:
-            #         if self.index_reached < len(self.target_trajectory):
-            #             self.index_reached += 1
-            #             print("Target reached: ", target_position)
-            #             target_position = self.target_trajectory[self.index_reached]
-            #             print("Moving towards: ", target_position)
-            #         else: 
-            #             print("All targets reached")
-            #             self._stay_alive = False
-            #             break
-                time_elapsed = np.clip(time.time() - start_time, 0., self.target_trajectory.duration)
-                e = self.target_trajectory.eval(time_elapsed)
-                target_position = np.array([e.pos[0], e.pos[1], e.pos[2], e.yaw])
+                time_elapsed = time.time() - start_time
+                if self.index_reached < len(self.target_trajectory):
+                    target_position = self.target_trajectory[self.index_reached]
+
+                    # check if the drone pose is close to the target
+                    distance = np.linalg.norm(self.drone_pose[0][:2] - target_position[:2])
+                    # print("current distance: ", distance)
+                    if distance < 0.2:
+                        self.index_reached += 1
+                        if self.index_reached < len(self.target_trajectory):
+                            print("Target reached: ", target_position)
+                            target_position = self.target_trajectory[self.index_reached]
+                            print("Moving towards: ", target_position)
+                        else: 
+                            print("All targets reached")
+                            self._stay_alive = False
+                            break
+                
+                
+                #time_elapsed = np.clip(time.time() - start_time, 0., self.target_trajectory.duration)
+                # e = self.target_trajectory.eval(time_elapsed)
+                # target_position = np.array([e.pos[0], e.pos[1], e.pos[2], e.yaw])
                 # to keep x constant -> target x should be 1.
                 # to lower x -> target x should be > 1.
                 # to increase x -> target x should be < 1.
@@ -446,7 +451,10 @@ class AttackerPolicyThread(Thread):
 
     def get_possible_scale_factor(self, T_drone_world):
         projector_area_image = self.get_projector_area(T_drone_world)
-        if projector_area_image[0] == 0.:
+        # if projector_area_image[0] == 0.:
+        #     print("No overlap in image coordinates, cannot project patch area to image.")
+        #     return 0., (0., 0.), (0., 0.)
+        if projector_area_image[2] <= 0. or projector_area_image[3] <= 0.:
             print("No overlap in image coordinates, cannot project patch area to image.")
             return 0., (0., 0.), (0., 0.)
         
@@ -475,19 +483,38 @@ class AttackerPolicyThread(Thread):
         # check for overlap with image
         # x => width
         # y => height
-        
-        intersection_min_x = np.max((projector_image_ul[0], self.image_bb[0]))
-        intersection_min_y = np.max((projector_image_ul[1], self.image_bb[1]))
-        intersection_max_x = np.min((projector_image_lr[0], self.image_bb[2]))
-        intersection_max_y = np.min((projector_image_ll[1], self.image_bb[3]))
 
-        if intersection_min_x < intersection_max_x and intersection_min_y < intersection_max_y:
-            height = intersection_max_y - intersection_min_y
-            width = intersection_max_x - intersection_min_x
-            return np.array((intersection_min_x, intersection_min_y, height, width))
-        else:
-            print("No overlap with image bounding box")
-            return np.array((0., 0., 0., 0.))
+        intersection_ul = (max(projector_image_ul[0], self.image_bb[0]), 
+                           max(projector_image_ul[1], self.image_bb[1]))
+        
+        intersection_ur = (min(projector_image_ur[0], self.image_bb[2]),
+                           max(projector_image_ur[1], self.image_bb[1]))
+        
+        intersection_ll = (max(projector_image_ll[0], self.image_bb[0]),
+                           min(projector_image_ll[1], self.image_bb[3]))
+        
+        intersection_lr = (min(projector_image_lr[0], self.image_bb[2]),
+                           min(projector_image_lr[1], self.image_bb[3]))
+        
+
+        height = min(intersection_ll[1], intersection_lr[1]) - max(intersection_ur[1], intersection_ul[1])
+        width = min(intersection_ur[0], intersection_lr[0]) - max(intersection_ul[0], intersection_ll[0])
+
+
+        return np.array((intersection_ul[0], intersection_ul[1], height, width))
+
+        # intersection_min_x = np.max((projector_image_ul[0], self.image_bb[0]))
+        # intersection_min_y = np.max((projector_image_ul[1], self.image_bb[1]))
+        # intersection_max_x = np.min((projector_image_lr[0], self.image_bb[2]))
+        # intersection_max_y = np.min((projector_image_ll[1], self.image_bb[3]))
+
+        # if intersection_min_x < intersection_max_x and intersection_min_y < intersection_max_y:
+        #     height = intersection_max_y - intersection_min_y
+        #     width = intersection_max_x - intersection_min_x
+        #     return np.array((intersection_min_x, intersection_min_y, height, width))
+        # else:
+        #     print("No overlap with image bounding box")
+        #     return np.array((0., 0., 0., 0.))
 
     def close(self):
         self._stay_alive = False
@@ -517,12 +544,12 @@ class AttackerPolicyThread(Thread):
         axs[2].legend()
         fig.tight_layout()
         fig.savefig(self.path / 'drone_target_poses.png', dpi=300)
-        plt.close()
+        # plt.close(fig)
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Simulate a drone attack using diffusion models.')
-    parser.add_argument('--trajectory', type=str, default='change_y', choices=['change_y', 'change_x']) # TODO: include rectangle, figure8
+    parser.add_argument('--trajectory', type=str, default='change_y', choices=['change_y', 'change_x', 'figure8']) # TODO: include rectangle, figure8
     parser.add_argument('--mode', type=str, default='diffusion', choices=['diffusion', 'closest', 'interpolated', 'none'])
     parser.add_argument('--model', type=str, default='frontnet', choices=['frontnet', 'yolov5'])
     parser.add_argument('--diffusion_model_path', type=str, default='results/diffusion_training/edm_frontnet_1k_25ds_2ke.pth')
@@ -558,9 +585,16 @@ if __name__ == "__main__":
             # camera_thread.start()
 
    
-            target_trajectory = Trajectory()
-            target_trajectory.loadcsv(f"uav_trajectories/traj_{args.trajectory}.csv")
-            target_trajectory.stretchtime(10)
+            # target_trajectory = Trajectory()
+            # target_trajectory.loadcsv(f"uav_trajectories/traj_{args.trajectory}.csv")
+            # target_trajectory.stretchtime(10)
+
+            t = np.linspace(0, 2 * np.pi, 30)
+            x = 0.5 * np.sin(2 * t)  # Horizontal figure 8
+            y = 1.5 * np.sin(t)  # Vertical figure 8
+            z = np.ones_like(t)  # Constant height at 1
+            yaw = np.zeros_like(t)  # Constant yaw
+            target_trajectory = np.column_stack((x, y, z, yaw))
 
             from camera import Camera
             cam = Camera('camera_calibration.yaml')
@@ -604,7 +638,7 @@ if __name__ == "__main__":
 
             time_start = time.time()
 
-            while time.time() - time_start < target_trajectory.duration:
+            while time.time() - time_start < 300:
                 # wait for 20 seconds
                 time.sleep(0.1)
                 if not attacker_policy._stay_alive:
