@@ -153,6 +153,8 @@ class CFSim():
         if len(image_t.shape) == 3:
             image_t = image_t.unsqueeze(1)
         
+        # print("Image shape in sim_new_pose: ", image_t.shape, image_t.min(), image_t.max())
+
         # frontnet prediction
         if self.model == 'frontnet':
             x, y, z, yaw = self.pose_estimator(image_t)
@@ -160,7 +162,9 @@ class CFSim():
             predicted_pose = torch.hstack((x, y, z, yaw))
         # yolov5 prediction
         elif self.model == 'yolov5':
+            # print("Image shape in sim_new_pose: ", image_t.shape)
             predicted_pose = self.pose_estimator(image_t)
+            predicted_pose = torch.hstack((*predicted_pose, torch.zeros(1, device=self.device))).unsqueeze(0)  # add a dummy yaw value
 
         predicted_pose = predicted_pose.detach().cpu().numpy()
 

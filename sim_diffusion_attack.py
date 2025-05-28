@@ -67,7 +67,7 @@ class DiffusionThread(Thread):
             condiditions = torch.tensor(np.stack(([sf], [tx], [ty], [x], [y], [z])).T, dtype=torch.float32)
             # print(condiditions.shape)
 
-            samples = self.diffusion_model.sample(1, condiditions, self.device, patch_size=[80,80], n_steps=25).detach().to('cpu').numpy()
+            samples = self.diffusion_model.sample(1, condiditions, self.device, patch_size=[80,80], n_steps=50).detach().to('cpu').numpy()
             patch = samples[0, 0] * 255.
 
             scaled_tx, scaled_ty = scale_tx_ty(sf, tx, ty, 80, (projector_height, projector_width))
@@ -260,7 +260,7 @@ class ManipulatorThread(Thread):
                 # camera_image = torch.ones((96, 160), dtype=torch.float32) * 255.
                 patch, sf, scaled_tx, scaled_ty = self.patch_queue[0]
 
-                if sf > 0.:
+                if sf > 0. and sf <= 0.8:
                     T = np.zeros((3, 3))
                     T[0, 0] = sf 
                     T[1, 1] = sf
