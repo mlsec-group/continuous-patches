@@ -153,6 +153,8 @@ class CFSim():
         if len(image_t.shape) == 3:
             image_t = image_t.unsqueeze(1)
         
+        # print("Image shape in sim_new_pose: ", image_t.shape, image_t.min(), image_t.max())
+
         # frontnet prediction
         if self.model == 'frontnet':
             x, y, z, yaw = self.pose_estimator(image_t)
@@ -160,7 +162,9 @@ class CFSim():
             predicted_pose = torch.hstack((x, y, z, yaw))
         # yolov5 prediction
         elif self.model == 'yolov5':
+            # print("Image shape in sim_new_pose: ", image_t.shape)
             predicted_pose = self.pose_estimator(image_t)
+            predicted_pose = torch.hstack((*predicted_pose, torch.zeros(1, device=self.device))).unsqueeze(0)  # add a dummy yaw value
 
         predicted_pose = predicted_pose.detach().cpu().numpy()
 
@@ -275,6 +279,8 @@ class SimulatorThread(Thread):
                 self.target_trajectory = np.genfromtxt('uav_trajectories/attack_trajectories/change_y.csv', delimiter=',')
             case 'change_x':
                 self.target_trajectory = np.genfromtxt('uav_trajectories/attack_trajectories/change_x.csv', delimiter=',')
+            case 'figure8':
+                self.target_trajectory = np.genfromtxt('uav_trajectories/attack_trajectories/figure8.csv', delimiter=',')
 
         # add a column of 0 to the right of self.target_trajectory
         #self.target_trajectory = np.hstack((self.target_trajectory, np.zeros((self.target_trajectory.shape[0], 1))))  # add a column of zeros for yaw
