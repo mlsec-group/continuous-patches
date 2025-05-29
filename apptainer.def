@@ -1,0 +1,7 @@
+Bootstrap: docker
+From: python:3.13
+
+%post
+    pip install uv
+    uv pip install --system numpy opencv-python-headless protobuf pandas scipy scikit-learn torch torchsummary torchvision tqdm PyYAML Pillow pytorch-nemo
+    uv pip install --system jupyter matplotlib scikit-learn jupyterlab-lsp ipywidgets rowan

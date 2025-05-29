@@ -4,7 +4,7 @@ import torch
 from torch.nn.functional import grid_sample
 
 from torchvision.transforms import RandomPerspective
-from torchvision.transforms.v2.functional._geometry import _apply_grid_transform
+# from torchvision.transforms.v2.functional._geometry import _apply_grid_transform
 from typing import List
 
 

@@ -45,10 +45,17 @@ class TimedState:
     def get(self, t):
         if len(self.states) == 0:
             return None
-        i = 0
-        while (i + 1 < len(self.states)) and t - EPSILON >= self.states[i + 1][0]:
-            i += 1
-        return self.states[i][1]
+        left = 0
+        right = len(self.states)
+        mid = int((left + right) / 2)
+        while (right - left > 1):
+            mid_t = self.states[mid][0]
+            if t - EPSILON >= mid_t:
+                left = mid
+            else:
+                right = mid
+            mid = int((left + right) / 2)
+        return self.states[left][1]
 
 
 @dataclass
@@ -88,12 +95,12 @@ class Attacker(VirtualThread):
         self.camera_distortion = camera_data.distortion_coeffs
         self.camera_extrinsic = camera_data.camera_extrinsic
         
+        self.min_dt = 0.05
         self.patch_size = 80
         self.waypoint_threshold = 0.2 # 20cm maximum distance to waypoint
         self.image_bb = (0, 0, 160, 96)  # camera image bounding box
     
     def step(self, environment: Environment, t: int) -> int:
-        start_time = time.time()
         drone_pose = environment.drone_pose.get(t)
         target_pose = self.target_trajectory[self.index_reached]
         if self.index_reached + 1 < len(self.target_trajectory):
@@ -131,13 +138,15 @@ class Attacker(VirtualThread):
         possible_sf, patch_ul, visible_projector_dim = self.get_possible_scale_factor(T_drone_world)
 
         current_target = np.array([possible_sf, tx, ty, *patch_ul, *visible_projector_dim, target_x, target_y, target_z])
-        time_elapsed = time.time() - start_time
+        time_elapsed = 0
+        patch = Patch()
         if possible_sf > 0.:
+            start_time = time.time()
             patch = self._generate_patch(current_target)
             time_elapsed = time.time() - start_time
-            environment.patch.set(patch, t + time_elapsed)
-        # TODO: remove
-        time_elapsed = max(time_elapsed, 0.05)
+            time_elapsed = min(time_elapsed, 0.1)
+        time_elapsed = max(time_elapsed, self.min_dt)
+        environment.patch.set(patch, t + time_elapsed)
         return t + time_elapsed
 
     def get_possible_scale_factor(self, T_drone_world):
@@ -388,7 +397,7 @@ if __name__ == "__main__":
     parser.add_argument('--trajectory', type=str, default='figure8', choices=['change_y', 'change_x', 'figure8']) # TODO: include rectangle, figure8
     parser.add_argument('--mode', type=str, default='closest', choices=['diffusion', 'closest', 'interpolated', 'none'])
     parser.add_argument('--model', type=str, default='frontnet', choices=['frontnet', 'yolov5'])
-    parser.add_argument('--diffusion_model_path', type=str, default='results/diffusion_training.bak/trained_model.pth')
+    parser.add_argument('--diffusion_model_path', type=str, default='results/diffusion_training/trained_model.pth')
     parser.add_argument('--n_images', type=int, default=1, help='Index of the image to use for the simulation.')
     parser.add_argument('--n_sim_runs', type=int, default=1, help='Number of simulation runs to perform.')
     
@@ -512,5 +521,5 @@ if __name__ == "__main__":
                     ax2.legend()
 
                     plt.tight_layout()
-                    plt.savefig(save_directory / f"patched_image_{t}.png", dpi=300)
+                    plt.savefig(save_directory / f"patched_image_{round(t, 3)}.png", dpi=300)
                     plt.close()
