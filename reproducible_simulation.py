@@ -295,8 +295,11 @@ class PoseTracker(VirtualThread):
             ))
 
         predicted_pose = predicted_pose.detach().cpu().numpy()
+        
+        #predicted_pose = np.array([2., 1., 0., -np.pi])
         drone_pose = environment.drone_pose.get(t)
         new_setpoint = self._controller_setpoint(predicted_pose, drone_pose)
+        #new_setpoint = np.array([1.5, 1.0, 1.0, -np.pi])  # TODO: use predicted_pose instead of hardcoded value
 
         environment.drone_set_point.set(new_setpoint, t + self.dt)
 
@@ -399,7 +402,7 @@ if __name__ == "__main__":
     n_sim_runs = args.n_sim_runs
     camera = Camera('camera_calibration.yaml')
 
-    background_images = load_dataset(dataset_path)
+    background_images = load_dataset(dataset_path, train=False, shuffle=False)
     len_dataset = len(background_images.dataset)
     background_image_indices = np.random.choice(len_dataset, args.n_images, replace=False)
 
@@ -423,7 +426,7 @@ if __name__ == "__main__":
 
             attacker = None
             if args.mode == "closest":
-                attacker = ClosestPatchAttacker(f"/shares/datasets/continuous_patches/{args.model}1k.pickle", target_trajectory, camera)
+                attacker = ClosestPatchAttacker(f"{args.model}1k.pickle", target_trajectory, camera)
             elif args.mode == "diffusion":
                 attacker = DiffusionAttacker(args.diffusion_model_path, target_trajectory, camera)
 
@@ -454,9 +457,21 @@ if __name__ == "__main__":
                     last_image_t = t
                     fig = plt.figure(figsize=(10, 5))
 
+
+                    current_patch_obj = environment.patch.get(t)
+                    sf = current_patch_obj.sf
+                    tx = current_patch_obj.tx
+                    ty = current_patch_obj.ty
+                    current_patch = current_patch_obj.image
+
+                    mod_img = threads[PoseTracker.name][1].project_patch(current_patch,
+                                                                        np.array([[sf, 0, tx],
+                                                                                  [0, sf, ty],
+                                                                                  [0, 0, 1]]),
+                                                                        background_image)
                     # Left subplot: Image with scattered point
                     ax1 = fig.add_subplot(1, 2, 1)
-                    ax1.imshow(background_image, cmap='gray')
+                    ax1.imshow(mod_img, cmap='gray')
                     
                     # only plot the dots for the projector if they are within image space:
                     # if projector_image_ul[0] > 0. and  projector_image_ul[1] > 0. and \
@@ -480,6 +495,7 @@ if __name__ == "__main__":
 
                     # add current drone position as scatter with arrow for yaw
                     current_pose = environment.drone_pose.get(t)
+
                     ax2.scatter(current_pose[0], current_pose[1], color='black')
                     ax2.arrow(current_pose[0], current_pose[1],
                               0.3 * np.cos(current_pose[3]), 0.3 * np.sin(current_pose[3]),
