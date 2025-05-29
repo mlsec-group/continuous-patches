@@ -1,7 +1,9 @@
 import os
 import time
+import shutil
 import pickle
 import argparse
+import random
 
 from pathlib import Path
 from dataclasses import dataclass
@@ -113,6 +115,9 @@ class Attacker(VirtualThread):
                     print("All targets reached")
         target_pose = self.target_trajectory[self.index_reached]
 
+        d = (target_pose - drone_pose)
+        target_pose = target_pose + 0.2 * (d) / np.linalg.norm(d)
+
         quats_checkpoint = rowan.from_euler(0., 0., target_pose[3], convention='xyz') # returns qw, qx, qy, qz
         rot_matrix_checkpoint = rowan.to_matrix(quats_checkpoint)
         T_checkpoint = np.eye(4)
@@ -144,7 +149,7 @@ class Attacker(VirtualThread):
             start_time = time.time()
             patch = self._generate_patch(current_target)
             time_elapsed = time.time() - start_time
-            time_elapsed = min(time_elapsed, 0.1)
+            time_elapsed = min(time_elapsed, 0.2)
         time_elapsed = max(time_elapsed, self.min_dt)
         environment.patch.set(patch, t + time_elapsed)
         return t + time_elapsed
@@ -193,6 +198,9 @@ class Attacker(VirtualThread):
     @abstractmethod
     def _generate_patch(self, target: np.array):
         pass
+
+    def is_finished(self):
+        return self.index_reached == len(self.target_trajectory) - 1
 
 
 class ClosestPatchAttacker(Attacker):
@@ -246,7 +254,7 @@ class DiffusionAttacker(Attacker):
         sf, tx, ty, patch_ul_x, patch_ul_y, projector_height, projector_width, x, y, z  = target
         condiditions = torch.tensor(np.stack(([sf], [tx], [ty], [x], [y], [z])).T, dtype=torch.float32)
 
-        samples = self.diffusion_model.sample(1, condiditions, self.device, patch_size=[80,80], n_steps=100).detach().to('cpu').numpy()
+        samples = self.diffusion_model.sample(1, condiditions, self.device, patch_size=[80,80], n_steps=25).detach().to('cpu').numpy()
         patch = samples[0, 0] * 255.
 
         scaled_tx, scaled_ty = scale_tx_ty(sf, tx, ty, 80, (projector_height, projector_width))
@@ -397,7 +405,7 @@ if __name__ == "__main__":
     parser.add_argument('--trajectory', type=str, default='figure8', choices=['change_y', 'change_x', 'figure8']) # TODO: include rectangle, figure8
     parser.add_argument('--mode', type=str, default='closest', choices=['diffusion', 'closest', 'interpolated', 'none'])
     parser.add_argument('--model', type=str, default='frontnet', choices=['frontnet', 'yolov5'])
-    parser.add_argument('--diffusion_model_path', type=str, default='results/diffusion_training/trained_model.pth')
+    parser.add_argument('--diffusion_model_path', type=str, default='/shares/datasets/continuous_patches/edm_frontnet_1k_25ds_2ke.pth')
     parser.add_argument('--n_images', type=int, default=1, help='Index of the image to use for the simulation.')
     parser.add_argument('--n_sim_runs', type=int, default=1, help='Number of simulation runs to perform.')
     
@@ -421,9 +429,12 @@ if __name__ == "__main__":
     for background_image_idx in background_image_indices:
         for i in range(n_sim_runs):
             save_directory = Path(f'results/{args.trajectory}/{args.mode}/{args.model}/image_{background_image_idx}/simulation_{i}/')
+            if save_directory.exists():
+                shutil.rmtree(save_directory)
             os.makedirs(save_directory, exist_ok=True)
 
             background_image = background_images.dataset.__getitem__(background_image_idx)[0][0]
+            # background_image = torch.ones_like(background_image) * 128
             environment = Environment(background_image)
 
             t = np.linspace(0, 2 * np.pi, 30)
@@ -435,7 +446,7 @@ if __name__ == "__main__":
 
             attacker = None
             if args.mode == "closest":
-                attacker = ClosestPatchAttacker(f"{args.model}1k.pickle", target_trajectory, camera)
+                attacker = ClosestPatchAttacker(f"/shares/datasets/continuous_patches/{args.model}1k.pickle", target_trajectory, camera)
             elif args.mode == "diffusion":
                 attacker = DiffusionAttacker(args.diffusion_model_path, target_trajectory, camera)
 
@@ -448,7 +459,7 @@ if __name__ == "__main__":
             t = -1
             all_poses = []
             last_image_t = 0
-            while t < 1000:
+            while t < 240 and not attacker.is_finished():
                 next_t = min(t for t, _ in threads.values())
                 all_poses.append(environment.drone_pose.get(t))
                 assert next_t > t
@@ -461,7 +472,7 @@ if __name__ == "__main__":
                 t = next_t
                 # print(f"(t: {next_t}) ran {threads_to_run}")
                 
-                if (t - last_image_t) > 1.:
+                if (t - last_image_t) > 10.:
                     print(t)
                     last_image_t = t
                     fig = plt.figure(figsize=(10, 5))
@@ -473,11 +484,14 @@ if __name__ == "__main__":
                     ty = current_patch_obj.ty
                     current_patch = current_patch_obj.image
 
-                    mod_img = threads[PoseTracker.name][1].project_patch(current_patch,
+                    if current_patch is not None:
+                        mod_img = threads[PoseTracker.name][1].project_patch(current_patch,
                                                                         np.array([[sf, 0, tx],
                                                                                   [0, sf, ty],
                                                                                   [0, 0, 1]]),
                                                                         background_image)
+                    else:
+                        mod_img = background_image
                     # Left subplot: Image with scattered point
                     ax1 = fig.add_subplot(1, 2, 1)
                     ax1.imshow(mod_img, cmap='gray')
@@ -523,3 +537,5 @@ if __name__ == "__main__":
                     plt.tight_layout()
                     plt.savefig(save_directory / f"patched_image_{round(t, 3)}.png", dpi=300)
                     plt.close()
+            with open(save_directory / "stats.txt", "w") as f:
+                f.write(f"{attacker.index_reached} {attacker.is_finished()}")
