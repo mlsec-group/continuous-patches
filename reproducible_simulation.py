@@ -1,4 +1,5 @@
 import os
+import json
 import time
 import shutil
 import pickle
@@ -345,7 +346,8 @@ class PoseTracker(VirtualThread):
         setpoint_yaw = 0.#rowan.to_euler(rowan.from_matrix(T_setpoint_world[:3, :3]), convention='xyz')[2]  # TODO!
         setpoint_x = np.clip(T_setpoint_world[0, 3], -2.5, 2.0)  # limit x to [-2.5, 2.5]
         setpoint_y = np.clip(T_setpoint_world[1, 3], -2.5, 2.5)  # limit y to [-1.5, 1.5]
-        setpoint_z = 1.0  # constant height
+        # setpoint_z = 1.0  # constant height
+        setpoint_z = np.clip(T_setpoint_world[2, 3], -2.5, 2.5)  # limit y to [-1.5, 1.5]
 
         return np.array([setpoint_x, setpoint_y, setpoint_z, setpoint_yaw])
     
@@ -434,7 +436,7 @@ if __name__ == "__main__":
             os.makedirs(save_directory, exist_ok=True)
 
             background_image = background_images.dataset.__getitem__(background_image_idx)[0][0]
-            # background_image = torch.ones_like(background_image) * 128
+            background_image = torch.ones_like(background_image) * 128
             environment = Environment(background_image)
 
             t = np.linspace(0, 2 * np.pi, 30)
@@ -449,6 +451,9 @@ if __name__ == "__main__":
                 attacker = ClosestPatchAttacker(f"/shares/datasets/continuous_patches/{args.model}1k.pickle", target_trajectory, camera)
             elif args.mode == "diffusion":
                 attacker = DiffusionAttacker(args.diffusion_model_path, target_trajectory, camera)
+            elif args.mode == "interpolated":
+                attacker = ClosestPatchAttacker(f"/shares/datasets/continuous_patches/{args.model}1k.pickle", target_trajectory, camera)
+                # attacker = ClosestPatchAttacker(f"/shares/datasets/continuous_patches/{args.model}1k.pickle", target_trajectory, camera)
 
             threads = {
                 Crazyflie.name: (0, Crazyflie()),
@@ -472,7 +477,7 @@ if __name__ == "__main__":
                 t = next_t
                 # print(f"(t: {next_t}) ran {threads_to_run}")
                 
-                if (t - last_image_t) > 10.:
+                if (t - last_image_t) > 100.:
                     print(t)
                     last_image_t = t
                     fig = plt.figure(figsize=(10, 5))
@@ -505,13 +510,13 @@ if __name__ == "__main__":
                     #     ax1.scatter(projector_image_lr[0], projector_image_lr[1], color='blue')
 
                     # Right subplot: Drone position in 2d
-                    ax2 = fig.add_subplot(1, 2, 2)
+                    ax2 = fig.add_subplot(1, 2, 2, projection="3d")
                     ax2.set_title("Drone Position in 2D")
                     current_setpoint = environment.drone_set_point.get(t)
                     all_poses_a = np.asarray(all_poses)
-                    ax2.plot(all_poses_a[:, 0], all_poses_a[:, 1], label="Drone Path")
-                    ax2.plot(target_trajectory[:, 0], target_trajectory[:, 1], label="Target Trajectory", color='green')
-                    ax2.scatter(current_setpoint[0], current_setpoint[1], color='red', label="Current Setpoint")
+                    ax2.plot(all_poses_a[:, 0], all_poses_a[:, 1], all_poses_a[:, 2], label="Drone Path")
+                    ax2.plot(target_trajectory[:, 0], target_trajectory[:, 1], target_trajectory[:, 2], label="Target Trajectory", color='green')
+                    ax2.scatter(current_setpoint[0], current_setpoint[1], current_setpoint[2], color='red', label="Current Setpoint")
                     ax2.set_xlabel("X")
                     ax2.set_ylabel("Y")
                     # ax2.set_zlabel("Z")
@@ -519,14 +524,14 @@ if __name__ == "__main__":
                     # add current drone position as scatter with arrow for yaw
                     current_pose = environment.drone_pose.get(t)
 
-                    ax2.scatter(current_pose[0], current_pose[1], color='black')
-                    ax2.arrow(current_pose[0], current_pose[1],
-                              0.3 * np.cos(current_pose[3]), 0.3 * np.sin(current_pose[3]),
-                              head_width=0.1, head_length=0.1, fc='black', ec='black')
+                    # ax2.scatter(current_pose[0], current_pose[1], color='black')
+                    # ax2.arrow(current_pose[0], current_pose[1],
+                    #           0.3 * np.cos(current_pose[3]), 0.3 * np.sin(current_pose[3]),
+                    #           head_width=0.1, head_length=0.1, fc='black', ec='black')
 
 
-                    ax2.scatter(2., 1., color='blue', label='Projector corners')
-                    ax2.scatter(2., -1.5, color='blue')
+                    # ax2.scatter(2., 1., color='blue', label='Projector corners')
+                    # ax2.scatter(2., -1.5, color='blue')
 
                     # set ax2 limits
                     ax2.set_xlim([-2.5, 2.5])
@@ -537,5 +542,14 @@ if __name__ == "__main__":
                     plt.tight_layout()
                     plt.savefig(save_directory / f"patched_image_{round(t, 3)}.png", dpi=300)
                     plt.close()
+            
+                if (t - last_image_t) > 1.:
+                    last_image_t = t
+                    with open(Path("drone_demo") / "drone_data.json", "w") as f:
+                        flight_path = [[t, pose.tolist()] for t, pose in environment.drone_pose.states]
+                        json.dump({
+                            "flight_path": flight_path,
+                            "target_trajectory": target_trajectory.tolist(),
+                        }, f)
             with open(save_directory / "stats.txt", "w") as f:
                 f.write(f"{attacker.index_reached} {attacker.is_finished()}")
