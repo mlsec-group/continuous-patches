@@ -15,9 +15,9 @@ document.body.appendChild( renderer.domElement );
 
 const clock = new THREE.Clock();
 
-camera.position.z = 1.5;
-camera.position.y = 2.5;
-camera.position.x = 1.5;
+camera.position.z = 1.0;
+camera.position.y = 1.7;
+camera.position.x = 1.0;
 camera.lookAt( new THREE.Vector3(0, 1, 0) );
 
 const controls = new OrbitControls( camera, renderer.domElement );
@@ -72,8 +72,8 @@ gltfLoader.load( '/drone6.glb', function ( gltf ) {
     // Play all animations
     const clips = gltf.animations;
     for (const clip of clips) {
-        console.log(clip.name)
-        const child = gltf.scene.children.find(x => x.name == clip.name);
+        const name = clip.tracks[0].name.split(".")[0]
+        const child = gltf.scene.children.find(x => x.name == name);
         const mixer = new THREE.AnimationMixer( child );
         mixer.clipAction(clip).play();
         mixers.push(mixer);
@@ -116,6 +116,7 @@ const flightPathPositionsAttribute = flightPathLine.geometry.getAttribute('posit
 
 
 function animate() {
+    const dt = clock.getDelta();
     const t = clock.getElapsedTime();
     let index = 0;
     while (index < trajectory.length && trajectory[index][0] <= t) {
@@ -135,7 +136,7 @@ function animate() {
     previousIndex = index;
     flightPathLine.geometry.setDrawRange(0, index+1);
     renderer.render( scene, camera );
-
-    const dt = clock.getDelta();
-    for (const mixer of mixers) mixer.update( 100 * dt );
+    
+    
+    for (const mixer of mixers) mixer.update( 5 * dt );
 }
