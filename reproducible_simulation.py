@@ -547,9 +547,19 @@ if __name__ == "__main__":
                     last_image_t = t
                     with open(Path("drone_demo") / "drone_data.json", "w") as f:
                         flight_path = [[t, pose.tolist()] for t, pose in environment.drone_pose.states]
+                        drone_velocities = [[t, v.tolist()] for t, v in environment.drone_velocity.states]
                         json.dump({
                             "flight_path": flight_path,
+                            "velocities": drone_velocities,
                             "target_trajectory": target_trajectory.tolist(),
                         }, f)
+            with open(Path("drone_demo") / "drone_data.json", "w") as f:
+                flight_path = [[t, pose.tolist()] for t, pose in environment.drone_pose.states]
+                drone_velocities = [[t, v.tolist()] for t, v in environment.drone_velocity.states]
+                json.dump({
+                    "flight_path": flight_path,
+                    "velocities": drone_velocities,
+                    "target_trajectory": target_trajectory.tolist(),
+                }, f)
             with open(save_directory / "stats.txt", "w") as f:
                 f.write(f"{attacker.index_reached} {attacker.is_finished()}")

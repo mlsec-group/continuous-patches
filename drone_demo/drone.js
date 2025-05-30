@@ -26,7 +26,6 @@ controls.update();
 controls.enablePan = false;
 controls.enableDamping = true;
 
-var trajectory = [[0, [0, 0, 1]]];
 
 const color = 0xFFFFFF;
 const intensity = 1;
@@ -85,9 +84,12 @@ gltfLoader.load( '/drone6.glb', function ( gltf ) {
 } );
 
 
+var trajectory = [[0, [0, 0, 1]]];
+var velocities = [[0, [0, 0, 0]]];
 function updateData() {
     loadData().then(data => {
         trajectory = data.flight_path;
+        velocities = data.velocities;
 
         const points = [];
         for (const point of data.target_trajectory) {
@@ -127,6 +129,14 @@ function animate() {
         droneObject.position.x = trajectory[index][1][0];
         droneObject.position.y = trajectory[index][1][2];
         droneObject.position.z = trajectory[index][1][1];
+        
+        const v = new THREE.Vector3(velocities[index][1][0], velocities[index][1][2], velocities[index][1][1]);
+        const reference = new THREE.Vector3(-1, 0, 0);
+        droneObject.rotation.y = v.angleTo(reference);
+        const vy = 0 + v.y;
+        v.setY(0);
+        for (const mixer of mixers) mixer.update( (5 + 3 * v.length() + 7 * vy) * dt );
+        droneObject.rotation.z = Math.PI / 4 * v.length();
     }
     
     for (let i = previousIndex; i <= index; i++) {
@@ -136,7 +146,4 @@ function animate() {
     previousIndex = index;
     flightPathLine.geometry.setDrawRange(0, index+1);
     renderer.render( scene, camera );
-    
-    
-    for (const mixer of mixers) mixer.update( 5 * dt );
 }
