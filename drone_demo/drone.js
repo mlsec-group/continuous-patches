@@ -131,12 +131,11 @@ function animate() {
         droneObject.position.z = trajectory[index][1][1];
         
         const v = new THREE.Vector3(velocities[index][1][0], velocities[index][1][2], velocities[index][1][1]);
-        const reference = new THREE.Vector3(-1, 0, 0);
-        droneObject.rotation.y = v.angleTo(reference);
         const vy = 0 + v.y;
         v.setY(0);
         for (const mixer of mixers) mixer.update( (5 + 3 * v.length() + 7 * vy) * dt );
-        droneObject.rotation.z = Math.PI / 4 * v.length();
+        droneObject.rotation.z = - Math.PI / 4 * v.x;
+        droneObject.rotation.x = Math.PI / 4 * v.z;
     }
     
     for (let i = previousIndex; i <= index; i++) {
