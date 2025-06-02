@@ -5,7 +5,7 @@ import numpy as np
 import glob
 from pathlib import Path
 
-path = Path('results/test/frontnet/80x80/')
+path = Path('results/test/yolov5/80x80')
 file_paths = list(path.glob('[0-9]*/losses_test.npy'))
 
 losses = []

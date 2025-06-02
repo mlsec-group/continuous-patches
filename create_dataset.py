@@ -120,9 +120,9 @@ def train(idx_start=0, idx_end=100, model='frontnet'):
         with open(path / 'settings.yaml', 'w') as f:
             yaml.dump(settings, f)
 
-        # command = shlex.split(f"sbatch dataset.sh {str(path / 'settings.yaml')} {model}")
+        command = shlex.split(f"sbatch dataset.sh {str(path / 'settings.yaml')} {model}")
         # print(command)
-        command = shlex.split(f"python attacks.py --file {str(path / 'settings.yaml')} --model {model}")
+        # command = shlex.split(f"python attacks.py --file {str(path / 'settings.yaml')} --model {model}")
         subprocess.run(command)
         del settings
 
@@ -144,7 +144,7 @@ def read_data(path, idx_start=0, idx_end=100, model='frontnet', idx=-1):
     #     if i not in [int(path.parent.name) for path in file_paths]:
     #         missing_indices.append(i)
     # print(f"Missing indices: {missing_indices}")
-    # # np.save('missing_indices.npy', missing_indices)
+    # np.save('missing_indices.npy', missing_indices)
 
     # return
 
