@@ -194,7 +194,36 @@ def construct_T_matrix(sf, tx, ty, tx_min=48., tx_max=128., ty_min=20., ty_max=6
     # print(T_matrix)
     return T_matrix
 
-def joint(dataset, model, target, patch, sf, tx_min, tx_max, ty_min, ty_max, epochs, lr, device):
+def calc_eval_loss(test_set, model, patch, T, target):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    patch = patch.to(device) / 255.0  # Normalize patch
+    T = T.to(device)
+
+    total_loss = 0.0
+    with torch.no_grad():
+        for data in test_set:
+            batch, _ = data
+            batch = batch.to(device) / 255.0
+            
+            # print(batch.shape, patch.shape, T.shape)
+
+            manipulated_images = torch.stack([project_patch(patch, T, img) for img in batch], dim=0).squeeze(1)
+            manipulated_images.data.clamp_(0., 1.)  # Ensure values are in [0, 1]
+            x, y, z, yaw = model(manipulated_images*255.)
+            prediction = torch.stack([x, y, z, yaw])
+            prediction = prediction.squeeze(2).mT
+
+            l2_distance = torch.stack([torch.linalg.norm((pred[:3] - target[:3]), ord=2) for pred in prediction])
+            angular_loss = torch.stack([1 - torch.cos(pred[3] - target[3]) for pred in prediction])
+
+            loss = (l2_distance + angular_loss).mean()
+            total_loss += loss.item()
+
+    average_loss = total_loss / len(test_set)
+    print(f"Evaluation Loss: {average_loss}")
+    return average_loss
+
+def joint(train_set, test_set, model, target, patch, sf, tx_min, tx_max, ty_min, ty_max, epochs, lr, device):
 
     patch_t = patch.clone().to(device).requires_grad_(True)
 
@@ -211,7 +240,7 @@ def joint(dataset, model, target, patch, sf, tx_min, tx_max, ty_min, ty_max, epo
     for epoch in trange(epochs):
         epoch_loss = torch.tensor(0., device=device)
 
-        for data in dataset:
+        for data in train_set:
             
             batch, _ = data
 
@@ -223,12 +252,11 @@ def joint(dataset, model, target, patch, sf, tx_min, tx_max, ty_min, ty_max, epo
 
             # print(batch.dtype, batch_T.dtype, batch_patch.dtype)
             manipulated_images = torch.stack([project_patch(batch_patch[i], batch_T[i], batch[i]) for i in range(batch.size(0))], dim=0).squeeze(1)
-            # print(manipulated_images.shape, manipulated_images[0].grad_fn)
-            # plt.imshow(manipulated_images[0].detach().cpu().numpy().squeeze(), cmap='gray')
-            # plt.show()
-            #new_poses = torch.stack([sim.sim_new_pose(img*255.) for img in manipulated_images], dim=0)
+            manipulated_images += torch.distributions.normal.Normal(loc=0.0, scale=0.1).sample(manipulated_images.shape).to(patch.device)
+            
+            manipulated_images.data.clamp_(0., 1.)  # Ensure values are in [0, 1]
 
-            x, y, z, yaw = model(manipulated_images)
+            x, y, z, yaw = model(manipulated_images*255.)
             prediction = torch.stack([x, y, z, yaw])
             prediction = prediction.squeeze(2).mT
 
@@ -251,7 +279,7 @@ def joint(dataset, model, target, patch, sf, tx_min, tx_max, ty_min, ty_max, epo
 
             # print(construct_T_matrix(sf_t, tx_t, ty_t))
             
-        epoch_loss /= len(dataset)
+        epoch_loss /= len(train_set)
         print(f"Epoch {epoch+1}/{epochs}, Loss: {epoch_loss.item()}")
         if epoch_loss.item() < 0.1:
             print("Early stopping due to low loss")
@@ -260,6 +288,8 @@ def joint(dataset, model, target, patch, sf, tx_min, tx_max, ty_min, ty_max, epo
             best_patch = patch_t.clone().detach() * 255.
             best_T = best_T = construct_T_matrix(sf_t.clone(), tx_t.clone(), ty_t.clone(), tx_min, tx_max, ty_min, ty_max, noise=False).detach()
             best_loss = epoch_loss.item()
+        
+        eval_loss = calc_eval_loss(test_set, model, best_patch, best_T, target)
 
     
     return best_patch, best_T
@@ -290,4 +320,4 @@ if __name__ == "__main__":
 
     target = torch.tensor([0.0, 0.0, 1.0, 0.0], device=device, dtype=torch.float32)  # Example target pose
 
-    patch, T = joint(train_set, model, target, initial_patch, sf, tx_min, tx_max, ty_min, ty_max, epochs, lr, device)
+    patch, T = joint(train_set, test_set, model, target, initial_patch, sf, tx_min, tx_max, ty_min, ty_max, epochs, lr, device)
