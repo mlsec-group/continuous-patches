@@ -3,6 +3,8 @@ import torch
 from util import load_dataset, load_model
 
 from tqdm import trange
+import os
+from pathlib import Path
 
 
 def _perspective_grid(
@@ -217,6 +219,9 @@ def joint(train_set, test_set, model, target, patch, sf, tx_min, tx_max, ty_min,
     best_patch = initial_patch.clone().detach() * 255.
     best_T = construct_T_matrix(sf_t.clone(), tx_t.clone(), ty_t.clone(), tx_min, tx_max, ty_min, ty_max, noise=False).detach()
 
+    train_losses = []
+    eval_losses = []
+
     for epoch in trange(epochs):
         epoch_loss = torch.tensor(0., device=device)
 
@@ -261,6 +266,7 @@ def joint(train_set, test_set, model, target, patch, sf, tx_min, tx_max, ty_min,
             
         epoch_loss /= len(train_set)
         print(f"Epoch {epoch+1}/{epochs}, Loss: {epoch_loss.item()}")
+        train_losses.append(epoch_loss.item())
         if epoch_loss.item() < 0.1:
             print("Early stopping due to low loss")
             break
@@ -270,12 +276,22 @@ def joint(train_set, test_set, model, target, patch, sf, tx_min, tx_max, ty_min,
             best_loss = epoch_loss.item()
         
         eval_loss = calc_eval_loss(test_set, model, best_patch, best_T, target)
-
+        eval_losses.append(eval_loss)
     
-    return best_patch, best_T
+    return best_patch, best_T, train_losses, eval_losses
 
 
 if __name__ == "__main__":
+
+    import yaml
+
+    results_path = Path('results/minimal_test/')
+    os.makedirs(results_path, exist_ok=True)
+
+    seed = 1
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -294,18 +310,44 @@ if __name__ == "__main__":
 
     initial_patch = torch.rand((1, 1, 80, 80), device=device, dtype=torch.float32)
 
-    sf, tx_min, tx_max, ty_min, ty_max = gen_random_monitor_space(0.5, 1.5, camera_image_size=(160, 96), patch_size=(80, 80))
+    sf, tx_min, tx_max, ty_min, ty_max = gen_random_monitor_space(0.2, 1.5, camera_image_size=(160, 96), patch_size=(80, 80))
 
     test_img = test_set.dataset[0][0]
     print(test_img.shape)
 
 
-    epochs = 250
+    epochs = 2
     lr = 3e-3
 
     target = torch.tensor([0.0, 0.0, 1.0, 0.0], device=device, dtype=torch.float32)  # Example target pose
 
-    patch, T = joint(train_set, test_set, model, target, initial_patch, sf, tx_min, tx_max, ty_min, ty_max, epochs, lr, device)
+
+    settings = {}
+    settings['results_path'] = str(results_path)
+    settings['seed'] = seed
+    settings['patch_size'] = list(initial_patch.shape[-2::])
+    settings['sf'] = sf
+    settings['tx_min'] = tx_min
+    settings['tx_max'] = tx_max
+    settings['ty_min'] = ty_min
+    settings['ty_max'] = ty_max
+    settings['epochs'] = epochs
+    settings['lr'] = lr
+    settings['sf_min'] = 0.2
+    settings['target'] = target.clone().cpu().numpy().tolist()
+
+    with open(results_path / 'settings.yaml', 'w') as f:
+        yaml.dump(settings, f, default_flow_style=False)
+
+    patch, T, train_losses, eval_losses = joint(train_set, test_set, model, target, initial_patch, sf, tx_min, tx_max, ty_min, ty_max, epochs, lr, device)
+
+    np.save(results_path / 'train_losses.npy', np.array(train_losses))
+    np.save(results_path / 'eval_losses.npy', np.array(eval_losses))
+    np.save(results_path / 'patch.npy', patch.cpu().numpy())
+    np.save(results_path / 'T.npy', T.cpu().numpy())
+
+    # eval
+
 
     manipulated_image = project_patch(patch, T, test_img)
     print("Manipulated image shape:", manipulated_image.shape)
@@ -316,4 +358,13 @@ if __name__ == "__main__":
     plt.scatter(tx_max, ty_min, color='green', label='Min TX, Max TY')
     plt.scatter(tx_min, ty_max, color='orange', label='Max TX, Min TY')
     plt.scatter(tx_min, ty_min, color='blue', label='Max TX, TY')
-    plt.savefig('test_image.png')
+    plt.savefig(results_path / 'test_image.png')
+    plt.close()
+
+    plt.plot(train_losses, label='Train Loss')
+    plt.plot(eval_losses, label='Eval Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.savefig(results_path / 'losses.png')
+    plt.close()
