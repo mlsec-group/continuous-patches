@@ -98,60 +98,40 @@ def project_patch(patch, T, img):
     return modified_image
 
 def gen_random_monitor_space(sf_min, sf_max, camera_image_size=(160, 96), patch_size=(80, 80)):
-    overlap = False
-    while not overlap:
-        random_scale_factor = np.random.uniform(0.2, 1.5)
-        random_tx = np.random.uniform((-1.5*160), (1.5*160))
-        random_ty = np.random.uniform((-1.5*96), (1.5*96))
-        T = np.zeros((3,3))
-        T[0, 0] = T[1, 1] = random_scale_factor
-        T[0, 2] = random_tx 
-        T[1, 2] = random_ty
-        T[2, 2] = 1.0 
-        corners_camera = np.array([(0, 0), (camera_image_size[0], 0), (0, camera_image_size[1]), (camera_image_size[0], camera_image_size[1])], dtype=np.float32)
-        corners_monitor = np.array([T @ np.array((x, y, 1)) for x, y in corners_camera])
+    max_camera_image_width = camera_image_size[0] - (sf_min * patch_size[0])
+    max_camera_image_height = camera_image_size[1] - (sf_min * patch_size[1])
+    # print("max_camera_image_width:", max_camera_image_width)
+    # print("max_camera_image_height:", max_camera_image_height)
 
-        if corners_monitor.T[0].min() < 0 or corners_monitor.T[1].min() < 0  or corners_monitor.T[0].max() > 160 or corners_monitor.T[1].max() > 96:
-            # print("Monitor space is not valid, generating new one...")
-            continue
-        else:
-            overlap = True
 
-    # print(corners_camera)
-    # print(T)
-    # print(corners_monitor)
+    tx_min = np.random.randint(0, max_camera_image_width)
+    ty_min = np.random.randint(0, max_camera_image_height)
+    random_origin = (tx_min, ty_min)
+    # print(random_origin)
 
-    intersection_ul = (max(corners_monitor[0, 0], corners_camera[0, 0]), 
-                        max(corners_monitor[0, 1], corners_camera[0, 1]))
-    intersection_ur = (min(corners_monitor[1, 0], corners_camera[1, 0]),
-                        max(corners_monitor[1, 1], corners_camera[1, 1]))
-    intersection_ll = (max(corners_monitor[2, 0], corners_camera[2, 0]),
-                        min(corners_monitor[2, 1], corners_camera[2, 1]))
-    intersection_lr = (min(corners_monitor[3, 0], corners_camera[3, 0]),
-                        min(corners_monitor[3, 1], corners_camera[3, 1]))
+    # print("max_camera_image_width:", random_origin_x + (sf_min * patch_size[0]))
+    # print("max_camera_image_height:", random_origin_y + (sf_min * patch_size[1]))
 
-    # print(intersection_ul) 
-    # print(intersection_ur)
-    # print(intersection_ll)
-    # print(intersection_lr)
+    patch_monitor_max_x = np.random.randint(tx_min + (sf_min * patch_size[0]), camera_image_size[0])
+    patch_monitor_max_y = np.random.randint(ty_min + (sf_min * patch_size[1]), camera_image_size[1])
+    random_patch_monitor_size = (patch_monitor_max_x, patch_monitor_max_y)
+    # print("random_patch_monitor_size:", random_patch_monitor_size)
     
-    height = min(intersection_ll[1], intersection_lr[1]) - max(intersection_ur[1], intersection_ul[1])
-    width = min(intersection_ur[0], intersection_lr[0]) - max(intersection_ul[0], intersection_ll[0])
-
-    max_dim = min(height, width)
+    max_dim = min(patch_monitor_max_x, patch_monitor_max_y)
     possible_max_sf = max_dim / min(patch_size[0], patch_size[1])
-    random_sf = min(np.random.uniform(sf_min, possible_max_sf), sf_max)
+    
+    random_sf = np.random.uniform(sf_min, min(sf_max, possible_max_sf))
 
-    min_tx = intersection_ul[0]
-    max_tx = max(intersection_ur[0], intersection_lr[0]) - (patch_size[0] * random_sf) # 
+    # print("random_sf:", random_sf)
 
-    min_ty = intersection_ul[1]
+    tx_max = int(min(camera_image_size[0], camera_image_size[0] - (random_sf * patch_size[0])))
+    ty_max = int(min(camera_image_size[1], camera_image_size[1] - (random_sf * patch_size[1])))
 
-    max_ty = max(intersection_ll[1], intersection_lr[1]) - (patch_size[1] * random_sf)
+    # print("tx_max, ty_max:", tx_max, ty_max)
     
 
-    print(f"sf: {random_sf}, min tx: {min_tx}, max tx: {max_tx}, min ty: {min_ty}, max ty: {max_ty}")
-    return random_sf, min_tx, max_tx, min_ty, max_ty
+    print(f"sf: {random_sf}, min tx: {tx_min}, max tx: {tx_max}, min ty: {ty_min}, max ty: {tx_max}")
+    return random_sf, tx_min, tx_max, ty_min, ty_max
 
 
 def norm_transformation(sf, tx, ty, tx_min, tx_max, ty_min, ty_max):
@@ -296,6 +276,7 @@ def joint(train_set, test_set, model, target, patch, sf, tx_min, tx_max, ty_min,
 
 
 if __name__ == "__main__":
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -315,9 +296,24 @@ if __name__ == "__main__":
 
     sf, tx_min, tx_max, ty_min, ty_max = gen_random_monitor_space(0.5, 1.5, camera_image_size=(160, 96), patch_size=(80, 80))
 
+    test_img = test_set.dataset[0][0]
+    print(test_img.shape)
+
+
     epochs = 250
     lr = 3e-3
 
     target = torch.tensor([0.0, 0.0, 1.0, 0.0], device=device, dtype=torch.float32)  # Example target pose
 
     patch, T = joint(train_set, test_set, model, target, initial_patch, sf, tx_min, tx_max, ty_min, ty_max, epochs, lr, device)
+
+    manipulated_image = project_patch(patch, T, test_img)
+    print("Manipulated image shape:", manipulated_image.shape)
+
+    import matplotlib.pyplot as plt
+    plt.imshow(manipulated_image.numpy()[0][0], cmap='gray')
+    plt.scatter(tx_max, ty_max, color='red', label='Min TX, TY')
+    plt.scatter(tx_max, ty_min, color='green', label='Min TX, Max TY')
+    plt.scatter(tx_min, ty_max, color='orange', label='Max TX, Min TY')
+    plt.scatter(tx_min, ty_min, color='blue', label='Max TX, TY')
+    plt.savefig('test_image.png')
