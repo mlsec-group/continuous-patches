@@ -6,6 +6,14 @@ from tqdm import trange
 import os
 from pathlib import Path
 
+from camera import Camera
+
+def normalize_yaw(yaw):
+    return np.atan2(np.sin(yaw), np.cos(yaw))
+
+def normalize_yaw_t(yaw):
+    return torch.atan2(torch.sin(yaw), torch.cos(yaw))
+
 
 def _perspective_grid(
 coeffs: list[float], 
@@ -50,56 +58,51 @@ center = None,
     output_grid = output_grid1.div_(output_grid2).sub_(center)
     return output_grid.view(batch_size, oh, ow, 2)
     
-def project_patch(patch, T, img):
-    """ Project the patch on the camera image.
+def project_patch(patches, T_matrices, images):
+    """ Project the patches on the batch of camera images.
+    Args:
+        patches: Tensor of shape [B, C, H_p, W_p] (batch of patches).
+        T_matrices: Tensor of shape [B, 3, 3] (batch of transformation matrices).
+        images: Tensor of shape [B, C, H_i, W_i] (batch of images).
+    Returns:
+        Tensor of manipulated images of shape [B, C, H_i, W_i].
     """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if not torch.is_tensor(patch):
-        patch = torch.tensor(patch, dtype=torch.float64, device=device)
-    # patches should be of shape [B, 1, H, W]
-    if len(patch.shape) < 3:
-        patch = patch.unsqueeze(0)
-    if len(patch.shape) == 3:
-        patch = patch.unsqueeze(1)
-    
-    # print("Inside project patch")
-    # print("patch shape:", patch.shape)
-    
-    if not torch.is_tensor(img):
-        img = torch.tensor(img, device=device)
-    # img should be of shape [1, 1, H, W]
-    while len(img.shape) < 4:
-        img = img.unsqueeze(0)
+    device = patches.device
+    batch_size, _, p_height, p_width = patches.shape
+    _, _, i_height, i_width = images.shape
 
-    # print("img shape:", img.shape)
+    # Create masks for patches
+    masks = torch.ones_like(patches, dtype=torch.float32, device=device)
 
-    if not torch.is_tensor(T):
-        T = torch.tensor(T, dtype=torch.float32, device=device) # shape should be [3, 3]
+    # Invert transformation matrices
+    inv_T_matrices = torch.inverse(T_matrices)
 
-    p_height, p_width = patch.shape[-2:]
-    i_height, i_width = img.shape[-2:]
+    # Flatten transformation matrices for grid computation
+    # print(inv_T_matrices.shape)
+    coeffs = inv_T_matrices.reshape(batch_size, -1)
+    # print(coeffs.shape)
 
-    mask = torch.ones_like(patch, dtype=torch.float32, device=device)
+    # Generate perspective grids for batch
+    grids = _perspective_grid(
+        coeffs, w=p_width, h=p_height, ow=i_width, oh=i_height, 
+        dtype=torch.float32, device=device, center=[1., 1.]
+    )
 
-    try:
-        inv_t = torch.inverse(T)
-    except Exception as e:
-        print("Error inverting transformation matrix:", e)
-        print("Transformation matrix T:", T)
+    # Apply grid sampling for patches and masks
+    transformed_patches = torch.nn.functional.grid_sample(
+        patches, grids, mode='bilinear', align_corners=False, padding_mode='zeros'
+    )
+    bit_masks = torch.nn.functional.grid_sample(
+        masks, grids, mode='bilinear', align_corners=False, padding_mode='zeros'
+    ).bool()
 
-    coeffs = inv_t.flatten().unsqueeze(0)
-    
-    grid = _perspective_grid(coeffs, w=p_width, h=p_height, dtype=torch.float32, ow=i_width, oh=i_height, device=device, center = [1., 1.])
+    # Combine transformed patches with original images
+    manipulated_images = images * ~bit_masks
+    manipulated_images += transformed_patches
 
-    bit_mask = torch.nn.functional.grid_sample(mask, grid, mode='bilinear', align_corners=False, padding_mode='zeros').bool()
-    transformed_patch = torch.nn.functional.grid_sample(patch, grid, mode='bilinear', align_corners=False, padding_mode='zeros')
+    return manipulated_images
 
-    modified_image = img * ~bit_mask.bool()
-    modified_image += transformed_patch
-
-    return modified_image
-
-def gen_random_monitor_space(sf_min, sf_max, camera_image_size=(160, 96), patch_size=(80, 80)):
+def gen_random_monitor_space(sf_min, sf_max, cam, camera_image_size=(160, 96), patch_size=(80, 80)):
     max_camera_image_width = camera_image_size[0] - (sf_min * patch_size[0])
     max_camera_image_height = camera_image_size[1] - (sf_min * patch_size[1])
     # print("max_camera_image_width:", max_camera_image_width)
@@ -130,10 +133,15 @@ def gen_random_monitor_space(sf_min, sf_max, camera_image_size=(160, 96), patch_
     ty_max = int(min(camera_image_size[1], camera_image_size[1] - (random_sf * patch_size[1])))
 
     # print("tx_max, ty_max:", tx_max, ty_max)
+
+    # calculate a target yaw based on the possible patch monitor space
+    bb = np.array([tx_min, ty_min, patch_monitor_max_x, patch_monitor_max_y])
+    xyz_drone = cam.xyz_from_bb(bb)
+    target_yaw = normalize_yaw(np.arctan2(xyz_drone[1], xyz_drone[0]))
     
 
-    print(f"sf: {random_sf}, min tx: {tx_min}, max tx: {tx_max}, min ty: {ty_min}, max ty: {tx_max}")
-    return random_sf, tx_min, tx_max, ty_min, ty_max
+    print(f"sf: {random_sf}, min tx: {tx_min}, max tx: {tx_max}, min ty: {ty_min}, max ty: {tx_max}, target yaw: {target_yaw}")
+    return random_sf, tx_min, tx_max, ty_min, ty_max, target_yaw
 
 
 def norm_transformation(sf, tx, ty, tx_min, tx_max, ty_min, ty_max):
@@ -189,14 +197,18 @@ def calc_eval_loss(test_set, model, patch, T, target):
             
             # print(batch.shape, patch.shape, T.shape)
 
-            manipulated_images = torch.stack([project_patch(patch, T, img) for img in batch], dim=0).squeeze(1)
+            batch_patch = patch.expand(batch.size(0), -1, -1, -1)
+            batch_T = T.expand(batch.size(0), -1, -1)
+
+            #manipulated_images = torch.stack([project_patch(patch, T, img) for img in batch], dim=0).squeeze(1)
+            manipulated_images = project_patch(batch_patch, batch_T, batch)
             manipulated_images.data.clamp_(0., 1.)  # Ensure values are in [0, 1]
             x, y, z, yaw = model(manipulated_images*255.)
             prediction = torch.stack([x, y, z, yaw])
             prediction = prediction.squeeze(2).mT
 
-            l2_distance = torch.stack([torch.linalg.norm((pred[:3] - target[:3]), ord=2) for pred in prediction])
-            angular_loss = torch.stack([1 - torch.cos(pred[3] - target[3]) for pred in prediction])
+            l2_distance = torch.linalg.norm(prediction[:, :3] - target[:3], dim=1, ord=2)
+            angular_loss = 1 - torch.cos(normalize_yaw_t(prediction[:, 3]) - normalize_yaw_t(target[3]))
 
             loss = (l2_distance + angular_loss).mean()
             total_loss += loss.item()
@@ -236,7 +248,8 @@ def joint(train_set, test_set, model, target, patch, sf, tx_min, tx_max, ty_min,
             # print(batch.shape, batch_T.shape, batch_patch.shape)
 
             # print(batch.dtype, batch_T.dtype, batch_patch.dtype)
-            manipulated_images = torch.stack([project_patch(batch_patch[i], batch_T[i], batch[i]) for i in range(batch.size(0))], dim=0).squeeze(1)
+            #manipulated_images = torch.stack([project_patch(batch_patch[i], batch_T[i], batch[i]) for i in range(batch.size(0))], dim=0).squeeze(1)
+            manipulated_images = project_patch(batch_patch, batch_T, batch)
             manipulated_images += torch.distributions.normal.Normal(loc=0.0, scale=0.1).sample(manipulated_images.shape).to(patch.device)
             
             manipulated_images.data.clamp_(0., 1.)  # Ensure values are in [0, 1]
@@ -245,8 +258,13 @@ def joint(train_set, test_set, model, target, patch, sf, tx_min, tx_max, ty_min,
             prediction = torch.stack([x, y, z, yaw])
             prediction = prediction.squeeze(2).mT
 
-            l2_distance = torch.stack([torch.linalg.norm((pred[:3] - target[:3]), ord=2) for pred in prediction])
-            angular_loss = torch.stack([1 - torch.cos(pred[3] - target[3]) for pred in prediction])
+            # l2_distance = torch.stack([torch.linalg.norm((pred[:3] - target[:3]), ord=2) for pred in prediction])
+            # angular_loss = torch.stack([1 - torch.cos(normalize_yaw_t(pred[3]) - normalize_yaw_t(target[3])) for pred in prediction])
+
+            # print(l2_distance, angular_loss)
+
+            l2_distance = torch.linalg.norm(prediction[:, :3] - target[:3], dim=1, ord=2)
+            angular_loss = 1 - torch.cos(normalize_yaw_t(prediction[:, 3]) - normalize_yaw_t(target[3]))
 
             loss = (l2_distance + angular_loss).mean()
 
@@ -265,11 +283,11 @@ def joint(train_set, test_set, model, target, patch, sf, tx_min, tx_max, ty_min,
             # print(construct_T_matrix(sf_t, tx_t, ty_t))
             
         epoch_loss /= len(train_set)
-        print(f"Epoch {epoch+1}/{epochs}, Loss: {epoch_loss.item()}")
+        print(f"Epoch {epoch+1}/{epochs}, Loss: {epoch_loss.item()}, l2: {l2_distance.mean().item()}, angular: {angular_loss.mean().item()}")
         train_losses.append(epoch_loss.item())
-        if epoch_loss.item() < 0.1:
-            print("Early stopping due to low loss")
-            break
+        # if epoch_loss.item() < 0.1:
+        #     print("Early stopping due to low loss")
+        #     break
         if epoch_loss.item() < best_loss:
             best_patch = patch_t.clone().detach() * 255.
             best_T = best_T = construct_T_matrix(sf_t.clone(), tx_t.clone(), ty_t.clone(), tx_min, tx_max, ty_min, ty_max, noise=False).detach()
@@ -284,11 +302,19 @@ def joint(train_set, test_set, model, target, patch, sf, tx_min, tx_max, ty_min,
 if __name__ == "__main__":
 
     import yaml
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--results_path', type=str, default='results/minimal_test/', help='Path to save results')
+    parser.add_argument('--seed', type=int, default=1, help='Random seed for reproducibility')
+    parser.add_argument('--target', type=float, nargs='+', help='Target pose as a list of floats [x, y, z, yaw]')
+    parser.add_argument('--epochs', type=int, default=250, help='Number of training epochs')
+    parser.add_argument('--lr', type=float, default=3e-3, help='Learning rate for the optimizer')
+    args = parser.parse_args()
 
-    results_path = Path('results/minimal_test/')
+    results_path = Path(args.results_path)
     os.makedirs(results_path, exist_ok=True)
 
-    seed = 1
+    seed = args.seed
     torch.manual_seed(seed)
     np.random.seed(seed)
 
@@ -310,16 +336,18 @@ if __name__ == "__main__":
 
     initial_patch = torch.rand((1, 1, 80, 80), device=device, dtype=torch.float32)
 
-    sf, tx_min, tx_max, ty_min, ty_max = gen_random_monitor_space(0.2, 1.5, camera_image_size=(160, 96), patch_size=(80, 80))
+    cam = Camera('camera_calibration.yaml')
+
+    sf, tx_min, tx_max, ty_min, ty_max, target_yaw = gen_random_monitor_space(0.2, 1.5, cam, camera_image_size=(160, 96), patch_size=(80, 80))
 
     test_img = test_set.dataset[0][0]
     print(test_img.shape)
 
 
-    epochs = 2
-    lr = 3e-3
+    epochs = args.epochs
+    lr = args.lr
 
-    target = torch.tensor([0.0, 0.0, 1.0, 0.0], device=device, dtype=torch.float32)  # Example target pose
+    target = torch.tensor([*args.target[:3], target_yaw], device=device, dtype=torch.float32)  # Example target pose
 
 
     settings = {}
