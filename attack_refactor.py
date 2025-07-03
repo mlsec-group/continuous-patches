@@ -67,12 +67,23 @@ def project_patch(patches, T_matrices, images):
     Returns:
         Tensor of manipulated images of shape [B, C, H_i, W_i].
     """
-    device = patches.device
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    patches = patches.to(device)
+    T_matrices = T_matrices.to(device)
+    images = images.to(device)
+
     batch_size, _, p_height, p_width = patches.shape
-    _, _, i_height, i_width = images.shape
+    # _, _, i_height, i_width = images.shape
+
+    i_height, i_width = images.shape[-2::]
+    while len(images.shape) < 4:
+        images = images.unsqueeze(0)
 
     # Create masks for patches
     masks = torch.ones_like(patches, dtype=torch.float32, device=device)
+
+    # print(T_matrices[0])
 
     # Invert transformation matrices
     inv_T_matrices = torch.inverse(T_matrices)
@@ -111,28 +122,28 @@ def gen_random_monitor_space(sf_min, sf_max, cam, camera_image_size=(160, 96), p
 
     tx_min = np.random.randint(0, max_camera_image_width)
     ty_min = np.random.randint(0, max_camera_image_height)
-    random_origin = (tx_min, ty_min)
-    # print(random_origin)
 
-    # print("max_camera_image_width:", random_origin_x + (sf_min * patch_size[0]))
-    # print("max_camera_image_height:", random_origin_y + (sf_min * patch_size[1]))
 
-    patch_monitor_max_x = np.random.randint(tx_min + (sf_min * patch_size[0]), camera_image_size[0])
-    patch_monitor_max_y = np.random.randint(ty_min + (sf_min * patch_size[1]), camera_image_size[1])
-    random_patch_monitor_size = (patch_monitor_max_x, patch_monitor_max_y)
-    # print("random_patch_monitor_size:", random_patch_monitor_size)
+    sf_max = camera_image_size[1] / patch_size[1]
+
+    patch_monitor_max_x = min(tx_min + (sf_max * patch_size[0]), camera_image_size[0])
+    patch_monitor_max_y = min(ty_min + (sf_max * patch_size[1]), camera_image_size[1])
+
+    patch_monitor_width = patch_monitor_max_x - tx_min
+    patch_monitor_height = patch_monitor_max_y - ty_min
+    # # print("patch_monitor_width:", patch_monitor_width)
+    # # print("patch_monitor_height:", patch_monitor_height)
     
-    max_dim = min(patch_monitor_max_x, patch_monitor_max_y)
+    max_dim = min(patch_monitor_width, patch_monitor_height)
     possible_max_sf = max_dim / min(patch_size[0], patch_size[1])
     
-    random_sf = np.random.uniform(sf_min, min(sf_max, possible_max_sf))
+    random_sf = np.random.uniform(sf_min, possible_max_sf)
 
-    # print("random_sf:", random_sf)
+   
+    tx_max = patch_monitor_max_x - (random_sf * patch_size[0])
+    ty_max = patch_monitor_max_y - (random_sf * patch_size[1])
 
-    tx_max = int(min(camera_image_size[0], camera_image_size[0] - (random_sf * patch_size[0])))
-    ty_max = int(min(camera_image_size[1], camera_image_size[1] - (random_sf * patch_size[1])))
-
-    # print("tx_max, ty_max:", tx_max, ty_max)
+   
 
     # calculate a target yaw based on the possible patch monitor space
     bb = np.array([tx_min, ty_min, patch_monitor_max_x, patch_monitor_max_y])
@@ -140,7 +151,7 @@ def gen_random_monitor_space(sf_min, sf_max, cam, camera_image_size=(160, 96), p
     target_yaw = normalize_yaw(np.arctan2(xyz_drone[1], xyz_drone[0]))
     
 
-    print(f"sf: {random_sf}, min tx: {tx_min}, max tx: {tx_max}, min ty: {ty_min}, max ty: {tx_max}, target yaw: {target_yaw}")
+    print(f"sf: {random_sf}, min tx: {tx_min}, max tx: {tx_max}, min ty: {ty_min}, max ty: {ty_max}, target yaw: {target_yaw}")
     return random_sf, tx_min, tx_max, ty_min, ty_max, target_yaw
 
 
@@ -148,14 +159,33 @@ def norm_transformation(sf, tx, ty, tx_min, tx_max, ty_min, ty_max):
     # tx_tanh = torch.tanh(tx) #* 0.8
     # ty_tanh = torch.tanh(ty) #* 0.8
 
+    # print("Inside norm_transformation:")
+    # print("sf:", sf)
+    # print("tx:", tx)
+    # print("ty:", ty)
+    # print("tx_min, tx_max, ty_min, ty_max:", tx_min, tx_max, ty_min, ty_max)
+
     # sf_norm = (sf_max - sf_min) * (torch.tanh(sf) + 1) * 0.5 + sf_min
-    scaled_patch_size = 80 * sf
-    tx_max -= scaled_patch_size
-    ty_max -= scaled_patch_size
+    # scaled_patch_size = 80 * sf
+    # tx_max -= scaled_patch_size
+    # ty_max -= scaled_patch_size
 
     # new patch placement implementation might need different tx, ty limits!:
     tx_norm = (tx_max - tx_min) * (torch.tanh(tx) + 1) * 0.5 + tx_min
     ty_norm = (ty_max - ty_min) * (torch.tanh(ty) + 1) * 0.5 + ty_min
+
+
+    # if ty_norm < ty_min:
+    #     print("Something weird happend: ")
+    #     print("ty: ", ty)
+    #     print("ty_norm: ", ty_norm)
+    #     print("ty_min, ty_max:", ty_min, ty_max)
+
+    # if tx_norm < tx_min:
+    #     print("Something weird happend: ")
+    #     print("tx: ", tx)
+    #     print("tx_norm: ", tx_norm)
+    #     print("tx_min, tx_max:", tx_min, tx_max)
 
     # scaling_norm = (scale_max - scale_min) * (torch.tanh(sf) + 1) * 0.5 + scale_min # normalizes scaling factor to range [0.3, 0.5]
 
@@ -169,11 +199,19 @@ def noisy_transformations(sf, tx, ty):
     return sf_n, tx_n, ty_n
 
 def construct_T_matrix(sf, tx, ty, tx_min=48., tx_max=128., ty_min=20., ty_max=66., noise=True):
+    # print("Inside construct T:")
+    # print("sf:", sf)
+    # print("tx:", tx)
+    # print("ty:", ty)
+    # print("tx_min, tx_max, ty_min, ty_max:", tx_min, tx_max, ty_min, ty_max)
+
     if noise:
         sf, tx, ty = noisy_transformations(sf, tx, ty)
     # noisy_sf, noisy_tx, noisy_ty = noisy_transformations(sf, tx, ty)
-    norm_tx, norm_ty = norm_transformation(sf, tx, ty, tx_min, tx_max, ty_min, ty_max)
-    # print(norm_sf, norm_tx, norm_ty)
+    # print("ty_min, ty_max:", ty_min, ty_max)
+    # print("tx_min, tx_max:", tx_min, tx_max)
+    norm_tx, norm_ty = norm_transformation(sf=sf, tx=tx, ty=ty, tx_min=tx_min, tx_max=tx_max, ty_min=ty_min, ty_max=ty_max)
+    # print(norm_tx, norm_ty)
 
     T_matrix = torch.zeros((3, 3), device=sf.device)
     scale_T = torch.eye(2, device=sf.device) * sf
@@ -222,8 +260,8 @@ def joint(train_set, test_set, model, target, patch, sf, tx_min, tx_max, ty_min,
     patch_t = patch.clone().to(device).requires_grad_(True)
 
     sf_t = torch.tensor(sf, device=device, dtype=torch.float32, requires_grad=False)
-    tx_t = torch.FloatTensor(1).uniform_(0, 10).to(device).requires_grad_(True)
-    ty_t = torch.FloatTensor(1).uniform_(0, 10).to(device).requires_grad_(True)
+    tx_t = torch.FloatTensor(1).uniform_(-10, 10).to(device).requires_grad_(True)
+    ty_t = torch.FloatTensor(1).uniform_(-10, 10).to(device).requires_grad_(True)
 
 
     optimizer = torch.optim.Adam([patch_t, tx_t, ty_t], lr=lr, eps=1e-4)
@@ -243,6 +281,11 @@ def joint(train_set, test_set, model, target, patch, sf, tx_min, tx_max, ty_min,
 
             batch = batch.to(device) / 255.
             
+            # print("Inside joint:")
+            # print("sf_t:", sf_t)
+            # print("tx_t:", tx_t)
+            # print("ty_t:", ty_t)
+            # print("tx_min, tx_max, ty_min, ty_max:", tx_min, tx_max, ty_min, ty_max)
             batch_T = torch.stack([construct_T_matrix(sf_t, tx_t, ty_t, tx_min, tx_max, ty_min, ty_max) for _ in range(batch.size(0))], dim=0)
             batch_patch = patch_t.expand(batch.size(0), -1, -1, -1)
             # print(batch.shape, batch_T.shape, batch_patch.shape)
@@ -376,16 +419,27 @@ if __name__ == "__main__":
 
     # eval
 
+    print(tx_min, tx_max, ty_min, ty_max)
+    print(T)
 
-    manipulated_image = project_patch(patch, T, test_img)
+
+    # tx_max = patch_monitor_max_x - (random_sf * patch_size[0])
+    # ty_max = patch_monitor_max_y - (random_sf * patch_size[1])
+    patch_monitor_max_x = tx_max + (sf * initial_patch.shape[2])
+    patch_monitor_max_y = ty_max + (sf * initial_patch.shape[3])
+
+    manipulated_image = project_patch(patch, T, test_img).detach().cpu().numpy()
     print("Manipulated image shape:", manipulated_image.shape)
 
     import matplotlib.pyplot as plt
-    plt.imshow(manipulated_image.numpy()[0][0], cmap='gray')
-    plt.scatter(tx_max, ty_max, color='red', label='Min TX, TY')
-    plt.scatter(tx_max, ty_min, color='green', label='Min TX, Max TY')
-    plt.scatter(tx_min, ty_max, color='orange', label='Max TX, Min TY')
-    plt.scatter(tx_min, ty_min, color='blue', label='Max TX, TY')
+    plt.imshow(manipulated_image[0][0], cmap='gray')
+    plt.scatter(tx_min, ty_min)
+    plt.scatter(tx_max, ty_max)
+    plt.scatter(patch_monitor_max_x, patch_monitor_max_y, color='red', label='Patch Monitor Max')
+    # plt.scatter(tx_max, ty_max, color='red', label='Min TX, TY')
+    # plt.scatter(tx_max, ty_min, color='green', label='Min TX, Max TY')
+    # plt.scatter(tx_min, ty_max, color='orange', label='Max TX, Min TY')
+    # plt.scatter(tx_min, ty_min, color='blue', label='Max TX, TY')
     plt.savefig(results_path / 'test_image.png')
     plt.close()
 
