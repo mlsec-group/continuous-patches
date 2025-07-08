@@ -1,68 +1,119 @@
 import torch
-import os, sys
-import cv2
 import numpy as np
 
+import os
 
-# sys.path.append('simulators/pulp-frontnet/PyTorch/Frontnet')
+sys.path.append('pulp-frontnet/PyTorch/Frontnet')
 
-# from Frontnet import FrontnetModel
-# from DataProcessor import DataProcessor
-# from Dataset import Dataset
-from torch.utils import data
+from Frontnet import FrontnetModel
+from DataProcessor import DataProcessor
+from Dataset import Dataset
+from torch.utils.data import DataLoader
 
-import rowan
+from matplotlib import pyplot as plt
 
 from pathlib import Path
 
-from yolo_bounding import YOLOBox
-from util import load_model, load_dataset
-
-from threading import Thread
-from collections import deque
-
-
-import time
-
-import matplotlib.pyplot as plt
-
 
 class CFSim():
-    def __init__(self, model='frontnet', dataset_path="pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"):
+    def __init__(self, model='frontnet', dataset_path="data/camera_images.pickle"):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = model
-
-        self.load_frontnet_model = load_model
-        self.load_dataset = load_dataset
         
         if self.model == 'frontnet':
-            self.pose_estimator = self.load_frontnet_model(path='pulp-frontnet/PyTorch/Models/Frontnet160x32.pt', device=self.device, config='160x32')
-            self.pose_estimator.eval()
-        elif self.model == 'yolov5':
-            self.pose_estimator = self.load_yolo_model()
+            self.pose_estimator = self.load_frontnet_model(self.device)
         else:
             raise ValueError("Model type not supported!")
         
-        self.pose = np.array([0., 0., 0., 0.]) # x, y, z, yaw
+        self.pose = torch.tensor([0., 0., 1., 0.], device=self.device, dtype=torch.float32) # x, y, z, yaw
+        self.velocity = 0.5 # 1 m/s
+        self.omega = 1. # 1.0 rad/s
+
+        self.all_poses = [self.pose.detach().cpu().numpy()]
+
+        self.train_set, self.test_set = self.load_dataset(dataset_path)
+
+        # patch monitor coordinates in homogeneous coordinates in image frame
+        monitor_corners = np.array([[48., 20., 1.],     # upper left corner (x, y, 1)
+                                    [128., 20., 1.],    # upper right corner
+                                    [48., 66., 1.],     # lower left corner
+                                    [128., 66., 1]])   # lower right corner
         
-        self.current_idx = 0
-        # self.target_trajectory = target_trajectory
+        self.max_patch_width = monitor_corners[1, 0] - monitor_corners[0, 0]  # width of patch monitor in pixels
+        self.max_patch_height = monitor_corners[2, 1] - monitor_corners[0, 1] # height of patch monitor in pixels
 
-        # might be deleted later, the dataset is only loaded to get a suitable background image
-        self.dataset = self.load_dataset(dataset_path, train=False, shuffle=False) # we need to test on the test set
-        base_img, gt = self.dataset.dataset.__getitem__(0)
-        self.base_img = base_img#.squeeze(0).numpy()
+        self.monitor_corners = torch.tensor(monitor_corners, dtype=torch.float32, device=self.device)
 
-        # patch stays random for now and inside the simulator for compatibility with current
-        # optimize script
-        self.patch = np.random.rand(10, 10, 1).astype(np.float32) * 255. # load one of the optimized FAPs instead!
+        self.score = 1.
+        self.current_idx = 1
+        t = np.linspace(0, 2 * np.pi, 20)
+        x = 0.5 * np.sin(2 * t)  # Horizontal figure 8
+        y = 1.5 * np.sin(t)  # Vertical figure 8
+        z = np.ones_like(t)  # Constant height at 1
+        yaw = np.zeros_like(t)  # Constant yaw
+        target_trajectory = np.column_stack((x, y, z, yaw))
+        self.target_trajectory = torch.tensor(target_trajectory, dtype=torch.float32, device=self.device)
+        
     
-    def load_yolo_model(self):
-        model = YOLOBox()
-        return model
+    def load_frontnet_model(self, device, model_path="frontnet/Frontnet160x32.pt", config="160x32"):
+        """
+        From FAP repo
+        Loads a saved Frontnet model from the given path with the set configuration and moves it to CPU/GPU.
+        Parameters
+            ----------
+            path
+                The path to the stored Frontnet model
+            device
+                A PyTorch device (either CPU or GPU)
+            config
+                The architecture configuration of the Frontnet model. Must be one of ['160x32', '160x16', '80x32']
+        """
+        assert config in FrontnetModel.configs.keys(), 'config must be one of {}'.format(list(FrontnetModel.configs.keys()))
         
+        # get correct architecture configuration
+        model_params = FrontnetModel.configs[config]
+        # initialize a random model with configuration
+        model = FrontnetModel(**model_params).to(device)
+        
+        # load the saved model 
+        try:
+            model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True)['model'])
+        except RuntimeError:
+            print("RuntimeError while trying to load the saved model!")
+            print("Seems like the model config does not match the saved model architecture.")
+            print("Please check if you're loading the right model for the chosen config!")
+
+        return model.eval()
+    
+    # only needed during testing
+    def load_dataset(self, path, batch_size = 32, shuffle = False, drop_last = True, num_workers = 1, train=True, train_set_size=0.9):
+        # From FAP repo
+        # load images and labels from the stored dataset
+        path = Path(path)
+        [images, labels] = DataProcessor.ProcessTestData(path)
+
+        # init RNG for loading the data always with the same key to
+        # ensure the same images end up in train and test set respectively
+        rng = np.random.default_rng(1749)
+
+        # split dataset into train and test set
+        indices = np.arange(len(images))
+        rng.shuffle(indices)
+        split_idx = int(len(images) * train_set_size)
+
+        train_set = Dataset(images[indices[:split_idx]], labels[indices[:split_idx]])
+        test_set = Dataset(images[indices[split_idx:]], labels[split_idx:])
+
+        # for quick and convinient access, create a torch DataLoader with the given parameters
+        data_params = {'batch_size': batch_size, 'shuffle': shuffle, 'drop_last':drop_last, 'num_workers': num_workers}
+        train_loader = DataLoader(train_set, **data_params)
+        test_loader = DataLoader(test_set, **data_params)
+
+        return train_loader, test_loader
+
+
     def _perspective_grid(self,
-    coeffs: [float], 
+    coeffs: list[float], 
     w: int, h: int, 
     ow: int, oh: int, 
     dtype: torch.dtype, 
@@ -104,91 +155,152 @@ class CFSim():
         output_grid = output_grid1.div_(output_grid2).sub_(center)
         return output_grid.view(batch_size, oh, ow, 2)
         
-    def project_patch(self, patch, T, image):
-        # using cv2 to project the patch instead of FAP place_patch() function,
-        # since we don't need to calculate gradients
-        width, height = image.shape[:2]
-        # print(height, width)
-        mask = np.ones_like(patch)
+    def project_patch(self, patch, T, img):
+        """ Project the patch on the camera image.
+        """
+        if not torch.is_tensor(patch):
+            patch = torch.tensor(patch, dtype=torch.float64, device=self.device)
+        # patches should be of shape [B, 1, H, W]
+        if len(patch.shape) < 3:
+            patch = patch.unsqueeze(0)
+        if len(patch.shape) == 3:
+            patch = patch.unsqueeze(1)
+        
+        
+        if not torch.is_tensor(img):
+            img = torch.tensor(img, device=self.device)
+        # img should be of shape [1, 1, H, W]
+        while len(img.shape) < 4:
+            img = img.unsqueeze(0)
 
-        warped_patch = cv2.warpPerspective(patch, T, (height, width), flags=cv2.INTER_NEAREST)
-        mask = cv2.warpPerspective(mask, T, (height, width), flags=cv2.INTER_NEAREST)
-
-        mod_img = image * ~mask.astype(bool)
-        mod_img += warped_patch
-
-        return mod_img # return a np array instead of jnp array and convert to double
-
-        # sanity check with torch perspective grid
-    def pt_project_patch(self, patch, T, base_img):
-        patch_t = torch.tensor(patch, dtype=torch.float64, device=self.device).unsqueeze(0).unsqueeze(0)
-        img = torch.tensor(base_img, device=self.device)
+        if not torch.is_tensor(T):
+            T = torch.tensor(T, dtype=torch.float32, device=self.device) # shape should be [3, 3]
 
         p_height, p_width = patch.shape[-2:]
         i_height, i_width = img.shape[-2:]
 
-        mask = torch.ones_like(patch_t, dtype=torch.float64, device=self.device)
+        mask = torch.ones_like(patch, dtype=torch.float32, device=self.device)
 
-        inv_t = np.linalg.inv(T)
-        coeffs = torch.tensor(np.array([inv_t.flatten()]), dtype=torch.float64, device=self.device)
+        try:
+            inv_t = torch.inverse(T)
+        except Exception as e:
+            print("Error inverting transformation matrix:", e)
+            print("Transformation matrix T:", T)
+
+        coeffs = inv_t.flatten().unsqueeze(0)
         
-        grid = self._perspective_grid(coeffs, w=p_width, h=p_height, dtype=torch.float64, ow=i_width, oh=i_height, device=self.device, center = [1., 1.])
+        grid = self._perspective_grid(coeffs, w=p_width, h=p_height, dtype=torch.float32, ow=i_width, oh=i_height, device=self.device, center = [1., 1.])
 
         bit_mask = torch.nn.functional.grid_sample(mask, grid, mode='bilinear', align_corners=False, padding_mode='zeros').bool()
-        transformed_patch = torch.nn.functional.grid_sample(patch_t, grid, mode='bilinear', align_corners=False, padding_mode='zeros')
+        transformed_patch = torch.nn.functional.grid_sample(patch, grid, mode='bilinear', align_corners=False, padding_mode='zeros')
 
         modified_image = img * ~bit_mask.bool()
         modified_image += transformed_patch
 
         return modified_image
     
-    def sim_new_pose(self, image: np.ndarray):
+    def sim_new_pose(self, image):
+        """ Perform one flight simulation step without updating the simulator state.
+        """
         # make sure images (plural if working with batches) are of correct shape
-        assert np.prod(image.shape) % (96 * 160) == 0 
-        image_t = torch.tensor(image).to(self.device)
-        if len(image_t.shape) < 3:
-            image_t = image_t.unsqueeze(0).unsqueeze(0)
-        if len(image_t.shape) == 3:
-            image_t = image_t.unsqueeze(1)
+        assert np.prod(image.shape) % (96 * 160) == 0
+
+        if len(image.shape) < 3:
+            image = image.unsqueeze(0).unsqueeze(0)
+        if len(image.shape) == 3:
+            image = image.unsqueeze(1)
         
-        # frontnet prediction
-        if self.model == 'frontnet':
-            x, y, z, yaw = self.pose_estimator(image_t)
-            # reshape output and turn into numpy array
-            predicted_pose = torch.hstack((x, y, z, yaw))
-        # yolov5 prediction
-        elif self.model == 'yolov5':
-            predicted_pose = self.pose_estimator(image_t)
+        x, y, z, yaw = self.pose_estimator(image)
+        # All values are in meters and radians and in the coordinate frame relative to the drone
+        # x is the distance in meters to the drone, higher x -> further away from the drone
+        # y is the distance in meters to the drone, y > 0 -> further to the right of the drone
+        # z is the height in meters above the drone, z > 0 -> higher above the drone
+        # Don't get confused with the y values!
 
-        predicted_pose = predicted_pose.detach().cpu().numpy()
-
-        # print("predicted pose", predicted_pose, predicted_pose.shape)
+        # reshape output
+        predicted_pose = torch.hstack((x, y, z, yaw)).squeeze(0)
         
         # calculate controller output
         new_setpoint = self._controller_setpoint(predicted_pose)
 
-        return new_setpoint, predicted_pose
+        # update drone pose after 1s
+        delta = new_setpoint[:3] - self.pose[:3]
+        distance = torch.linalg.norm(delta) + 1e-6  # add small value to avoid division by zero
+        unit_direction = delta / distance # normalize direction
 
-    def _controller_setpoint(self, predicted_poses):
-        setpoints = []
-        for predicted_pose in predicted_poses:
-            quats = rowan.from_euler(0., 0., self.pose[3], convention='xyz') # returns qw, qx, qy, qz
-            rotated_desired = rowan.rotate(quats, predicted_pose[:3])
-            target_pos = predicted_pose[:3] + rotated_desired
-
-            # predicted yaw angles are discarded since they are very faulty
-            global_pos = target_pos - self.pose[:3]
-            target_yaw = np.arctan2(global_pos[1], global_pos[0]) - np.pi
-
-            new_setpoint = target_pos + self._calc_heading_vec(1., target_yaw)
-            setpoints.append([*new_setpoint, target_yaw])
+        new_position = self.pose[:3] + unit_direction * self.velocity  # move 0.5 m in the direction of the delta
         
-        return np.array(setpoints)
+        delta_yaw = self._normalize_yaw(new_setpoint[3] - self.pose[3])
+        new_yaw = self.pose[3] + delta_yaw * self.omega  # turn 1 rad/s in the direction of the delta yaw
+
+        new_pose = torch.stack((new_position[0], new_position[1], new_position[2], new_yaw), dim=-1)
+        # print("New pose: ", new_pose, new_pose.shape)
+        return new_pose
+
+    def _get_T_matrix(self, pose):
+        T = torch.eye(4, dtype=torch.float32).to(self.device)
+        normalized_yaw = self._normalize_yaw(pose[3])
+
+        sin_yaw = torch.sin(normalized_yaw).to(torch.float32)
+        cos_yaw = torch.cos(normalized_yaw).to(torch.float32)
+        zero = torch.zeros_like(sin_yaw, device=self.device, dtype=torch.float32)
+
+        rotation_matrix_row1 = torch.stack([cos_yaw, -sin_yaw, zero], dim=-1)
+        rotation_matrix_row2 = torch.stack([sin_yaw, cos_yaw, zero], dim=-1)
+        rotation_matrix_row3 = torch.tensor([0., 0., 1.], device=self.device, dtype=torch.float32)
+        R = torch.stack((rotation_matrix_row1, rotation_matrix_row2, rotation_matrix_row3), dim=0)
+
+        T[:3, :3] = R
+        T[:3, 3] = pose[:3]
+        return T
+
+    def _controller_setpoint(self, predicted_pose):
+        T_pred_in_drone = self._get_T_matrix(predicted_pose)  # predicted pose in drone frame (== relative to the drone)
+
+        T_drone_in_world = self._get_T_matrix(self.pose)    # drone pose in world frame
+
+        # rotate predicted pose from drone into world frame
+        T_pred_in_world = T_drone_in_world @ T_pred_in_drone
+        
+        target_yaw = self._normalize_yaw(predicted_pose[3])
+        T_direction_world = torch.eye(4, dtype=torch.float32).to(self.device)
+        T_direction_world[:3, 3] = self._calc_heading_vec(1., self._normalize_yaw(target_yaw-torch.pi)).to(self.device)
+
+        T_setpoint_world = T_direction_world @ T_pred_in_world     # rotate the prediction, such that the drone stays 1 m away from it
+
+        return torch.stack([*T_setpoint_world[:3, 3], target_yaw], dim=-1)
+
+        # normalized_yaw = self._normalize_yaw(self.pose[-1])
+
+        # sin_yaw = torch.sin(normalized_yaw).to(torch.float32)
+        # cos_yaw = torch.cos(normalized_yaw).to(torch.float32)
+        # zero = torch.zeros_like(sin_yaw, device=self.device, dtype=torch.float32)
+        # rotation_matrix_row1 = torch.stack([cos_yaw, -sin_yaw, zero], dim=-1)
+        # rotation_matrix_row2 = torch.stack([sin_yaw, cos_yaw, zero], dim=-1)
+        # rotation_matrix_row3 = torch.tensor([0., 0., 1.], device=self.device, dtype=torch.float32)
+
+        # R = torch.stack((rotation_matrix_row1, rotation_matrix_row2, rotation_matrix_row3), dim=0)
+    
+        # target_pos = predicted_pose[:3] + R @ predicted_pose[:3]
+
+
+        # target_yaw = predicted_pose[-1] - np.pi
+        # target_yaw = self._normalize_yaw(target_yaw)
+
+
+        # new_setpoint = target_pos + self._calc_heading_vec(1., target_yaw) # keep a saftey distance of 1 m to predicted human
+
+        # return torch.stack((new_setpoint[0], new_setpoint[1], new_setpoint[2], target_yaw), dim=-1)
+
 
     def _calc_heading_vec(self, radius, angle):
-        x = radius * np.cos(angle)
-        y = radius * np.sin(angle)
-        return np.array([x, y, 0.0])
+        x = radius * torch.cos(angle)
+        y = radius * torch.sin(angle)
+        zero = torch.zeros_like(x, device=self.device, dtype=torch.float32)
+        return torch.stack((x, y, zero), dim=-1)
+
+    def _normalize_yaw(self, yaw):
+       return torch.atan2(torch.sin(yaw), torch.cos(yaw)) # normalize angle to [-pi, pi] range
 
     def _pred_to_numpy(self, prediction):
         x, y, z, yaw = prediction
@@ -200,151 +312,57 @@ class CFSim():
         return np.array([x, y, z, yaw])
 
     def update(self, pose):
+        self.score *= 1000
         self.pose = pose
-        self.current_idx += 1
+        self.all_poses.append(pose.detach().cpu().numpy())
+
+        self.score -= self.eval(pose) * 10.
+        self.score = max(self.score, 0.)  # ensure score is not negative
+        if self.current_idx <= len(self.target_trajectory):
+            self.current_idx += 1
+        self.score /= 1000
 
     def reset(self):
-        self.pose = np.array([0., 0., 0.])
-        self.current_idx = 0
+        self.pose = torch.FloatTensor([0., 0., 1., 0.], device=self.device)
+        self.current_idx = 1
 
-    def eval(self, pose, desired_pose):
-        l2_distances = np.linalg.norm((pose - desired_pose), ord=2)#, axis=1)
-        return l2_distances
+    def eval(self, pose):
+        l2_distance = torch.linalg.norm((pose[:3] - self.target_trajectory[self.current_idx, :3]), ord=2)
+        angular_loss = 1 - torch.cos(pose[3] - self.target_trajectory[self.current_idx, 3])
+        
+        error = l2_distance + angular_loss
+
+        return error
     
-class SimulatorThread(Thread):
-    def __init__(self, sim_new_pose, camera_images, point_from_xyz):
-        super().__init__()
-        self.simulator = sim_new_pose
-        self.drone_pose = deque(maxlen=1)
-        self.drone_pose.append(np.array([0., 0., 1., 0.])) # x, y, z, yaw
+    def render(self, im_name='drone_trajectory.png'):
+        # a bit rudimentary, but you get the idea
+        fig, ax = plt.subplots(1, 1, figsize=(10, 5))
 
-        self.all_poses = []
+        # Right subplot: Drone position in 2d
+        ax.set_title("Drone Position in 2D")
+        drone_positions = np.array(self.all_poses)
+        
+        ax.plot(drone_positions[:, 0], drone_positions[:, 1], label="Drone Trajectory")
+        ax.plot(self.target_trajectory[:, 0], self.target_trajectory[:, 1], label="Target Trajectory", color='green')
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        # ax2.set_zlabel("Z")
 
-        # self.camera_images = deque(maxlen=1)
-        self.camera_images = camera_images
-        self.current_image = None
-        self.point_from_xyz = point_from_xyz
+        # add current drone position as scatter with arrow for yaw
+        # print(self.pose)
+        pose = self.pose.detach().cpu().numpy()
+        ax.scatter(pose[0], pose[1], color='black')
+        ax.arrow(pose[0], pose[1],
+                    0.3 * np.cos(pose[3]), 0.3 * np.sin(pose[3]),
+                    head_width=0.1, head_length=0.1, fc='black', ec='black')
 
-        self._stay_alive = True
+        # set ax2 limits
+        ax.set_xlim([-2.5, 2.5])
+        ax.set_ylim([-1.5, 1.5])
+        # ax2.set_zlim([0, 2.5])
+        ax.legend()
 
-        self.dt = 0.1
-
-    def run(self):
-        i = 0
-        while self._stay_alive:
-            self.all_poses.append([time.time(), *self.drone_pose[0].tolist()])
-            if self.camera_images:
-                # self.current_image = self.camera_images.popleft()
-            
-            # if self.current_image is not None:
-                current_setpoint, prediction_relative = self.simulator(self.camera_images[0])
-                print(current_setpoint, current_setpoint.shape, prediction_relative, prediction_relative.shape)
-                homogeneous_coords = np.hstack((prediction_relative[0, :3], 1.))
-                point = self.point_from_xyz(homogeneous_coords)
-
-
-                print(self.camera_images[0].shape)
-
-
-                # print("current setpoint:", current_setpoint)
-
-            if self.drone_pose and not np.allclose(self.drone_pose[0], current_setpoint[0]):
-                current_pose = self.drone_pose[0] + ((current_setpoint[0] - self.drone_pose[0]) * 0.1)
-                # print("current pose after added setpoint: ", current_pose)
-                self.drone_pose.append(current_pose)
-
-
-            self.all_poses.append([time.time(), *self.drone_pose[0].tolist()])
-
-            if self.camera_images and self.drone_pose:
-                fig = plt.figure(figsize=(10, 5))
-
-                # Left subplot: Image with scattered point
-                ax1 = fig.add_subplot(1, 2, 1)
-                ax1.set_title(f"Frontnet Prediction: {prediction_relative[0, :3]}")
-                ax1.imshow(self.camera_images[0], cmap='gray')
-                ax1.scatter(point[0], point[1], color='red')
-
-                # Right subplot: Drone position in 3D
-                ax2 = fig.add_subplot(1, 2, 2, projection='3d')
-                ax2.set_title("Drone Position in 3D")
-                drone_positions = np.array(self.all_poses)[:, 1:4]  # Extract x, y, z positions
-                ax2.plot(drone_positions[:, 0], drone_positions[:, 1], drone_positions[:, 2], label="Drone Path")
-                ax2.scatter(current_setpoint[0][0], current_setpoint[0][1], current_setpoint[0][2], color='red', label="Current Setpoint")
-                ax2.set_xlabel("X")
-                ax2.set_ylabel("Y")
-                ax2.set_zlabel("Z")
-                # set ax2 limits
-                ax2.set_xlim([-0.5, 2.5])
-                ax2.set_ylim([-1.5, 1.5])
-                ax2.set_zlim([0, 2.5])
-                ax2.legend()
-
-                plt.tight_layout()
-                plt.savefig(f"results/simulation/patched_image_{i:04d}.png")
-                plt.close()
-                i += 1
-            time.sleep(1.)
-
-    def update(self, image):
-        self.camera_images.append(image)
-
-    def close(self):
-        self._stay_alive = False
-        # self.join()
-
-
-if __name__ == '__main__':
-
-    dataset_path = "pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"
-
-    model_type = 'frontnet'
-
-    cf_sim = CFSim(model_type, dataset_path)
-
-    patch = np.random.rand(3,3) * 255.
-    base_img = cf_sim.base_img[0]
-
-    print(patch.shape)
-    print(base_img.shape)
-
-    T = np.eye(3,3)   # basic transformation matrix
-    T[0, 0] = T[1, 1] = 10. # scale factor
-    # patch upper left corner at center of image
-    T[0, 2] = 80.
-    T[1, 2] = 48.
-
-    mod_img = cf_sim.project_patch(patch, T, base_img).to(cf_sim.device)
-    mod_img = mod_img.unsqueeze(0).unsqueeze(0).float()
-    print(mod_img.shape, mod_img.dtype)
-
-    # plot the modified image
-    from matplotlib import pyplot as plt
-    plt.imshow(mod_img.squeeze(0).squeeze(0).cpu().numpy(), cmap='gray')
-    plt.savefig("patched_image.png")
-
-
-    predicted_pose = cf_sim.sim_new_pose(mod_img)
-    print(predicted_pose)
-
-    # sanity check
-    # project pose back to point in image frame
-    # print(cf_sim.pose_estimator.cam.camera_extrinsic, cf_sim.pose_estimator.cam.camera_extrinsic.shape)
-    # homogeneous_coords = np.hstack((predicted_pose[0, :3], 1.))
-    # # print(homogeneous_coords, homogeneous_coords.shape)
-    # point = cf_sim.pose_estimator.cam.point_from_xyz(homogeneous_coords)
-    # print(point)
-
-    # # plot point in mod_img
-    # plt.imshow(mod_img.squeeze(0).squeeze(0).cpu().numpy(), cmap='gray')
-    # plt.scatter(point[0], point[1], color='red')
-    # plt.savefig("pred_pose.png")
-
-    # out_pytorch = torch.hstack(cf_sim.pose_estimator(mod_img.unsqueeze(0).unsqueeze(0)))
-    # print("Output frontnet: ", out_pytorch)
-    # new_pose = cf_sim.sim_new_pose(mod_img)
-    # print("Output controller: ", new_pose)
-
-    # from matplotlib import pyplot as plt
-    # plt.imshow(mod_img, cmap='gray')
-    # plt.show()
+        plt.tight_layout()
+        os.makedirs('results', exist_ok=True)
+        plt.savefig( f"results/{im_name}", dpi=300)
+        plt.close()
