@@ -204,10 +204,13 @@ print(len(dataset))
 img = dataset.dataset[0][0].to(device).unsqueeze(0) / 255.0
 print(img.shape)
 
+all_drone_poses = []
+
 
 T_drone_in_world = torch.eye(4, device=device, dtype=torch.float32)
 T_drone_in_world[:3, 3] = torch.tensor([0.0, 0.0, 1.0], device=device, dtype=torch.float32)  # Initial position
 
+all_drone_poses.append([*T_drone_in_world[:3, 3].clone().detach().cpu().numpy(), 0.0])
 
 t = np.linspace(0, 2 * np.pi, 20)
 x = 0.5 * np.sin(2 * t)  # Horizontal figure 8
@@ -377,6 +380,8 @@ for target_idx in trange(1, len(target_trajectory)):
         )
 
     T_drone_in_world = T_matrix(best_setpoint)
+    all_drone_poses.append(best_setpoint.numpy())
+    print(all_drone_poses)
 
     print("Current drone pose: ", best_setpoint)
     print("Target pose that was to be reached: ", target)
@@ -388,3 +393,14 @@ for target_idx in trange(1, len(target_trajectory)):
     plt.savefig('test_single/manipulated_image_{}.png'.format(target_idx))
     plt.close()
 
+all_drone_poses = np.array(all_drone_poses)
+print(all_drone_poses.shape)
+
+fig, ax = plt.subplots(1, 1)
+ax.plot(target_trajectory[:, 0].detach().numpy(), target_trajectory[:, 1].detach().numpy(), 'r--')
+ax.plot(all_drone_poses[:, 0], all_drone_poses[:, 1])
+ax.set_xlim(-2, 2)
+ax.set_ylim(-1.5, 1.5)
+plt.tight_layout()
+plt.savefig('test_single/trajectory.png')
+plt.close()
