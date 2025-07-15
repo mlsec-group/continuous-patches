@@ -220,6 +220,25 @@ yaw = np.zeros_like(t)  # Constant yaw
 target_trajectory = np.column_stack((x, y, z, yaw))
 target_trajectory = torch.tensor(target_trajectory, dtype=torch.float32, device=device)
 
+# projector_world = np.array([[2, 1, 2.2],   # ul
+#                             [2, -1.5, 2.2], #ur
+#                             [2, 1, 0.8], # ll
+#                             [2, -1.5, 0.8]]) #lr
+
+monitor_corners = np.array([[48., 20.],     # upper left corner (x, y, 1)
+                            [128., 20.],    # upper right corner
+                            [48., 66.],     # lower left corner
+                            [128., 66.]])   # lower right corner
+
+monitor_width = monitor_corners[1, 0] - monitor_corners[0, 0]
+monitor_height = monitor_corners[2, 1] - monitor_corners[0, 1]
+max_dim = min(monitor_width, monitor_height)
+
+scale_min = 0.2
+scale_max = max_dim / 80.
+
+tx_min, ty_min = monitor_corners[0]
+
 
 for target_idx in trange(1, len(target_trajectory)):
 
@@ -233,7 +252,10 @@ for target_idx in trange(1, len(target_trajectory)):
     # tx = torch.tensor(-1.0, device=device, dtype=torch.float32, requires_grad=True)  # translation x
     # ty = torch.tensor(-0.8, device=device, dtype=torch.float32, requires_grad=True)  # translation y
 
-    sf = torch.FloatTensor(1).uniform_(-1, 1).to(device).requires_grad_(True)  # scale factor
+    #sf = torch.FloatTensor(1).uniform_(-1, 1).to(device).requires_grad_(True)  # scale factor
+    sf = torch.FloatTensor(1).uniform_(scale_min, scale_max).to(device)
+    sf = inverse_norm(sf, scale_min, scale_max).to(device).requires_grad_(True)  # scale factor
+    
     tx = torch.FloatTensor(1).uniform_(-1, 1).to(device).requires_grad_(True)
     ty = torch.FloatTensor(1).uniform_(-1, 1).to(device).requires_grad_(True)
 
@@ -281,12 +303,16 @@ for target_idx in trange(1, len(target_trajectory)):
     while loss > 0.01 and i < 5000:
         opt.zero_grad()
 
+        with torch.no_grad():
+            sf_norm = single_norm(sf, scale_min, scale_max)
+            tx_max = (tx_min + monitor_width) - (sf_norm * 80.)
+            ty_max = (ty_min + monitor_height) - (sf_norm * 80.)  
 
         T = construct_T_matrix(
         sf=sf, tx=tx, ty=ty, 
-        scale_min=0.2, scale_max=0.8, 
-        tx_min=0., tx_max=160., 
-        ty_min=-0., ty_max=96.,
+        scale_min=scale_min, scale_max=scale_max, 
+        tx_min=tx_min, tx_max=tx_max, 
+        ty_min=ty_min, ty_max=ty_max,
         noise=False
         )
 
@@ -366,15 +392,21 @@ for target_idx in trange(1, len(target_trajectory)):
             best_setpoint = prediction[0].detach().clone()
 
 
+    sf_norm = single_norm(best_sf, scale_min, scale_max)
+    tx_max = (tx_min + monitor_width) - (sf_norm * 80.)
+    ty_max = (ty_min + monitor_height) - (sf_norm * 80.)
+
     np.save(f'test_single/patch_{target_idx}.npy', best_patch.detach().cpu().numpy())
     T = construct_T_matrix(
         sf=best_sf, tx=best_tx, ty=best_ty, 
-        scale_min=0.2, scale_max=0.6, 
-        tx_min=0., tx_max=160., 
-        ty_min=-0., ty_max=96.,
+        scale_min=scale_min, scale_max=scale_max, 
+        tx_min=tx_min, tx_max=tx_max, 
+        ty_min=ty_min, ty_max=ty_max,
         noise=False
     )
     np.save(f'test_single/T_{target_idx}.npy', T.detach().cpu().numpy())
+
+    print("T: ", T)
 
     with torch.no_grad():
         manipulated_image = project_patch(
@@ -394,6 +426,8 @@ for target_idx in trange(1, len(target_trajectory)):
     print("Iterations needed: ", i)
     import matplotlib.pyplot as plt
     plt.imshow(manipulated_image[0, 0].detach().cpu().numpy(), cmap='gray')
+    # plt.plot(monitor_corners[:, 0], monitor_corners[:, 1], 'r--', label='Monitor corners')
+    plt.scatter(monitor_corners[:, 0], monitor_corners[:, 1], c='r', label='Monitor corners')
     plt.savefig('test_single/manipulated_image_{}.png'.format(target_idx))
     plt.close()
 
