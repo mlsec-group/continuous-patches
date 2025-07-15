@@ -8,6 +8,10 @@ from tqdm import trange
 
 from util import load_model, load_dataset
 
+from camera import Camera
+
+import matplotlib.pyplot as plt
+
 def normalize_yaw_t(yaw):
     return torch.atan2(torch.sin(yaw), torch.cos(yaw))
 
@@ -204,6 +208,10 @@ print(len(dataset))
 img = dataset.dataset[0][0].to(device).unsqueeze(0) / 255.0
 print(img.shape)
 
+cam = Camera('camera_calibration.yaml')
+camera_intrinsic = torch.tensor(cam.camera_intrinsic, device=device, dtype=torch.float32)
+camera_extrinsic = torch.tensor(cam.camera_extrinsic, device=device, dtype=torch.float32)
+
 all_drone_poses = []
 
 
@@ -220,24 +228,20 @@ yaw = np.zeros_like(t)  # Constant yaw
 target_trajectory = np.column_stack((x, y, z, yaw))
 target_trajectory = torch.tensor(target_trajectory, dtype=torch.float32, device=device)
 
-# projector_world = np.array([[2, 1, 2.2],   # ul
-#                             [2, -1.5, 2.2], #ur
-#                             [2, 1, 0.8], # ll
-#                             [2, -1.5, 0.8]]) #lr
+projector_world = torch.tensor([[2, 1, 2.2],   # ul
+                            [2, -1.5, 2.2], #ur
+                            [2, 1, 0.8], # ll
+                            [2, -1.5, 0.8]], #lr
+                            dtype=torch.float32, device=device) 
 
-monitor_corners = np.array([[48., 20.],     # upper left corner (x, y, 1)
-                            [128., 20.],    # upper right corner
-                            [48., 66.],     # lower left corner
-                            [128., 66.]])   # lower right corner
+image_bb = torch.tensor([0.0, 0.0, 160., 96.], dtype=torch.float32, device=device)
 
-monitor_width = monitor_corners[1, 0] - monitor_corners[0, 0]
-monitor_height = monitor_corners[2, 1] - monitor_corners[0, 1]
-max_dim = min(monitor_width, monitor_height)
 
-scale_min = 0.2
-scale_max = max_dim / 80.
+# monitor_corners = np.array([[48., 20.],     # upper left corner (x, y, 1)
+#                             [128., 20.],    # upper right corner
+#                             [48., 66.],     # lower left corner
+#                             [128., 66.]])   # lower right corner
 
-tx_min, ty_min = monitor_corners[0]
 
 
 for target_idx in trange(1, len(target_trajectory)):
@@ -248,11 +252,50 @@ for target_idx in trange(1, len(target_trajectory)):
 
     patch = torch.rand((1, 1, 80, 80), device=device, dtype=torch.float32, requires_grad=True)  # random patch
 
-    # sf = torch.tensor(1.0, device=device, dtype=torch.float32)  # scale factor
-    # tx = torch.tensor(-1.0, device=device, dtype=torch.float32, requires_grad=True)  # translation x
-    # ty = torch.tensor(-0.8, device=device, dtype=torch.float32, requires_grad=True)  # translation y
+    
+    # calculate monitor space
+    one = torch.tensor(1.0, device=device, dtype=torch.float32)
+    projector_in_drone = torch.stack([torch.inverse(T_drone_in_world) @ torch.stack([*projector_coords, one], dim=-1) for projector_coords in projector_world])
+    projector_camera = torch.stack([(camera_extrinsic @ patch_coords)[:3] for patch_coords in projector_in_drone])
+    projector_image = torch.stack([(camera_intrinsic @ patch_coords) for patch_coords in projector_camera])  
 
-    #sf = torch.FloatTensor(1).uniform_(-1, 1).to(device).requires_grad_(True)  # scale factor
+    projector_image_ul, projector_image_ur, projector_image_ll, projector_image_lr = projector_image
+    projector_image_ul = torch.stack([projector_image_ul[0] / projector_image_ul[2], projector_image_ul[1] / projector_image_ul[2]])
+    projector_image_ur = torch.stack([projector_image_ur[0] / projector_image_ur[2], projector_image_ur[1] / projector_image_ur[2]])
+    projector_image_ll = torch.stack([projector_image_ll[0] / projector_image_ll[2], projector_image_ll[1] / projector_image_ll[2]])
+    projector_image_lr = torch.stack([projector_image_lr[0] / projector_image_lr[2], projector_image_lr[1] / projector_image_lr[2]])
+    
+
+    intersection_ul = (max(projector_image_ul[0], image_bb[0]), 
+                           max(projector_image_ul[1], image_bb[1]))
+        
+    intersection_ur = (min(projector_image_ur[0], image_bb[2]),
+                        max(projector_image_ur[1], image_bb[1]))
+    
+    intersection_ll = (max(projector_image_ll[0], image_bb[0]),
+                        min(projector_image_ll[1], image_bb[3]))
+    
+    intersection_lr = (min(projector_image_lr[0], image_bb[2]),
+                        min(projector_image_lr[1], image_bb[3]))
+
+    monitor_corners = torch.tensor([intersection_ul, intersection_ur, intersection_ll, intersection_lr], device=device, dtype=torch.float32)
+    monitor_width_up = monitor_corners[1, 0] - monitor_corners[0, 0]
+    monitor_width_down = monitor_corners[3, 0] - monitor_corners[2, 0]
+    monitor_width = min(monitor_width_up, monitor_width_down)
+
+
+    monitor_height_left = monitor_corners[2, 1] - monitor_corners[0, 1]
+    monitor_height_right = monitor_corners[3, 1] - monitor_corners[1, 1]
+    monitor_height = min(monitor_height_left, monitor_height_right)
+
+    tx_min = max(monitor_corners[0, 0], monitor_corners[2, 0])
+    ty_min = max(monitor_corners[0, 1], monitor_corners[1, 1])
+
+    max_dim = min(monitor_width, monitor_height)
+    scale_max = max_dim / 80
+    scale_min = 0.2
+ 
+
     sf = torch.FloatTensor(1).uniform_(scale_min, scale_max).to(device)
     sf = inverse_norm(sf, scale_min, scale_max).to(device).requires_grad_(True)  # scale factor
     
@@ -427,7 +470,7 @@ for target_idx in trange(1, len(target_trajectory)):
     import matplotlib.pyplot as plt
     plt.imshow(manipulated_image[0, 0].detach().cpu().numpy(), cmap='gray')
     # plt.plot(monitor_corners[:, 0], monitor_corners[:, 1], 'r--', label='Monitor corners')
-    plt.scatter(monitor_corners[:, 0], monitor_corners[:, 1], c='r', label='Monitor corners')
+    plt.scatter(monitor_corners[:, 0].detach().cpu().numpy(), monitor_corners[:, 1].detach().cpu().numpy(), c='r', label='Monitor corners')
     plt.savefig('test_single/manipulated_image_{}.png'.format(target_idx))
     plt.close()
 
@@ -443,6 +486,9 @@ plt.savefig('test_single/trajectory.png')
 plt.close()
 
 
-# euclidean distance between all_drone_poses and target_trajectory
-distances = np.linalg.norm(all_drone_poses[:, :3] - target_trajectory[:, :3].detach().numpy(), axis=1)
-print("Euclidean distances between drone poses and target trajectory:", distances)
+# # euclidean distance between all_drone_poses and target_trajectory
+distance = np.linalg.norm(all_drone_poses[:, :3] - target_trajectory[:, :3].detach().numpy())
+print("Euclidean distances between drone poses and target trajectory:", distance)
+
+
+
