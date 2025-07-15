@@ -191,6 +191,23 @@ def T_matrix(pose):
     return T
 
 
+def calc_monitor_corners(drone_pose, projector_world, camera_extrinsic, camera_intrinsic):
+    """Calculate the corners of the monitor in the image space."""
+    one = torch.tensor(1.0, device=drone_pose.device, dtype=torch.float32)
+    projector_in_drone = torch.stack([torch.inverse(drone_pose) @ torch.stack([*projector_coords, one], dim=-1) for projector_coords in projector_world])
+    projector_camera = torch.stack([(camera_extrinsic @ patch_coords)[:3] for patch_coords in projector_in_drone])
+    projector_image = torch.stack([(camera_intrinsic @ patch_coords) for patch_coords in projector_camera])  
+
+    projector_image_ul, projector_image_ur, projector_image_ll, projector_image_lr = projector_image
+    projector_image_ul = torch.stack([projector_image_ul[0] / projector_image_ul[2], projector_image_ul[1] / projector_image_ul[2]])
+    projector_image_ur = torch.stack([projector_image_ur[0] / projector_image_ur[2], projector_image_ur[1] / projector_image_ur[2]])
+    projector_image_ll = torch.stack([projector_image_ll[0] / projector_image_ll[2], projector_image_ll[1] / projector_image_ll[2]])
+    projector_image_lr = torch.stack([projector_image_lr[0] / projector_image_lr[2], projector_image_lr[1] / projector_image_lr[2]])
+    
+    return torch.stack([projector_image_ul, projector_image_ur, 
+                        projector_image_ll, projector_image_lr], dim=0)
+
+
 
 os.makedirs('test_single/', exist_ok=True)
 
@@ -253,32 +270,9 @@ for target_idx in trange(1, len(target_trajectory)):
     patch = torch.rand((1, 1, 80, 80), device=device, dtype=torch.float32, requires_grad=True)  # random patch
 
     
-    # calculate monitor space
-    one = torch.tensor(1.0, device=device, dtype=torch.float32)
-    projector_in_drone = torch.stack([torch.inverse(T_drone_in_world) @ torch.stack([*projector_coords, one], dim=-1) for projector_coords in projector_world])
-    projector_camera = torch.stack([(camera_extrinsic @ patch_coords)[:3] for patch_coords in projector_in_drone])
-    projector_image = torch.stack([(camera_intrinsic @ patch_coords) for patch_coords in projector_camera])  
 
-    projector_image_ul, projector_image_ur, projector_image_ll, projector_image_lr = projector_image
-    projector_image_ul = torch.stack([projector_image_ul[0] / projector_image_ul[2], projector_image_ul[1] / projector_image_ul[2]])
-    projector_image_ur = torch.stack([projector_image_ur[0] / projector_image_ur[2], projector_image_ur[1] / projector_image_ur[2]])
-    projector_image_ll = torch.stack([projector_image_ll[0] / projector_image_ll[2], projector_image_ll[1] / projector_image_ll[2]])
-    projector_image_lr = torch.stack([projector_image_lr[0] / projector_image_lr[2], projector_image_lr[1] / projector_image_lr[2]])
-    
+    monitor_corners = calc_monitor_corners(T_drone_in_world, projector_world, camera_extrinsic, camera_intrinsic)
 
-    intersection_ul = (max(projector_image_ul[0], image_bb[0]), 
-                           max(projector_image_ul[1], image_bb[1]))
-        
-    intersection_ur = (min(projector_image_ur[0], image_bb[2]),
-                        max(projector_image_ur[1], image_bb[1]))
-    
-    intersection_ll = (max(projector_image_ll[0], image_bb[0]),
-                        min(projector_image_ll[1], image_bb[3]))
-    
-    intersection_lr = (min(projector_image_lr[0], image_bb[2]),
-                        min(projector_image_lr[1], image_bb[3]))
-
-    monitor_corners = torch.tensor([intersection_ul, intersection_ur, intersection_ll, intersection_lr], device=device, dtype=torch.float32)
     monitor_width_up = monitor_corners[1, 0] - monitor_corners[0, 0]
     monitor_width_down = monitor_corners[3, 0] - monitor_corners[2, 0]
     monitor_width = min(monitor_width_up, monitor_width_down)
@@ -467,23 +461,38 @@ for target_idx in trange(1, len(target_trajectory)):
     
 
     print("Iterations needed: ", i)
-    import matplotlib.pyplot as plt
-    plt.imshow(manipulated_image[0, 0].detach().cpu().numpy(), cmap='gray')
+    fig, axs = plt.subplots(1, 2)
+    axs[0].imshow(manipulated_image[0, 0].detach().cpu().numpy(), cmap='gray')
     # plt.plot(monitor_corners[:, 0], monitor_corners[:, 1], 'r--', label='Monitor corners')
-    plt.scatter(monitor_corners[:, 0].detach().cpu().numpy(), monitor_corners[:, 1].detach().cpu().numpy(), c='r', label='Monitor corners')
-    plt.savefig('test_single/manipulated_image_{}.png'.format(target_idx))
+    axs[0].scatter(monitor_corners[:, 0].detach().cpu().numpy(), monitor_corners[:, 1].detach().cpu().numpy(), c='r', label='Monitor corners')
+    
+    axs[1].plot(target_trajectory[:, 0].detach().numpy(), target_trajectory[:, 1].detach().numpy(), 'r--')
+    axs[1].plot(np.array(all_drone_poses)[:, 0], np.array(all_drone_poses)[:, 1])
+    axs[1].scatter(projector_world[:, 0].detach().cpu().numpy(), projector_world[:, 1].detach().cpu().numpy(), c='b', label='Projector corners')
+    axs[1].scatter(best_setpoint.numpy()[0], best_setpoint.numpy()[1], color='black')
+    axs[1].arrow(best_setpoint.numpy()[0], best_setpoint.numpy()[1],
+                    0.3 * np.cos(best_setpoint.numpy()[3]), 0.3 * np.sin(best_setpoint.numpy()[3]),
+                    head_width=0.1, head_length=0.1, fc='black', ec='black')
+    
+    
+    axs[1].set_xlim(-2, 2)
+    axs[1].set_ylim(-1.5, 1.5)
+    plt.tight_layout()
+
+    plt.savefig('test_single/optim_step{}.png'.format(target_idx))
     plt.close()
 
 all_drone_poses = np.array(all_drone_poses)
+np.save('test_single/all_drone_poses.npy', all_drone_poses)
 
-fig, ax = plt.subplots(1, 1)
-ax.plot(target_trajectory[:, 0].detach().numpy(), target_trajectory[:, 1].detach().numpy(), 'r--')
-ax.plot(all_drone_poses[:, 0], all_drone_poses[:, 1])
-ax.set_xlim(-2, 2)
-ax.set_ylim(-1.5, 1.5)
-plt.tight_layout()
-plt.savefig('test_single/trajectory.png')
-plt.close()
+# fig, ax = plt.subplots(1, 1)
+# ax.plot(target_trajectory[:, 0].detach().numpy(), target_trajectory[:, 1].detach().numpy(), 'r--')
+# ax.plot(all_drone_poses[:, 0], all_drone_poses[:, 1])
+# ax.set_xlim(-2, 2)
+# ax.set_ylim(-1.5, 1.5)
+# plt.tight_layout()
+# plt.savefig('test_single/trajectory.png')
+# plt.close()
 
 
 # # euclidean distance between all_drone_poses and target_trajectory
