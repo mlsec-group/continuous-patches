@@ -229,12 +229,16 @@ for target_idx in trange(1, len(target_trajectory)):
 
     patch = torch.rand((1, 1, 80, 80), device=device, dtype=torch.float32, requires_grad=True)  # random patch
 
-    sf = torch.tensor(1.0, device=device, dtype=torch.float32)  # scale factor
-    tx = torch.tensor(-1.0, device=device, dtype=torch.float32, requires_grad=True)  # translation x
-    ty = torch.tensor(-0.8, device=device, dtype=torch.float32, requires_grad=True)  # translation y
+    # sf = torch.tensor(1.0, device=device, dtype=torch.float32)  # scale factor
+    # tx = torch.tensor(-1.0, device=device, dtype=torch.float32, requires_grad=True)  # translation x
+    # ty = torch.tensor(-0.8, device=device, dtype=torch.float32, requires_grad=True)  # translation y
+
+    sf = torch.FloatTensor(1).uniform_(-1, 1).to(device).requires_grad_(True)  # scale factor
+    tx = torch.FloatTensor(1).uniform_(-1, 1).to(device).requires_grad_(True)
+    ty = torch.FloatTensor(1).uniform_(-1, 1).to(device).requires_grad_(True)
 
 
-    opt = torch.optim.Adam([{'params': [tx, ty], 'lr': 0.03},
+    opt = torch.optim.Adam([{'params': [sf, tx, ty], 'lr': 0.03},
                        {'params': [patch], 'lr': 1e-2}], lr=1e-3)
 
 
@@ -280,7 +284,7 @@ for target_idx in trange(1, len(target_trajectory)):
 
         T = construct_T_matrix(
         sf=sf, tx=tx, ty=ty, 
-        scale_min=0.2, scale_max=0.6, 
+        scale_min=0.2, scale_max=0.8, 
         tx_min=0., tx_max=160., 
         ty_min=-0., ty_max=96.,
         noise=False
@@ -381,7 +385,7 @@ for target_idx in trange(1, len(target_trajectory)):
 
     T_drone_in_world = T_matrix(best_setpoint)
     all_drone_poses.append(best_setpoint.numpy())
-    print(all_drone_poses)
+    # print(all_drone_poses)
 
     print("Current drone pose: ", best_setpoint)
     print("Target pose that was to be reached: ", target)
@@ -394,7 +398,6 @@ for target_idx in trange(1, len(target_trajectory)):
     plt.close()
 
 all_drone_poses = np.array(all_drone_poses)
-print(all_drone_poses.shape)
 
 fig, ax = plt.subplots(1, 1)
 ax.plot(target_trajectory[:, 0].detach().numpy(), target_trajectory[:, 1].detach().numpy(), 'r--')
@@ -404,3 +407,8 @@ ax.set_ylim(-1.5, 1.5)
 plt.tight_layout()
 plt.savefig('test_single/trajectory.png')
 plt.close()
+
+
+# euclidean distance between all_drone_poses and target_trajectory
+distances = np.linalg.norm(all_drone_poses[:, :3] - target_trajectory[:, :3].detach().numpy(), axis=1)
+print("Euclidean distances between drone poses and target trajectory:", distances)
