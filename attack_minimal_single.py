@@ -9,7 +9,7 @@ from tqdm import trange
 from util import load_model, load_dataset
 
 from camera import Camera
-
+from pathlib import Path
 import matplotlib.pyplot as plt
 
 def normalize_yaw_t(yaw):
@@ -209,295 +209,319 @@ def calc_monitor_corners(drone_pose, projector_world, camera_extrinsic, camera_i
 
 
 
-os.makedirs('test_single/', exist_ok=True)
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-o', '--output_dir', type=str, default='results/single', help='Output directory for the results')
+    parser.add_argument('--display_size', type=int, default=60, help='Size of the display in pixels (default: 60")')
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    args = parser.parse_args()
 
-model = load_model("pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", device, config="160x32")
-model.eval()
+    output_dir = Path(args.output_dir)
 
+    os.makedirs(output_dir, exist_ok=True)
 
-dataset = load_dataset("pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle", batch_size = 32, shuffle = False, drop_last = True, num_workers = 1, train=True, train_set_size=0.9, IMRC=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-print(len(dataset))
-
-# img = torch.ones((1, 1, 96, 160), device=device, dtype=torch.float32) * 0.5  # gray image
-img = dataset.dataset[0][0].to(device).unsqueeze(0) / 255.0
-print(img.shape)
-
-cam = Camera('camera_calibration.yaml')
-camera_intrinsic = torch.tensor(cam.camera_intrinsic, device=device, dtype=torch.float32)
-camera_extrinsic = torch.tensor(cam.camera_extrinsic, device=device, dtype=torch.float32)
-
-all_drone_poses = []
+    model = load_model("pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", device, config="160x32")
+    model.eval()
 
 
-T_drone_in_world = torch.eye(4, device=device, dtype=torch.float32)
-T_drone_in_world[:3, 3] = torch.tensor([0.0, 0.0, 1.0], device=device, dtype=torch.float32)  # Initial position
+    dataset = load_dataset("pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle", batch_size = 32, shuffle = False, drop_last = True, num_workers = 1, train=True, train_set_size=0.9, IMRC=True)
 
-all_drone_poses.append([*T_drone_in_world[:3, 3].clone().detach().cpu().numpy(), 0.0])
+    print(len(dataset))
 
-t = np.linspace(0, 2 * np.pi, 20)
-x = 0.5 * np.sin(2 * t)  # Horizontal figure 8
-y = 1.5 * np.sin(t)  # Vertical figure 8
-z = np.ones_like(t)  # Constant height at 1
-yaw = np.zeros_like(t)  # Constant yaw
-target_trajectory = np.column_stack((x, y, z, yaw))
-target_trajectory = torch.tensor(target_trajectory, dtype=torch.float32, device=device)
-
-projector_world = torch.tensor([[2, 1, 2.2],   # ul
-                            [2, -1.5, 2.2], #ur
-                            [2, 1, 0.8], # ll
-                            [2, -1.5, 0.8]], #lr
-                            dtype=torch.float32, device=device) 
-
-image_bb = torch.tensor([0.0, 0.0, 160., 96.], dtype=torch.float32, device=device)
-
-
-# monitor_corners = np.array([[48., 20.],     # upper left corner (x, y, 1)
-#                             [128., 20.],    # upper right corner
-#                             [48., 66.],     # lower left corner
-#                             [128., 66.]])   # lower right corner
-
-
-
-for target_idx in trange(1, len(target_trajectory)):
-
+    # img = torch.ones((1, 1, 96, 160), device=device, dtype=torch.float32) * 0.5  # gray image
     img = dataset.dataset[0][0].to(device).unsqueeze(0) / 255.0
+    print(img.shape)
 
-    target = target_trajectory[target_idx]
+    cam = Camera('camera_calibration.yaml')
+    camera_intrinsic = torch.tensor(cam.camera_intrinsic, device=device, dtype=torch.float32)
+    camera_extrinsic = torch.tensor(cam.camera_extrinsic, device=device, dtype=torch.float32)
 
-    patch = torch.rand((1, 1, 80, 80), device=device, dtype=torch.float32, requires_grad=True)  # random patch
-
-    
-
-    monitor_corners = calc_monitor_corners(T_drone_in_world, projector_world, camera_extrinsic, camera_intrinsic)
-
-    monitor_width_up = monitor_corners[1, 0] - monitor_corners[0, 0]
-    monitor_width_down = monitor_corners[3, 0] - monitor_corners[2, 0]
-    monitor_width = min(monitor_width_up, monitor_width_down)
+    all_drone_poses = []
 
 
-    monitor_height_left = monitor_corners[2, 1] - monitor_corners[0, 1]
-    monitor_height_right = monitor_corners[3, 1] - monitor_corners[1, 1]
-    monitor_height = min(monitor_height_left, monitor_height_right)
+    T_drone_in_world = torch.eye(4, device=device, dtype=torch.float32)
+    T_drone_in_world[:3, 3] = torch.tensor([0.0, 0.0, 1.0], device=device, dtype=torch.float32)  # Initial position
 
-    tx_min = max(monitor_corners[0, 0], monitor_corners[2, 0])
-    ty_min = max(monitor_corners[0, 1], monitor_corners[1, 1])
+    all_drone_poses.append([*T_drone_in_world[:3, 3].clone().detach().cpu().numpy(), 0.0])
 
-    max_dim = min(monitor_width, monitor_height)
-    scale_max = max_dim / 80
-    scale_min = 0.2
- 
+    t = np.linspace(0, 2 * np.pi, 20)
+    x = 0.5 * np.sin(2 * t)  # Horizontal figure 8
+    y = 1.5 * np.sin(t)  # Vertical figure 8
+    z = np.ones_like(t)  # Constant height at 1
+    yaw = np.zeros_like(t)  # Constant yaw
+    target_trajectory = np.column_stack((x, y, z, yaw))
+    target_trajectory = torch.tensor(target_trajectory, dtype=torch.float32, device=device)
 
-    sf = torch.FloatTensor(1).uniform_(scale_min, scale_max).to(device)
-    sf = inverse_norm(sf, scale_min, scale_max).to(device).requires_grad_(True)  # scale factor
-    
-    tx = torch.FloatTensor(1).uniform_(-1, 1).to(device).requires_grad_(True)
-    ty = torch.FloatTensor(1).uniform_(-1, 1).to(device).requires_grad_(True)
+    # projector_world = torch.tensor([[2, 1, 2.2],   # ul
+    #                             [2, -1.5, 2.2], #ur
+    #                             [2, 1, 0.8], # ll
+    #                             [2, -1.5, 0.8]], #lr
+    #                             dtype=torch.float32, device=device) 
 
+    projector_center = torch.tensor([2., 0.0, 1.], dtype=torch.float32, device=device)  # Center of the projector (x,y,z)
+    projector_size = 60 * 0.0254 # 60" in m, projector diagonal
 
-    opt = torch.optim.Adam([{'params': [sf, tx, ty], 'lr': 0.03},
-                       {'params': [patch], 'lr': 1e-2}], lr=1e-3)
+    projector_world = torch.tensor([[projector_center[0], projector_center[1] + projector_size / 2, projector_center[2] + projector_size / 2], # upper left corner
+                                    [projector_center[0], projector_center[1] - projector_size / 2, projector_center[2] + projector_size / 2], # upper right corner
+                                    [projector_center[0], projector_center[1] + projector_size / 2, projector_center[2] - projector_size / 2], # lower left corner
+                                    [projector_center[0], projector_center[1] - projector_size / 2, projector_center[2] - projector_size / 2]], # lower right corner
+                                    dtype=torch.float32, device=device)  # Projector corners in world coordinates
 
-
-    # # calculate target
-    # T_setpoint_world = torch.eye(4, device=device, dtype=torch.float32)
-    # T_setpoint_world[:3, 3] = target_trajectory[1, :3]
-    # print("Setpoint world transformation matrix:")
-    # print(T_setpoint_world)
-
-    # T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
-    # T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_trajectory[1, 3]-np.pi)).to(device)
-    # print("Direction in world: ")
-    # print(T_direction_world)
-
-
-    # T_pred_in_world = torch.inverse(T_direction_world) @ T_setpoint_world
-    # print("Predicted transformation matrix in world frame:")
-    # print(T_pred_in_world)
-
-    
-
-    # T_pred_in_drone = torch.inverse(T_drone_in_world) @ T_pred_in_world
-    # print("Predicted transformation matrix in drone frame:")
-    # print(T_pred_in_drone)
-    # # print(T)
-
-    # target = torch.stack([*T_pred_in_drone[:3, 3], target_trajectory[0, 3]]).to(device) # target values
-    # print("Target values:", target)
-
-    loss = torch.inf
-    i = 0
-
-    best_loss = torch.inf
-    best_patch = patch.clone()
-    best_sf = sf.clone()
-    best_tx = tx.clone()
-    best_ty = ty.clone()
-    best_setpoint = None
-
-    while loss > 0.01 and i < 5000:
-        opt.zero_grad()
-
-        with torch.no_grad():
-            sf_norm = single_norm(sf, scale_min, scale_max)
-            tx_max = (tx_min + monitor_width) - (sf_norm * 80.)
-            ty_max = (ty_min + monitor_height) - (sf_norm * 80.)  
-
-        T = construct_T_matrix(
-        sf=sf, tx=tx, ty=ty, 
-        scale_min=scale_min, scale_max=scale_max, 
-        tx_min=tx_min, tx_max=tx_max, 
-        ty_min=ty_min, ty_max=ty_max,
-        noise=False
-        )
-
-        manipulated_image = project_patch(
-            patches=patch, 
-            T_matrices=T.unsqueeze(0),  # add batch dimension
-            images=img
-        )
+    print("Projector corners in world coordinates:")
+    print(projector_world)                    
 
 
 
-        # print("Manipulated image shape:", manipulated_image.shape)
+    image_bb = torch.tensor([0.0, 0.0, 160., 96.], dtype=torch.float32, device=device)
+
+
+    # monitor_corners = np.array([[48., 20.],     # upper left corner (x, y, 1)
+    #                             [128., 20.],    # upper right corner
+    #                             [48., 66.],     # lower left corner
+    #                             [128., 66.]])   # lower right corner
 
 
 
-        # print(manipulated_image.min(), manipulated_image.max())
+    for target_idx in trange(1, len(target_trajectory)):
 
+        img = dataset.dataset[0][0].to(device).unsqueeze(0) / 255.0
 
-        x, y, z, yaw = model(manipulated_image*255.)
-        # print("x, y, z, yaw:", x, y, z, yaw)
-        prediction = torch.stack([x, y, z, yaw])
-        prediction = prediction.squeeze(2).mT
+        target = target_trajectory[target_idx]
 
-        T_pred_in_drone = T_matrix(prediction[0])
-        T_pred_in_world = T_drone_in_world @ T_pred_in_drone
-        # print("T_pred_in_world within loop:")
-        # print(T_pred_in_world)
+        patch = torch.rand((1, 1, 80, 80), device=device, dtype=torch.float32, requires_grad=True)  # random patch
 
-        target_yaw = normalize_yaw_t(prediction[0, 3])
-        T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
-        T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
-        # print("Direction in world within loop:")
-        # print(T_direction_world)
-
-        T_setpoint_world = T_direction_world @ T_pred_in_world
-        # print("Setpoint world transformation matrix within loop:")
-        # print(T_setpoint_world)
-        # target = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device)
         
 
-        prediction = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device).unsqueeze(0)  # prediction values
+        monitor_corners = calc_monitor_corners(T_drone_in_world, projector_world, camera_extrinsic, camera_intrinsic)
+
+        monitor_width_up = monitor_corners[1, 0] - monitor_corners[0, 0]
+        monitor_width_down = monitor_corners[3, 0] - monitor_corners[2, 0]
+        monitor_width = min(monitor_width_up, monitor_width_down)
+
+
+        monitor_height_left = monitor_corners[2, 1] - monitor_corners[0, 1]
+        monitor_height_right = monitor_corners[3, 1] - monitor_corners[1, 1]
+        monitor_height = min(monitor_height_left, monitor_height_right)
+
+        tx_min = max(monitor_corners[0, 0], monitor_corners[2, 0])
+        ty_min = max(monitor_corners[0, 1], monitor_corners[1, 1])
+
+        max_dim = min(monitor_width, monitor_height)
+        scale_max = max_dim / 80
+        scale_min = 0.2
+    
+
+        sf = torch.FloatTensor(1).uniform_(scale_min, scale_max).to(device)
+        sf = inverse_norm(sf, scale_min, scale_max).to(device).requires_grad_(True)  # scale factor
+        
+        tx = torch.FloatTensor(1).uniform_(-1, 1).to(device).requires_grad_(True)
+        ty = torch.FloatTensor(1).uniform_(-1, 1).to(device).requires_grad_(True)
+
+
+        opt = torch.optim.Adam([{'params': [sf, tx, ty], 'lr': 0.03},
+                        {'params': [patch], 'lr': 1e-2}], lr=1e-3)
+
+
+        # # calculate target
+        # T_setpoint_world = torch.eye(4, device=device, dtype=torch.float32)
+        # T_setpoint_world[:3, 3] = target_trajectory[1, :3]
+        # print("Setpoint world transformation matrix:")
+        # print(T_setpoint_world)
+
+        # T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
+        # T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_trajectory[1, 3]-np.pi)).to(device)
+        # print("Direction in world: ")
+        # print(T_direction_world)
+
+
+        # T_pred_in_world = torch.inverse(T_direction_world) @ T_setpoint_world
+        # print("Predicted transformation matrix in world frame:")
+        # print(T_pred_in_world)
+
+        
+
+        # T_pred_in_drone = torch.inverse(T_drone_in_world) @ T_pred_in_world
+        # print("Predicted transformation matrix in drone frame:")
+        # print(T_pred_in_drone)
+        # # print(T)
+
+        # target = torch.stack([*T_pred_in_drone[:3, 3], target_trajectory[0, 3]]).to(device) # target values
+        # print("Target values:", target)
+
+        loss = torch.inf
+        i = 0
+
+        best_loss = torch.inf
+        best_patch = patch.clone()
+        best_sf = sf.clone()
+        best_tx = tx.clone()
+        best_ty = ty.clone()
+        best_setpoint = None
+
+        while loss > 0.01 and i < 5000:
+            opt.zero_grad()
+
+            with torch.no_grad():
+                sf_norm = single_norm(sf, scale_min, scale_max)
+                tx_max = (tx_min + monitor_width) - (sf_norm * 80.)
+                ty_max = (ty_min + monitor_height) - (sf_norm * 80.)  
+
+            T = construct_T_matrix(
+            sf=sf, tx=tx, ty=ty, 
+            scale_min=scale_min, scale_max=scale_max, 
+            tx_min=tx_min, tx_max=tx_max, 
+            ty_min=ty_min, ty_max=ty_max,
+            noise=False
+            )
+
+            manipulated_image = project_patch(
+                patches=patch, 
+                T_matrices=T.unsqueeze(0),  # add batch dimension
+                images=img
+            )
 
 
 
-        # print("Prediction: ", prediction)
-
-        # target = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device, dtype=torch.float32)  # target values
-
-        distance = torch.norm(prediction[0, :3] - target[:3], p=2)
-        angular_loss = 1 - torch.cos(normalize_yaw_t(prediction[0, 3]) - normalize_yaw_t(target[3]))
-
-        loss = distance + angular_loss
-
-        # if i % 25 == 0:
-        #     # print(f"Iteration {i}:")
-        #     # print("Scale factor: ", sf.item())
-        #     # print("Translation x: ", tx.item())
-        #     # print("Translation y: ", ty.item())
-
-        #     print("Prediction: ", prediction.detach().cpu().numpy())
-        #     print("Loss: ", loss.detach().cpu().item())
-            # print('tx, ty:', tx.item(), ty.item())
-        # print("Loss: ", loss.detach().cpu().item())
-
-        loss.backward()
-        opt.step()
-
-        patch.data.clamp_(0., 1.)
-        i += 1
-
-        if loss < best_loss:
-            best_loss = loss.detach().detach().clone()
-            best_patch = patch.detach().clone()
-            best_sf = sf.detach().clone()
-            best_tx = tx.detach().clone()
-            best_ty = ty.detach().clone()
-            best_setpoint = prediction[0].detach().clone()
+            # print("Manipulated image shape:", manipulated_image.shape)
 
 
-    sf_norm = single_norm(best_sf, scale_min, scale_max)
-    tx_max = (tx_min + monitor_width) - (sf_norm * 80.)
-    ty_max = (ty_min + monitor_height) - (sf_norm * 80.)
 
-    np.save(f'test_single/patch_{target_idx}.npy', best_patch.detach().cpu().numpy())
-    T = construct_T_matrix(
-        sf=best_sf, tx=best_tx, ty=best_ty, 
-        scale_min=scale_min, scale_max=scale_max, 
-        tx_min=tx_min, tx_max=tx_max, 
-        ty_min=ty_min, ty_max=ty_max,
-        noise=False
-    )
-    np.save(f'test_single/T_{target_idx}.npy', T.detach().cpu().numpy())
+            # print(manipulated_image.min(), manipulated_image.max())
 
-    print("T: ", T)
 
-    with torch.no_grad():
-        manipulated_image = project_patch(
-            patches=best_patch, 
-            T_matrices=T.unsqueeze(0),  # add batch dimension
-            images=img
+            x, y, z, yaw = model(manipulated_image*255.)
+            # print("x, y, z, yaw:", x, y, z, yaw)
+            prediction = torch.stack([x, y, z, yaw])
+            prediction = prediction.squeeze(2).mT
+
+            T_pred_in_drone = T_matrix(prediction[0])
+            T_pred_in_world = T_drone_in_world @ T_pred_in_drone
+            # print("T_pred_in_world within loop:")
+            # print(T_pred_in_world)
+
+            target_yaw = normalize_yaw_t(prediction[0, 3])
+            T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
+            T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
+            # print("Direction in world within loop:")
+            # print(T_direction_world)
+
+            T_setpoint_world = T_direction_world @ T_pred_in_world
+            # print("Setpoint world transformation matrix within loop:")
+            # print(T_setpoint_world)
+            # target = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device)
+            
+
+            prediction = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device).unsqueeze(0)  # prediction values
+
+
+
+            # print("Prediction: ", prediction)
+
+            # target = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device, dtype=torch.float32)  # target values
+
+            distance = torch.norm(prediction[0, :3] - target[:3], p=2)
+            angular_loss = 1 - torch.cos(normalize_yaw_t(prediction[0, 3]) - normalize_yaw_t(target[3]))
+
+            loss = distance + angular_loss
+
+            # if i % 25 == 0:
+            #     # print(f"Iteration {i}:")
+            #     # print("Scale factor: ", sf.item())
+            #     # print("Translation x: ", tx.item())
+            #     # print("Translation y: ", ty.item())
+
+            #     print("Prediction: ", prediction.detach().cpu().numpy())
+            #     print("Loss: ", loss.detach().cpu().item())
+                # print('tx, ty:', tx.item(), ty.item())
+            # print("Loss: ", loss.detach().cpu().item())
+
+            loss.backward()
+            opt.step()
+
+            patch.data.clamp_(0., 1.)
+            i += 1
+
+            if loss < best_loss:
+                best_loss = loss.detach().detach().clone()
+                best_patch = patch.detach().clone()
+                best_sf = sf.detach().clone()
+                best_tx = tx.detach().clone()
+                best_ty = ty.detach().clone()
+                best_setpoint = prediction[0].detach().clone()
+
+
+        sf_norm = single_norm(best_sf, scale_min, scale_max)
+        tx_max = (tx_min + monitor_width) - (sf_norm * 80.)
+        ty_max = (ty_min + monitor_height) - (sf_norm * 80.)
+
+        np.save(output_dir / f'patch_{target_idx}.npy', best_patch.detach().cpu().numpy())
+        T = construct_T_matrix(
+            sf=best_sf, tx=best_tx, ty=best_ty, 
+            scale_min=scale_min, scale_max=scale_max, 
+            tx_min=tx_min, tx_max=tx_max, 
+            ty_min=ty_min, ty_max=ty_max,
+            noise=False
         )
+        np.save(output_dir / f'T_{target_idx}.npy', T.detach().cpu().numpy())
 
-    T_drone_in_world = T_matrix(best_setpoint)
-    all_drone_poses.append(best_setpoint.numpy())
-    # print(all_drone_poses)
+        print("T: ", T)
 
-    print("Current drone pose: ", best_setpoint)
-    print("Target pose that was to be reached: ", target)
-    
+        with torch.no_grad():
+            manipulated_image = project_patch(
+                patches=best_patch, 
+                T_matrices=T.unsqueeze(0),  # add batch dimension
+                images=img
+            )
 
-    print("Iterations needed: ", i)
-    fig, axs = plt.subplots(1, 2)
-    axs[0].imshow(manipulated_image[0, 0].detach().cpu().numpy(), cmap='gray')
-    # plt.plot(monitor_corners[:, 0], monitor_corners[:, 1], 'r--', label='Monitor corners')
-    axs[0].scatter(monitor_corners[:, 0].detach().cpu().numpy(), monitor_corners[:, 1].detach().cpu().numpy(), c='r', label='Monitor corners')
-    
-    axs[1].plot(target_trajectory[:, 0].detach().numpy(), target_trajectory[:, 1].detach().numpy(), 'r--')
-    axs[1].plot(np.array(all_drone_poses)[:, 0], np.array(all_drone_poses)[:, 1])
-    axs[1].scatter(projector_world[:, 0].detach().cpu().numpy(), projector_world[:, 1].detach().cpu().numpy(), c='b', label='Projector corners')
-    axs[1].scatter(best_setpoint.numpy()[0], best_setpoint.numpy()[1], color='black')
-    axs[1].arrow(best_setpoint.numpy()[0], best_setpoint.numpy()[1],
-                    0.3 * np.cos(best_setpoint.numpy()[3]), 0.3 * np.sin(best_setpoint.numpy()[3]),
-                    head_width=0.1, head_length=0.1, fc='black', ec='black')
-    
-    
-    axs[1].set_xlim(-2, 2)
-    axs[1].set_ylim(-1.5, 1.5)
-    plt.tight_layout()
+        T_drone_in_world = T_matrix(best_setpoint)
+        all_drone_poses.append(best_setpoint.numpy())
+        # print(all_drone_poses)
 
-    plt.savefig('test_single/optim_step{}.png'.format(target_idx))
-    plt.close()
+        print("Current drone pose: ", best_setpoint)
+        print("Target pose that was to be reached: ", target)
+        
 
-all_drone_poses = np.array(all_drone_poses)
-np.save('test_single/all_drone_poses.npy', all_drone_poses)
+        print("Iterations needed: ", i)
+        fig, axs = plt.subplots(1, 2)
+        axs[0].imshow(manipulated_image[0, 0].detach().cpu().numpy(), cmap='gray')
+        # plt.plot(monitor_corners[:, 0], monitor_corners[:, 1], 'r--', label='Monitor corners')
+        axs[0].scatter(monitor_corners[:, 0].detach().cpu().numpy(), monitor_corners[:, 1].detach().cpu().numpy(), c='r', label='Monitor corners')
+        
+        axs[1].plot(target_trajectory[:, 0].detach().numpy(), target_trajectory[:, 1].detach().numpy(), 'r--')
+        axs[1].plot(np.array(all_drone_poses)[:, 0], np.array(all_drone_poses)[:, 1])
+        axs[1].scatter(projector_world[:, 0].detach().cpu().numpy(), projector_world[:, 1].detach().cpu().numpy(), c='b', label='Projector corners')
+        axs[1].scatter(best_setpoint.numpy()[0], best_setpoint.numpy()[1], color='black')
+        axs[1].arrow(best_setpoint.numpy()[0], best_setpoint.numpy()[1],
+                        0.3 * np.cos(best_setpoint.numpy()[3]), 0.3 * np.sin(best_setpoint.numpy()[3]),
+                        head_width=0.1, head_length=0.1, fc='black', ec='black')
+        
+        
+        axs[1].set_xlim(-2, 2)
+        axs[1].set_ylim(-2, 2)
+        plt.tight_layout()
 
-# fig, ax = plt.subplots(1, 1)
-# ax.plot(target_trajectory[:, 0].detach().numpy(), target_trajectory[:, 1].detach().numpy(), 'r--')
-# ax.plot(all_drone_poses[:, 0], all_drone_poses[:, 1])
-# ax.set_xlim(-2, 2)
-# ax.set_ylim(-1.5, 1.5)
-# plt.tight_layout()
-# plt.savefig('test_single/trajectory.png')
-# plt.close()
+        plt.savefig(output_dir / f'optim_step{target_idx}.png')
+        plt.close()
+
+    all_drone_poses = np.array(all_drone_poses)
+    np.save(output_dir / 'all_drone_poses.npy', all_drone_poses)
+
+    # fig, ax = plt.subplots(1, 1)
+    # ax.plot(target_trajectory[:, 0].detach().numpy(), target_trajectory[:, 1].detach().numpy(), 'r--')
+    # ax.plot(all_drone_poses[:, 0], all_drone_poses[:, 1])
+    # ax.set_xlim(-2, 2)
+    # ax.set_ylim(-1.5, 1.5)
+    # plt.tight_layout()
+    # plt.savefig('test_single/trajectory.png')
+    # plt.close()
 
 
-# # euclidean distance between all_drone_poses and target_trajectory
-distance = np.linalg.norm(all_drone_poses[:, :3] - target_trajectory[:, :3].detach().numpy())
-print("Euclidean distances between drone poses and target trajectory:", distance)
+    # # euclidean distance between all_drone_poses and target_trajectory
+    distance = np.linalg.norm(all_drone_poses[:, :3] - target_trajectory[:, :3].detach().numpy())
+    print("Euclidean distances between drone poses and target trajectory:", distance)
 
 
 
