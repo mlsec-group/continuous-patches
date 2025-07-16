@@ -214,8 +214,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-o', '--output_dir', type=str, default='results/single', help='Output directory for the results')
     parser.add_argument('--display_size', type=int, default=60, help='Size of the display in pixels (default: 60")')
+    parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
 
     args = parser.parse_args()
+
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     output_dir = Path(args.output_dir)
 
@@ -466,6 +472,9 @@ if __name__ == "__main__":
             noise=False
         )
         np.save(output_dir / f'T_{target_idx}.npy', T.detach().cpu().numpy())
+        # print(scale_min, scale_max, tx_min, tx_max, ty_min, ty_max)
+        limit = np.array([scale_min, scale_max.detach().cpu().item(), tx_min.detach().cpu().item(), tx_max.detach().cpu().item(), ty_min.detach().cpu().item(), ty_max.detach().cpu().item()])
+        np.save(output_dir / f'limits_{target_idx}.npy', limit)
 
         print("T: ", T)
 
@@ -477,7 +486,7 @@ if __name__ == "__main__":
             )
 
         T_drone_in_world = T_matrix(best_setpoint)
-        all_drone_poses.append(best_setpoint.numpy())
+        all_drone_poses.append(best_setpoint.detach().cpu().numpy())
         # print(all_drone_poses)
 
         print("Current drone pose: ", best_setpoint)
@@ -490,12 +499,12 @@ if __name__ == "__main__":
         # plt.plot(monitor_corners[:, 0], monitor_corners[:, 1], 'r--', label='Monitor corners')
         axs[0].scatter(monitor_corners[:, 0].detach().cpu().numpy(), monitor_corners[:, 1].detach().cpu().numpy(), c='r', label='Monitor corners')
         
-        axs[1].plot(target_trajectory[:, 0].detach().numpy(), target_trajectory[:, 1].detach().numpy(), 'r--')
+        axs[1].plot(target_trajectory[:, 0].detach().cpu().numpy(), target_trajectory[:, 1].detach().cpu().numpy(), 'r--')
         axs[1].plot(np.array(all_drone_poses)[:, 0], np.array(all_drone_poses)[:, 1])
         axs[1].scatter(projector_world[:, 0].detach().cpu().numpy(), projector_world[:, 1].detach().cpu().numpy(), c='b', label='Projector corners')
-        axs[1].scatter(best_setpoint.numpy()[0], best_setpoint.numpy()[1], color='black')
-        axs[1].arrow(best_setpoint.numpy()[0], best_setpoint.numpy()[1],
-                        0.3 * np.cos(best_setpoint.numpy()[3]), 0.3 * np.sin(best_setpoint.numpy()[3]),
+        axs[1].scatter(best_setpoint.detach().cpu().numpy()[0], best_setpoint.detach().cpu().numpy()[1], color='black')
+        axs[1].arrow(best_setpoint.detach().cpu().numpy()[0], best_setpoint.detach().cpu().numpy()[1],
+                        0.3 * np.cos(best_setpoint.detach().cpu().numpy()[3]), 0.3 * np.sin(best_setpoint.detach().cpu().numpy()[3]),
                         head_width=0.1, head_length=0.1, fc='black', ec='black')
         
         
@@ -510,7 +519,7 @@ if __name__ == "__main__":
     np.save(output_dir / 'all_drone_poses.npy', all_drone_poses)
 
     # fig, ax = plt.subplots(1, 1)
-    # ax.plot(target_trajectory[:, 0].detach().numpy(), target_trajectory[:, 1].detach().numpy(), 'r--')
+    # ax.plot(target_trajectory[:, 0].detach().cpu().numpy(), target_trajectory[:, 1].detach().cpu().numpy(), 'r--')
     # ax.plot(all_drone_poses[:, 0], all_drone_poses[:, 1])
     # ax.set_xlim(-2, 2)
     # ax.set_ylim(-1.5, 1.5)
@@ -520,7 +529,7 @@ if __name__ == "__main__":
 
 
     # # euclidean distance between all_drone_poses and target_trajectory
-    distance = np.linalg.norm(all_drone_poses[:, :3] - target_trajectory[:, :3].detach().numpy())
+    distance = np.linalg.norm(all_drone_poses[:, :3] - target_trajectory[:, :3].detach().cpu().numpy())
     print("Euclidean distances between drone poses and target trajectory:", distance)
 
 
