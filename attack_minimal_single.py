@@ -247,12 +247,16 @@ if __name__ == "__main__":
 
     all_drone_poses = []
 
+    drone_pose = torch.tensor([0.0, 0.0, 1.0, 0.0], device=device, dtype=torch.float32)  # Initial pose
+    current_velocity = torch.tensor([0.0, 0.0, 0.0], device=device, dtype=torch.float32)  # Initial velocity
+
 
     T_drone_in_world = torch.eye(4, device=device, dtype=torch.float32)
-    T_drone_in_world[:3, 3] = torch.tensor([0.0, 0.0, 1.0], device=device, dtype=torch.float32)  # Initial position
+    T_drone_in_world[:3, 3] = drone_pose[:3]
 
     all_drone_poses.append([*T_drone_in_world[:3, 3].clone().detach().cpu().numpy(), 0.0])
-
+    
+    
     t = np.linspace(0, 2 * np.pi, 20)
     x = 0.5 * np.sin(2 * t)  # Horizontal figure 8
     y = 1.5 * np.sin(t)  # Vertical figure 8
@@ -268,12 +272,16 @@ if __name__ == "__main__":
     #                             dtype=torch.float32, device=device) 
 
     projector_center = torch.tensor([2., 0.0, 1.], dtype=torch.float32, device=device)  # Center of the projector (x,y,z)
-    projector_size = 60 * 0.0254 # 60" in m, projector diagonal
+    projector_diagonal = 60 * 0.0254 # 60" in m, projector diagonal
 
-    projector_world = torch.tensor([[projector_center[0], projector_center[1] + projector_size / 2, projector_center[2] + projector_size / 2], # upper left corner
-                                    [projector_center[0], projector_center[1] - projector_size / 2, projector_center[2] + projector_size / 2], # upper right corner
-                                    [projector_center[0], projector_center[1] + projector_size / 2, projector_center[2] - projector_size / 2], # lower left corner
-                                    [projector_center[0], projector_center[1] - projector_size / 2, projector_center[2] - projector_size / 2]], # lower right corner
+    projector_height = np.round(projector_diagonal / np.sqrt((16./9.)**2 + 1), 2)  # Height of the projector in m
+    projector_width = np.round(projector_height * (16. / 9.), 2)  # Width of the projector in m
+
+
+    projector_world = torch.tensor([[projector_center[0], projector_center[1] + projector_width / 2, projector_center[2] + projector_height / 2], # upper left corner
+                                    [projector_center[0], projector_center[1] - projector_width / 2, projector_center[2] + projector_height / 2], # upper right corner
+                                    [projector_center[0], projector_center[1] + projector_width / 2, projector_center[2] - projector_height / 2], # lower left corner
+                                    [projector_center[0], projector_center[1] - projector_width / 2, projector_center[2] - projector_height / 2]], # lower right corner
                                     dtype=torch.float32, device=device)  # Projector corners in world coordinates
 
     print("Projector corners in world coordinates:")
@@ -297,11 +305,13 @@ if __name__ == "__main__":
 
         target = target_trajectory[target_idx]
 
-        patch = torch.rand((1, 1, 80, 80), device=device, dtype=torch.float32, requires_grad=True)  # random patch
+        patch = torch.rand((1, 1, 45, 80), device=device, dtype=torch.float32, requires_grad=True)  # random patch
 
         
 
         monitor_corners = calc_monitor_corners(T_drone_in_world, projector_world, camera_extrinsic, camera_intrinsic)
+        # print("Monitor corners:")
+        # print(monitor_corners)
 
         monitor_width_up = monitor_corners[1, 0] - monitor_corners[0, 0]
         monitor_width_down = monitor_corners[3, 0] - monitor_corners[2, 0]
@@ -315,20 +325,44 @@ if __name__ == "__main__":
         tx_min = max(monitor_corners[0, 0], monitor_corners[2, 0])
         ty_min = max(monitor_corners[0, 1], monitor_corners[1, 1])
 
-        max_dim = min(monitor_width, monitor_height)
-        scale_max = max_dim / 80
-        scale_min = 0.2
+        # print(tx_min, ty_min)
+
+        # max_dim = min(monitor_width, monitor_height)
+        # scale_max = max_dim / 80
+        # scale_min = 0.2
+
+        scale_width = monitor_width / 80.
+        scale_height = monitor_height / 45.
+
+        max_scale = min(scale_width, scale_height)
+
+        patch_coordinates = torch.tensor([[0., 0., 1.],
+                                          [80., 0., 1.],
+                                          [0., 45., 1.],
+                                          [80., 45., 1.]], dtype=torch.float32, device=device)
+        
+        T = torch.eye(3, device=device, dtype=torch.float32)  # Identity transformation matrix
+        T[:2, :2] *= max_scale  # Scale down to half the size of the patch
+        T[0, 2] = tx_min
+        T[1, 2] = ty_min
+
+
+        # check = torch.stack([T @ row for row in patch_coordinates])
+        # print("Patch coordinates after transformation:")
+        # print(check)
+
+        opt = torch.optim.Adam([patch], lr=1e-1)
     
 
-        sf = torch.FloatTensor(1).uniform_(scale_min, scale_max).to(device)
-        sf = inverse_norm(sf, scale_min, scale_max).to(device).requires_grad_(True)  # scale factor
+        # sf = torch.FloatTensor(1).uniform_(scale_min, scale_max).to(device)
+        # sf = inverse_norm(sf, scale_min, scale_max).to(device).requires_grad_(True)  # scale factor
         
-        tx = torch.FloatTensor(1).uniform_(-1, 1).to(device).requires_grad_(True)
-        ty = torch.FloatTensor(1).uniform_(-1, 1).to(device).requires_grad_(True)
+        # tx = torch.FloatTensor(1).uniform_(-1, 1).to(device).requires_grad_(True)
+        # ty = torch.FloatTensor(1).uniform_(-1, 1).to(device).requires_grad_(True)
 
 
-        opt = torch.optim.Adam([{'params': [sf, tx, ty], 'lr': 0.03},
-                        {'params': [patch], 'lr': 1e-2}], lr=1e-3)
+        # opt = torch.optim.Adam([{'params': [sf, tx, ty], 'lr': 0.03},
+        #                 {'params': [patch], 'lr': 1e-2}], lr=1e-3)
 
 
         # # calculate target
@@ -362,26 +396,27 @@ if __name__ == "__main__":
 
         best_loss = torch.inf
         best_patch = patch.clone()
-        best_sf = sf.clone()
-        best_tx = tx.clone()
-        best_ty = ty.clone()
+        
+        # best_sf = sf.clone()
+        # best_tx = tx.clone()
+        # best_ty = ty.clone()
         best_setpoint = None
 
         while loss > 0.01 and i < 5000:
             opt.zero_grad()
 
-            with torch.no_grad():
-                sf_norm = single_norm(sf, scale_min, scale_max)
-                tx_max = (tx_min + monitor_width) - (sf_norm * 80.)
-                ty_max = (ty_min + monitor_height) - (sf_norm * 80.)  
+            # with torch.no_grad():
+            #     sf_norm = single_norm(sf, scale_min, scale_max)
+            #     tx_max = (tx_min + monitor_width) - (sf_norm * 80.)
+            #     ty_max = (ty_min + monitor_height) - (sf_norm * 80.)  
 
-            T = construct_T_matrix(
-            sf=sf, tx=tx, ty=ty, 
-            scale_min=scale_min, scale_max=scale_max, 
-            tx_min=tx_min, tx_max=tx_max, 
-            ty_min=ty_min, ty_max=ty_max,
-            noise=False
-            )
+            # T = construct_T_matrix(
+            # sf=sf, tx=tx, ty=ty, 
+            # scale_min=scale_min, scale_max=scale_max, 
+            # tx_min=tx_min, tx_max=tx_max, 
+            # ty_min=ty_min, ty_max=ty_max,
+            # noise=False
+            # )
 
             manipulated_image = project_patch(
                 patches=patch, 
@@ -453,30 +488,30 @@ if __name__ == "__main__":
             if loss < best_loss:
                 best_loss = loss.detach().detach().clone()
                 best_patch = patch.detach().clone()
-                best_sf = sf.detach().clone()
-                best_tx = tx.detach().clone()
-                best_ty = ty.detach().clone()
+                # best_sf = sf.detach().clone()
+                # best_tx = tx.detach().clone()
+                # best_ty = ty.detach().clone()
                 best_setpoint = prediction[0].detach().clone()
 
 
-        sf_norm = single_norm(best_sf, scale_min, scale_max)
-        tx_max = (tx_min + monitor_width) - (sf_norm * 80.)
-        ty_max = (ty_min + monitor_height) - (sf_norm * 80.)
+        # sf_norm = single_norm(best_sf, scale_min, scale_max)
+        # tx_max = (tx_min + monitor_width) - (sf_norm * 80.)
+        # ty_max = (ty_min + monitor_height) - (sf_norm * 80.)
 
         np.save(output_dir / f'patch_{target_idx}.npy', best_patch.detach().cpu().numpy())
-        T = construct_T_matrix(
-            sf=best_sf, tx=best_tx, ty=best_ty, 
-            scale_min=scale_min, scale_max=scale_max, 
-            tx_min=tx_min, tx_max=tx_max, 
-            ty_min=ty_min, ty_max=ty_max,
-            noise=False
-        )
+        # T = construct_T_matrix(
+        #     sf=best_sf, tx=best_tx, ty=best_ty, 
+        #     scale_min=scale_min, scale_max=scale_max, 
+        #     tx_min=tx_min, tx_max=tx_max, 
+        #     ty_min=ty_min, ty_max=ty_max,
+        #     noise=False
+        # )
         np.save(output_dir / f'T_{target_idx}.npy', T.detach().cpu().numpy())
         # print(scale_min, scale_max, tx_min, tx_max, ty_min, ty_max)
-        limit = np.array([scale_min, scale_max.detach().cpu().item(), tx_min.detach().cpu().item(), tx_max.detach().cpu().item(), ty_min.detach().cpu().item(), ty_max.detach().cpu().item()])
-        np.save(output_dir / f'limits_{target_idx}.npy', limit)
+        # limit = np.array([scale_min, scale_max.detach().cpu().item(), tx_min.detach().cpu().item(), tx_max.detach().cpu().item(), ty_min.detach().cpu().item(), ty_max.detach().cpu().item()])
+        # np.save(output_dir / f'limits_{target_idx}.npy', limit)
 
-        print("T: ", T)
+        # print("T: ", T)
 
         with torch.no_grad():
             manipulated_image = project_patch(
