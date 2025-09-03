@@ -1,13 +1,19 @@
+import os
+import sys
+
+
+# Resolve absolute path to Frontnet.py
+project_root = os.path.dirname(os.path.abspath(__file__))  # continuous-patches
+frontnet_dir = os.path.join(project_root, 'pulp-frontnet', 'PyTorch')
+print(frontnet_dir)
+sys.path.insert(0, frontnet_dir)  # insert at front so it's prioritized
+
 import torch
 import numpy as np
 
-import os
-
-sys.path.append('pulp-frontnet/PyTorch/Frontnet')
-
-from Frontnet import FrontnetModel
-from DataProcessor import DataProcessor
-from Dataset import Dataset
+from Frontnet.Frontnet import FrontnetModel
+from Frontnet.DataProcessor import DataProcessor
+from Frontnet.Dataset import Dataset
 from torch.utils.data import DataLoader
 
 from matplotlib import pyplot as plt
@@ -16,7 +22,7 @@ from pathlib import Path
 
 
 class CFSim():
-    def __init__(self, model='frontnet', dataset_path="data/camera_images.pickle"):
+    def __init__(self, model='frontnet', dataset_path="pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle"):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.model = model
         
@@ -55,7 +61,7 @@ class CFSim():
         self.target_trajectory = torch.tensor(target_trajectory, dtype=torch.float32, device=self.device)
         
     
-    def load_frontnet_model(self, device, model_path="frontnet/Frontnet160x32.pt", config="160x32"):
+    def load_frontnet_model(self, device, model_path="pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", config="160x32"):
         """
         From FAP repo
         Loads a saved Frontnet model from the given path with the set configuration and moves it to CPU/GPU.
@@ -219,23 +225,27 @@ class CFSim():
 
         # reshape output
         predicted_pose = torch.hstack((x, y, z, yaw)).squeeze(0)
+        # print("Predicted pose: ", predicted_pose, predicted_pose.shape)
         
         # calculate controller output
         new_setpoint = self._controller_setpoint(predicted_pose)
+        # print("New setpoint: ", new_setpoint, new_setpoint.shape)
 
-        # update drone pose after 1s
-        delta = new_setpoint[:3] - self.pose[:3]
-        distance = torch.linalg.norm(delta) + 1e-6  # add small value to avoid division by zero
-        unit_direction = delta / distance # normalize direction
+        # # update drone pose after 1s
+        # delta = new_setpoint[:3] - self.pose[:3]
+        # distance = torch.linalg.norm(delta) + 1e-6  # add small value to avoid division by zero
+        # unit_direction = delta / distance # normalize direction
 
-        new_position = self.pose[:3] + unit_direction * self.velocity  # move 0.5 m in the direction of the delta
+        # new_position = self.pose[:3] + unit_direction * self.velocity  # move 0.5 m in the direction of the delta
         
-        delta_yaw = self._normalize_yaw(new_setpoint[3] - self.pose[3])
-        new_yaw = self.pose[3] + delta_yaw * self.omega  # turn 1 rad/s in the direction of the delta yaw
+        # delta_yaw = self._normalize_yaw(new_setpoint[3] - self.pose[3])
+        # new_yaw = self.pose[3] + delta_yaw * self.omega  # turn 1 rad/s in the direction of the delta yaw
 
-        new_pose = torch.stack((new_position[0], new_position[1], new_position[2], new_yaw), dim=-1)
+        #new_pose = torch.stack((new_position[0], new_position[1], new_position[2], new_yaw), dim=-1)
+        
         # print("New pose: ", new_pose, new_pose.shape)
-        return new_pose
+        #return new_pose
+        return new_setpoint
 
     def _get_T_matrix(self, pose):
         T = torch.eye(4, dtype=torch.float32).to(self.device)
@@ -312,7 +322,7 @@ class CFSim():
         return np.array([x, y, z, yaw])
 
     def update(self, pose):
-        self.score *= 1000
+        # self.score *= 1000
         self.pose = pose
         self.all_poses.append(pose.detach().cpu().numpy())
 
@@ -320,10 +330,10 @@ class CFSim():
         self.score = max(self.score, 0.)  # ensure score is not negative
         if self.current_idx <= len(self.target_trajectory):
             self.current_idx += 1
-        self.score /= 1000
+        # self.score /= 1000
 
     def reset(self):
-        self.pose = torch.FloatTensor([0., 0., 1., 0.], device=self.device)
+        self.pose = torch.tensor([0., 0., 1., 0.], device=self.device, dtype=torch.float32)
         self.current_idx = 1
 
     def eval(self, pose):

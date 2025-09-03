@@ -297,9 +297,13 @@ if __name__ == "__main__":
     #                             [48., 66.],     # lower left corner
     #                             [128., 66.]])   # lower right corner
 
+    loss = torch.inf
 
 
     for target_idx in trange(1, len(target_trajectory)):
+
+        if target_idx > 0 and loss > 0.02:
+            target_idx -= 1
 
         img = dataset.dataset[0][0].to(device).unsqueeze(0) / 255.0
 
@@ -468,6 +472,14 @@ if __name__ == "__main__":
 
             loss = distance + angular_loss
 
+            if loss < best_loss:
+                best_loss = loss.detach().detach().clone()
+                best_patch = patch.detach().clone()
+                # best_sf = sf.detach().clone()
+                # best_tx = tx.detach().clone()
+                # best_ty = ty.detach().clone()
+                best_setpoint = prediction[0].detach().clone()
+
             # if i % 25 == 0:
             #     # print(f"Iteration {i}:")
             #     # print("Scale factor: ", sf.item())
@@ -485,13 +497,7 @@ if __name__ == "__main__":
             patch.data.clamp_(0., 1.)
             i += 1
 
-            if loss < best_loss:
-                best_loss = loss.detach().detach().clone()
-                best_patch = patch.detach().clone()
-                # best_sf = sf.detach().clone()
-                # best_tx = tx.detach().clone()
-                # best_ty = ty.detach().clone()
-                best_setpoint = prediction[0].detach().clone()
+           
 
 
         # sf_norm = single_norm(best_sf, scale_min, scale_max)
@@ -520,8 +526,13 @@ if __name__ == "__main__":
                 images=img
             )
 
-        T_drone_in_world = T_matrix(best_setpoint)
-        all_drone_poses.append(best_setpoint.detach().cpu().numpy())
+
+        
+
+        # T_drone_in_world = T_matrix(best_setpoint)
+        # all_drone_poses.append(best_setpoint.detach().cpu().numpy())
+        
+        
         # print(all_drone_poses)
 
         print("Current drone pose: ", best_setpoint)

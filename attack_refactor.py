@@ -280,6 +280,8 @@ def joint(train_set, test_set, model, target, patch, sf, tx_min, tx_max, ty_min,
             batch, _ = data
 
             batch = batch.to(device) / 255.
+            # img = train_set.dataset[0][0].to(device).unsqueeze(0) / 255.0  # Use the first image in the batch for patch projection
+            # batch = img.expand(batch.size(0), -1, -1, -1)  # Expand to match batch size
             
             # print("Inside joint:")
             # print("sf_t:", sf_t)
