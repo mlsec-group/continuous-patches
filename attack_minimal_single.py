@@ -224,7 +224,7 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
 
-    img_idx = args.img_idx
+    # img_idx = args.img_idx
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -236,7 +236,7 @@ if __name__ == "__main__":
 
     print(len(dataset))
 
-    output_dir = Path(args.output_dir) / f'{args.display_size}z' / f'image_{img_idx}' / f'{args.seed}'
+    output_dir = Path(args.output_dir) / f'{args.display_size}z' / f'random' / f'{args.seed}'
     print(output_dir)
 
     os.makedirs(output_dir, exist_ok=True)
@@ -245,8 +245,8 @@ if __name__ == "__main__":
 
     # img = torch.ones((1, 1, 96, 160), device=device, dtype=torch.float32) * 0.5  # gray image
     # img_idx = np.random.randint(0, len(dataset))
-    img = dataset.dataset[img_idx][0].to(device).unsqueeze(0) / 255.0
-    print(img.shape)
+    # img = dataset.dataset[img_idx][0].to(device).unsqueeze(0) / 255.0
+    # print(img.shape)
 
     cam = Camera('camera_calibration.yaml')
     camera_intrinsic = torch.tensor(cam.camera_intrinsic, device=device, dtype=torch.float32)
@@ -308,6 +308,8 @@ if __name__ == "__main__":
 
 
     for target_idx in trange(1, len(target_trajectory)):
+
+        img_idx = np.random.randint(0, len(dataset))
 
         if target_idx > 0 and loss > 0.02:
             target_idx -= 1

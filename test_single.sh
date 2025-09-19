@@ -2,14 +2,14 @@
 #SBATCH --partition=cpu-2h
 
 # Check if the required arguments are provided
-if [ "$#" -ne 3 ]; then
-    echo "Usage: $0 <trajectory> <display_size> <image_index>"
+if [ "$#" -ne 2 ]; then
+    echo "Usage: $0 <trajectory> <display_size>"
     exit 1
 fi
 
 TRAJ=$1
 DISPLAY_SIZE=$2
-IMG_IDX=$3
+# IMG_IDX=$3
 
 LOG_DIR="logs"
 
@@ -20,6 +20,6 @@ for SEED in $(seq 0 9); do
            --error=${LOG_DIR}/job_seed_${SEED}.err <<EOF
 #!/bin/sh
 #SBATCH --partition=cpu-2h
-apptainer run --nv /home/piha/container.sif python attack_minimal_single.py -o ${TRAJ} --display_size ${DISPLAY_SIZE} --seed ${SEED} --img_idx ${IMG_IDX}
+apptainer run --nv /home/piha/container.sif python attack_minimal_single.py -o ${TRAJ} --display_size ${DISPLAY_SIZE} --seed ${SEED}
 EOF
 done
