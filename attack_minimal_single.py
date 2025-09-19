@@ -214,6 +214,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-o', '--output_dir', type=str, default='results/single', help='Output directory for the results')
     parser.add_argument('--display_size', type=int, default=60, help='Size of the display in pixels (default: 60")')
+    parser.add_argument('--img_idx', type=int, default=0, help='Index of the image to use from the dataset')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
 
     args = parser.parse_args()
@@ -223,9 +224,7 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
 
-    output_dir = Path(args.output_dir)
-
-    os.makedirs(output_dir, exist_ok=True)
+    img_idx = args.img_idx
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -233,12 +232,20 @@ if __name__ == "__main__":
     model.eval()
 
 
-    dataset = load_dataset("pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle", batch_size = 32, shuffle = False, drop_last = True, num_workers = 1, train=True, train_set_size=0.9, IMRC=True)
+    dataset = load_dataset("pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle", batch_size = 1, shuffle = False, drop_last = True, num_workers = 1, train=True, train_set_size=0.9, IMRC=True)
 
     print(len(dataset))
 
+    output_dir = Path(args.output_dir) / f'{args.display_size}z' / f'image_{img_idx}' / f'{args.seed}'
+    print(output_dir)
+
+    os.makedirs(output_dir, exist_ok=True)
+
+
+
     # img = torch.ones((1, 1, 96, 160), device=device, dtype=torch.float32) * 0.5  # gray image
-    img = dataset.dataset[0][0].to(device).unsqueeze(0) / 255.0
+    # img_idx = np.random.randint(0, len(dataset))
+    img = dataset.dataset[img_idx][0].to(device).unsqueeze(0) / 255.0
     print(img.shape)
 
     cam = Camera('camera_calibration.yaml')
@@ -305,7 +312,7 @@ if __name__ == "__main__":
         if target_idx > 0 and loss > 0.02:
             target_idx -= 1
 
-        img = dataset.dataset[0][0].to(device).unsqueeze(0) / 255.0
+        img = dataset.dataset[img_idx][0].to(device).unsqueeze(0) / 255.0
 
         target = target_trajectory[target_idx]
 
@@ -406,6 +413,8 @@ if __name__ == "__main__":
         # best_ty = ty.clone()
         best_setpoint = None
 
+        # time_start_optim = time.time()
+
         while loss > 0.01 and i < 5000:
             opt.zero_grad()
 
@@ -503,6 +512,8 @@ if __name__ == "__main__":
         # sf_norm = single_norm(best_sf, scale_min, scale_max)
         # tx_max = (tx_min + monitor_width) - (sf_norm * 80.)
         # ty_max = (ty_min + monitor_height) - (sf_norm * 80.)
+
+
 
         np.save(output_dir / f'patch_{target_idx}.npy', best_patch.detach().cpu().numpy())
         # T = construct_T_matrix(
