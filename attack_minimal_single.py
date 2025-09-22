@@ -208,12 +208,106 @@ def calc_monitor_corners(drone_pose, projector_world, camera_extrinsic, camera_i
                         projector_image_ll, projector_image_lr], dim=0)
 
 
+def gen_target_trajectory(trajectory):
+    #TODO:
+    # if trajectory == 'square':
+
+    # # Square corners (x, y) without z and yaw for now
+    #     corners = np.array([
+    #     [0., 0.],
+    #     [0., 1.],
+    #     [-1., 1.],
+    #     [-1., -1.],
+    #     [0., -1.],
+    #     [0., 0.] # End at the starting point
+    #     ])
+
+    #     # Total number of waypoints
+    #     n_waypoints = 20
+
+
+    #     # Generate waypoints along each segment approximately
+    #     points_per_segment = n_waypoints // (len(corners)-1)
+    #     waypoints_list = []
+    #     for i in range(len(corners)-1):
+    #         segment = np.linspace(corners[i], corners[i+1], points_per_segment, endpoint=False)
+    #         waypoints_list.append(segment)
+
+
+    #     # Combine segments and add final corner
+    #     line_x = np.vstack(waypoints_list)
+    #     line_y = np.vstack((line_x, corners[-1]))
+    #     z = np.ones_like(line_x)
+    #     yaw = np.zeros_like(line_x)
+    #     waypoints = np.column_stack((line_x, line_y, z, yaw))
+
+
+    #     return torch.tensor(waypoints, dtype=torch.float32)
+
+
+    if trajectory == 'circle':
+        t = np.linspace(0, 2 * np.pi, 20)
+        x = 1.5 * np.cos(t)
+        y = 1.5 * np.sin(t)
+        z = np.ones_like(t)  # Constant height at 1
+        yaw = np.zeros_like(t)  # Constant yaw
+        target_trajectory = np.column_stack((x, y, z, yaw))
+        return torch.tensor(target_trajectory, dtype=torch.float32)
+
+    if trajectory == 'line_x':
+        points = np.array([0., 0.5, 0., -1., 0.])
+
+        # Compute cumulative distances along the path
+        distances = np.cumsum(np.abs(np.diff(points)))
+        distances = np.insert(distances, 0, 0)  # start at 0
+
+        # Generate 20 evenly spaced distances
+        even_distances = np.linspace(0, distances[-1], 20)
+
+        # Interpolate to get evenly spaced points
+        x = np.interp(even_distances, distances, points)
+        y = np.zeros_like(x)
+        z = np.ones_like(x)  # Constant height at 1
+        yaw = np.zeros_like(x)  # Constant yaw
+        target_trajectory = np.column_stack((x, y, z, yaw))
+        return torch.tensor(target_trajectory, dtype=torch.float32)
+
+    if trajectory == 'line_y':
+        points = np.array([0., 1.5, 0., -1.5, 0.])
+
+        # Compute cumulative distances along the path
+        distances = np.cumsum(np.abs(np.diff(points)))
+        distances = np.insert(distances, 0, 0)  # start at 0
+
+        # Generate 20 evenly spaced distances
+        even_distances = np.linspace(0, distances[-1], 20)
+
+        # Interpolate to get evenly spaced points
+        y = np.interp(even_distances, distances, points)
+        x = np.zeros_like(y)
+        z = np.ones_like(y)  # Constant height at 1
+        yaw = np.zeros_like(y)  # Constant yaw
+        target_trajectory = np.column_stack((x, y, z, yaw))
+        return torch.tensor(target_trajectory, dtype=torch.float32)
+
+
+    if trajectory == 'figure8':
+        t = np.linspace(0, 2 * np.pi, 20)
+        x = 0.5 * np.sin(2 * t)  # Horizontal figure 8
+        y = 1.5 * np.sin(t)  # Vertical figure 8
+        z = np.ones_like(t)  # Constant height at 1
+        yaw = np.zeros_like(t)  # Constant yaw
+        target_trajectory = np.column_stack((x, y, z, yaw))
+        return torch.tensor(target_trajectory, dtype=torch.float32)
+    else:
+        raise ValueError("Unknown trajectory type")
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('-o', '--output_dir', type=str, default='results/single', help='Output directory for the results')
+    parser.add_argument('-t', '--trajectory', type=str, choices=['figure8', 'square', 'circle', 'line_x', 'line_y'], default='figure8', help='Target Trajectory')
     parser.add_argument('--display_size', type=int, default=60, help='Size of the display in pixels (default: 60")')
+    parser.add_argument('--mode', type=str, choices=['random', 'idx'], default='idx', help='Mode to select image: random or specific index')
     parser.add_argument('--img_idx', type=int, default=0, help='Index of the image to use from the dataset')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
 
@@ -236,7 +330,10 @@ if __name__ == "__main__":
 
     print(len(dataset))
 
-    output_dir = Path(args.output_dir) / f'{args.display_size}z' / f'random' / f'{args.seed}'
+    if args.mode == 'random':
+        output_dir = Path(args.trajectory) / f'{args.display_size}z' / f'random' / f'{args.seed}'
+    else:
+        output_dir = Path(args.trajectory) / f'{args.display_size}z' / f'image_{args.img_idx}' / f'{args.seed}'
     print(output_dir)
 
     os.makedirs(output_dir, exist_ok=True)
@@ -264,13 +361,15 @@ if __name__ == "__main__":
     all_drone_poses.append([*T_drone_in_world[:3, 3].clone().detach().cpu().numpy(), 0.0])
     
     
-    t = np.linspace(0, 2 * np.pi, 20)
-    x = 0.5 * np.sin(2 * t)  # Horizontal figure 8
-    y = 1.5 * np.sin(t)  # Vertical figure 8
-    z = np.ones_like(t)  # Constant height at 1
-    yaw = np.zeros_like(t)  # Constant yaw
-    target_trajectory = np.column_stack((x, y, z, yaw))
-    target_trajectory = torch.tensor(target_trajectory, dtype=torch.float32, device=device)
+    # t = np.linspace(0, 2 * np.pi, 20)
+    # x = 0.5 * np.sin(2 * t)  # Horizontal figure 8
+    # y = 1.5 * np.sin(t)  # Vertical figure 8
+    # z = np.ones_like(t)  # Constant height at 1
+    # yaw = np.zeros_like(t)  # Constant yaw
+    # target_trajectory = np.column_stack((x, y, z, yaw))
+    # target_trajectory = torch.tensor(target_trajectory, dtype=torch.float32, device=device)
+
+    target_trajectory = gen_target_trajectory(args.trajectory).to(device)
 
     # projector_world = torch.tensor([[2, 1, 2.2],   # ul
     #                             [2, -1.5, 2.2], #ur
@@ -306,10 +405,13 @@ if __name__ == "__main__":
 
     loss = torch.inf
 
+    img_idx = args.img_idx
 
     for target_idx in trange(1, len(target_trajectory)):
 
-        img_idx = np.random.randint(0, len(dataset))
+        if args.mode == 'random':
+            img_idx = np.random.randint(0, len(dataset))
+            
 
         if target_idx > 0 and loss > 0.02:
             target_idx -= 1
