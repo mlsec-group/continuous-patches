@@ -210,17 +210,36 @@ def calc_monitor_corners(drone_pose, projector_world, camera_extrinsic, camera_i
 
 def gen_target_trajectory(trajectory):
     #TODO:
-    # if trajectory == 'square':
+    if trajectory == 'square':
 
     # # Square corners (x, y) without z and yaw for now
-    #     corners = np.array([
-    #     [0., 0.],
-    #     [0., 1.],
-    #     [-1., 1.],
-    #     [-1., -1.],
-    #     [0., -1.],
-    #     [0., 0.] # End at the starting point
-    #     ])
+        corners = np.array([
+        [0., 1.],
+        [-1., 1.],
+        [-1., -1.],
+        [0., -1.],
+        [0., 1.] # End at the starting point
+        ])
+
+        edges = list(zip(corners[:-1], corners[1:]))
+        n_edges = len(edges)
+    
+        # Reserve 1 point per corner, distribute the rest
+        extra_points = 20 - n_edges  
+        base = extra_points // n_edges
+        remainder = extra_points % n_edges
+        
+        points = []
+        for i, (start, end) in enumerate(edges):
+            # Number of points on this edge (including the corner at 'end')
+            num_on_edge = base + (1 if i < remainder else 0) + 1
+            
+            # Interpolate along the edge
+            xs = np.linspace(start[0], end[0], num_on_edge, endpoint=False)
+            ys = np.linspace(start[1], end[1], num_on_edge, endpoint=False)
+            edge_points = np.column_stack([xs, ys])
+            
+            points.extend(edge_points)
 
     #     # Total number of waypoints
     #     n_waypoints = 20
@@ -237,12 +256,15 @@ def gen_target_trajectory(trajectory):
     #     # Combine segments and add final corner
     #     line_x = np.vstack(waypoints_list)
     #     line_y = np.vstack((line_x, corners[-1]))
-    #     z = np.ones_like(line_x)
-    #     yaw = np.zeros_like(line_x)
-    #     waypoints = np.column_stack((line_x, line_y, z, yaw))
 
+        points = np.array(points)
 
-    #     return torch.tensor(waypoints, dtype=torch.float32)
+        z = np.ones((points.shape[0],))  # Create z with shape (20,)
+        yaw = np.zeros((points.shape[0],))  # Create yaw with shape (20,)
+        waypoints = np.hstack((points, z[:, None], yaw[:, None]))  # Stack points, z, and yaw to get shape (20, 4)
+        print(waypoints.shape)
+
+        return torch.tensor(waypoints, dtype=torch.float32)
 
 
     if trajectory == 'circle':
