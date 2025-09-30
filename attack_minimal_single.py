@@ -241,22 +241,6 @@ def gen_target_trajectory(trajectory):
             
             points.extend(edge_points)
 
-    #     # Total number of waypoints
-    #     n_waypoints = 20
-
-
-    #     # Generate waypoints along each segment approximately
-    #     points_per_segment = n_waypoints // (len(corners)-1)
-    #     waypoints_list = []
-    #     for i in range(len(corners)-1):
-    #         segment = np.linspace(corners[i], corners[i+1], points_per_segment, endpoint=False)
-    #         waypoints_list.append(segment)
-
-
-    #     # Combine segments and add final corner
-    #     line_x = np.vstack(waypoints_list)
-    #     line_y = np.vstack((line_x, corners[-1]))
-
         points = np.array(points)
 
         z = np.ones((points.shape[0],))  # Create z with shape (20,)
@@ -323,6 +307,33 @@ def gen_target_trajectory(trajectory):
         return torch.tensor(target_trajectory, dtype=torch.float32)
     else:
         raise ValueError("Unknown trajectory type")
+    
+
+def get_patch_T(monitor_corners_world):
+    device = monitor_corners_world.device
+    monitor_width_up = monitor_corners[1, 0] - monitor_corners[0, 0]
+    monitor_width_down = monitor_corners[3, 0] - monitor_corners[2, 0]
+    monitor_width = min(monitor_width_up, monitor_width_down)
+
+
+    monitor_height_left = monitor_corners[2, 1] - monitor_corners[0, 1]
+    monitor_height_right = monitor_corners[3, 1] - monitor_corners[1, 1]
+    monitor_height = min(monitor_height_left, monitor_height_right)
+
+    tx_min = max(monitor_corners[0, 0], monitor_corners[2, 0])
+    ty_min = max(monitor_corners[0, 1], monitor_corners[1, 1])
+
+    scale_width = monitor_width / 80.
+    scale_height = monitor_height / 45.
+
+    max_scale = min(scale_width, scale_height)
+    
+    T = torch.eye(3, device=device, dtype=torch.float32)  # Identity transformation matrix
+    T[:2, :2] *= max_scale  # Scale down to half the size of the patch
+    T[0, 2] = tx_min
+    T[1, 2] = ty_min
+
+    return T
 
 if __name__ == "__main__":
     import argparse
@@ -359,6 +370,8 @@ if __name__ == "__main__":
     print(output_dir)
 
     os.makedirs(output_dir, exist_ok=True)
+
+    projector_size = args.display_size
 
 
 
@@ -400,7 +413,7 @@ if __name__ == "__main__":
     #                             dtype=torch.float32, device=device) 
 
     projector_center = torch.tensor([2., 0.0, 1.], dtype=torch.float32, device=device)  # Center of the projector (x,y,z)
-    projector_diagonal = 60 * 0.0254 # 60" in m, projector diagonal
+    projector_diagonal = projector_size * 0.0254 # 60" in m, projector diagonal
 
     projector_height = np.round(projector_diagonal / np.sqrt((16./9.)**2 + 1), 2)  # Height of the projector in m
     projector_width = np.round(projector_height * (16. / 9.), 2)  # Width of the projector in m
@@ -435,7 +448,7 @@ if __name__ == "__main__":
             img_idx = np.random.randint(0, len(dataset))
             
 
-        if target_idx > 0 and loss > 0.02:
+        if target_idx > 1 and loss > 0.02:
             target_idx -= 1
 
         img = dataset.dataset[img_idx][0].to(device).unsqueeze(0) / 255.0
@@ -444,44 +457,18 @@ if __name__ == "__main__":
 
         patch = torch.rand((1, 1, 45, 80), device=device, dtype=torch.float32, requires_grad=True)  # random patch
 
-        
 
         monitor_corners = calc_monitor_corners(T_drone_in_world, projector_world, camera_extrinsic, camera_intrinsic)
         # print("Monitor corners:")
         # print(monitor_corners)
 
-        monitor_width_up = monitor_corners[1, 0] - monitor_corners[0, 0]
-        monitor_width_down = monitor_corners[3, 0] - monitor_corners[2, 0]
-        monitor_width = min(monitor_width_up, monitor_width_down)
-
-
-        monitor_height_left = monitor_corners[2, 1] - monitor_corners[0, 1]
-        monitor_height_right = monitor_corners[3, 1] - monitor_corners[1, 1]
-        monitor_height = min(monitor_height_left, monitor_height_right)
-
-        tx_min = max(monitor_corners[0, 0], monitor_corners[2, 0])
-        ty_min = max(monitor_corners[0, 1], monitor_corners[1, 1])
-
-        # print(tx_min, ty_min)
-
-        # max_dim = min(monitor_width, monitor_height)
-        # scale_max = max_dim / 80
-        # scale_min = 0.2
-
-        scale_width = monitor_width / 80.
-        scale_height = monitor_height / 45.
-
-        max_scale = min(scale_width, scale_height)
 
         patch_coordinates = torch.tensor([[0., 0., 1.],
                                           [80., 0., 1.],
                                           [0., 45., 1.],
                                           [80., 45., 1.]], dtype=torch.float32, device=device)
         
-        T = torch.eye(3, device=device, dtype=torch.float32)  # Identity transformation matrix
-        T[:2, :2] *= max_scale  # Scale down to half the size of the patch
-        T[0, 2] = tx_min
-        T[1, 2] = ty_min
+        T = get_patch_T(monitor_corners)
 
 
         # check = torch.stack([T @ row for row in patch_coordinates])
@@ -491,43 +478,7 @@ if __name__ == "__main__":
         opt = torch.optim.Adam([patch], lr=1e-1)
     
 
-        # sf = torch.FloatTensor(1).uniform_(scale_min, scale_max).to(device)
-        # sf = inverse_norm(sf, scale_min, scale_max).to(device).requires_grad_(True)  # scale factor
         
-        # tx = torch.FloatTensor(1).uniform_(-1, 1).to(device).requires_grad_(True)
-        # ty = torch.FloatTensor(1).uniform_(-1, 1).to(device).requires_grad_(True)
-
-
-        # opt = torch.optim.Adam([{'params': [sf, tx, ty], 'lr': 0.03},
-        #                 {'params': [patch], 'lr': 1e-2}], lr=1e-3)
-
-
-        # # calculate target
-        # T_setpoint_world = torch.eye(4, device=device, dtype=torch.float32)
-        # T_setpoint_world[:3, 3] = target_trajectory[1, :3]
-        # print("Setpoint world transformation matrix:")
-        # print(T_setpoint_world)
-
-        # T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
-        # T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_trajectory[1, 3]-np.pi)).to(device)
-        # print("Direction in world: ")
-        # print(T_direction_world)
-
-
-        # T_pred_in_world = torch.inverse(T_direction_world) @ T_setpoint_world
-        # print("Predicted transformation matrix in world frame:")
-        # print(T_pred_in_world)
-
-        
-
-        # T_pred_in_drone = torch.inverse(T_drone_in_world) @ T_pred_in_world
-        # print("Predicted transformation matrix in drone frame:")
-        # print(T_pred_in_drone)
-        # # print(T)
-
-        # target = torch.stack([*T_pred_in_drone[:3, 3], target_trajectory[0, 3]]).to(device) # target values
-        # print("Target values:", target)
-
         loss = torch.inf
         i = 0
 
@@ -556,7 +507,6 @@ if __name__ == "__main__":
             # ty_min=ty_min, ty_max=ty_max,
             # noise=False
             # )
-
             manipulated_image = project_patch(
                 patches=patch, 
                 T_matrices=T.unsqueeze(0),  # add batch dimension
@@ -614,6 +564,8 @@ if __name__ == "__main__":
                 # best_tx = tx.detach().clone()
                 # best_ty = ty.detach().clone()
                 best_setpoint = prediction[0].detach().clone()
+                # TODO: Drone shouldn't teleport itself
+                # best_T_drone_world = T_setpoint_world.clone().detach()
 
             # if i % 25 == 0:
             #     # print(f"Iteration {i}:")
@@ -631,6 +583,8 @@ if __name__ == "__main__":
 
             patch.data.clamp_(0., 1.)
             i += 1
+
+            
 
            
 
@@ -666,8 +620,8 @@ if __name__ == "__main__":
 
         
 
-        # T_drone_in_world = T_matrix(best_setpoint)
-        # all_drone_poses.append(best_setpoint.detach().cpu().numpy())
+        T_drone_in_world = T_matrix(best_setpoint)
+        all_drone_poses.append(best_setpoint.detach().cpu().numpy())
         
         
         # print(all_drone_poses)
