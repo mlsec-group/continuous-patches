@@ -15,6 +15,9 @@ import matplotlib.pyplot as plt
 def normalize_yaw_t(yaw):
     return torch.atan2(torch.sin(yaw), torch.cos(yaw))
 
+def normalize_yaw(yaw):
+    return np.atan2(np.sin(yaw), np.cos(yaw))
+
 def _perspective_grid(
 coeffs: list[float], 
 w: int, h: int, 
@@ -209,7 +212,6 @@ def calc_monitor_corners(drone_pose, projector_world, camera_extrinsic, camera_i
 
 
 def gen_target_trajectory(trajectory):
-    #TODO:
     if trajectory == 'square':
 
     # # Square corners (x, y) without z and yaw for now
