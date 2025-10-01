@@ -180,3 +180,6 @@ results/
 optimal/
 timeout*
 logs/
+random/
+black/
+white/

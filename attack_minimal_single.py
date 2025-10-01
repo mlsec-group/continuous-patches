@@ -343,10 +343,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-t', '--trajectory', type=str, choices=['figure8', 'square', 'circle', 'line_x', 'line_y'], default='figure8', help='Target Trajectory')
     parser.add_argument('--display_size', type=int, default=60, help='Size of the display in pixels (default: 60")')
-    parser.add_argument('--mode', type=str, choices=['random', 'idx'], default='idx', help='Mode to select image: random or specific index')
+    parser.add_argument('--patch_mode', type=str, choices=['optimal', 'timeout', 'black', 'white', 'random'], default='optimal', help='Mode to initialize the patch: optimal, timeout, black, white, random')
+    parser.add_argument('--pic_mode', type=str, choices=['random', 'idx'], default='idx', help='Mode to select image: random or specific index')
     parser.add_argument('--img_idx', type=int, default=0, help='Index of the image to use from the dataset')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
-    parser.add_argument('--timeout', type=int, default=None, help='Timeout for optimization step in seconds (default: None for no timeout, otherwise int Hz)')
+    parser.add_argument('--timeout', type=int, default=None, help='Timeout for optimization step in Hz (default: None for no timeout, otherwise int Hz)')
 
     args = parser.parse_args()
 
@@ -368,20 +369,22 @@ if __name__ == "__main__":
     print(len(dataset))
 
     #TODO: implement different modes: random, black patch, white patch
-    patch_mode = 'optimal'
+    patch_mode = args.patch_mode
+    directory = args.patch_mode
 
     projector_size = args.display_size
-    if isinstance(args.timeout, int) or isinstance(args.timeout, float):
+
+    if patch_mode =='timeout' and (isinstance(args.timeout, int) or isinstance(args.timeout, float)):
         timeout = 1 / args.timeout  # seconds
-        patch_mode = f'timeout_{args.timeout}Hz'
+        directory = f'timeout_{args.timeout}Hz'
     else:
         timeout = None
 
 
-    if args.mode == 'random':
-        output_dir = Path(f'{patch_mode}') / args.trajectory / f'{args.display_size}z' / f'random' / f'{args.seed}'
+    if args.pic_mode == 'random':
+        output_dir = Path(f'{directory}') / args.trajectory / f'{args.display_size}z' / f'random' / f'{args.seed}'
     else:
-        output_dir = Path(f'{patch_mode}') / args.trajectory / f'{args.display_size}z' / f'image_{args.img_idx}' / f'{args.seed}'
+        output_dir = Path(f'{directory}') / args.trajectory / f'{args.display_size}z' / f'image_{args.img_idx}' / f'{args.seed}'
     print(output_dir)
 
     os.makedirs(output_dir, exist_ok=True)
@@ -459,7 +462,7 @@ if __name__ == "__main__":
 
     for target_idx in trange(1, len(target_trajectory)):
 
-        if args.mode == 'random':
+        if args.pic_mode == 'random':
             img_idx = np.random.randint(0, len(dataset))
             
 
@@ -470,7 +473,15 @@ if __name__ == "__main__":
 
         target = target_trajectory[target_idx]
 
-        patch = torch.rand((1, 1, 45, 80), device=device, dtype=torch.float32, requires_grad=True)  # random patch
+        if patch_mode == 'black':
+            patch = torch.zeros((1, 1, 45, 80), device=device, dtype=torch.float32)
+        elif patch_mode == 'white':
+            patch = torch.ones((1, 1, 45, 80), device=device, dtype=torch.float32)
+        else:
+            patch = torch.rand((1, 1, 45, 80), device=device, dtype=torch.float32)  # random patch
+
+        if patch_mode == 'optimal' or patch_mode == 'timeout':
+            patch = patch.requires_grad_(True)
 
 
         monitor_corners = calc_monitor_corners(T_drone_in_world, projector_world, camera_extrinsic, camera_intrinsic)
@@ -490,55 +501,96 @@ if __name__ == "__main__":
         # print("Patch coordinates after transformation:")
         # print(check)
 
-        opt = torch.optim.Adam([patch], lr=1e-1)
-    
+        if patch_mode == 'optimal' or patch_mode == 'timeout':
 
-        
-        loss = torch.inf
-        i = 0
+            opt = torch.optim.Adam([patch], lr=1e-1)
+            
+            loss = torch.inf
+            i = 0
 
-        best_loss = torch.inf
-        best_patch = patch.clone()
-        
-        # best_sf = sf.clone()
-        # best_tx = tx.clone()
-        # best_ty = ty.clone()
-        best_setpoint = None
+            best_loss = torch.inf
+            best_patch = patch.clone()
+            
+            best_setpoint = None
 
-        time_start_optim_step = time.time()
+            time_start_optim_step = time.time()
 
-        while loss > 0.01 and i < 5000:
-            if timeout is not None and (time.time() - time_start_optim_step > timeout):  # 30 Hz
-                break
-            opt.zero_grad()
+            while loss > 0.01 and i < 5000:
+                if timeout is not None and (time.time() - time_start_optim_step > timeout):  # 30 Hz
+                    break
+                opt.zero_grad()
 
-            # with torch.no_grad():
-            #     sf_norm = single_norm(sf, scale_min, scale_max)
-            #     tx_max = (tx_min + monitor_width) - (sf_norm * 80.)
-            #     ty_max = (ty_min + monitor_height) - (sf_norm * 80.)  
 
-            # T = construct_T_matrix(
-            # sf=sf, tx=tx, ty=ty, 
-            # scale_min=scale_min, scale_max=scale_max, 
-            # tx_min=tx_min, tx_max=tx_max, 
-            # ty_min=ty_min, ty_max=ty_max,
-            # noise=False
-            # )
+                manipulated_image = project_patch(
+                    patches=patch, 
+                    T_matrices=T.unsqueeze(0),  # add batch dimension
+                    images=img
+                )
+
+                x, y, z, yaw = model(manipulated_image*255.)
+                # print("x, y, z, yaw:", x, y, z, yaw)
+                prediction = torch.stack([x, y, z, yaw])
+                prediction = prediction.squeeze(2).mT
+
+                T_pred_in_drone = T_matrix(prediction[0])
+                T_pred_in_world = T_drone_in_world @ T_pred_in_drone
+                # print("T_pred_in_world within loop:")
+                # print(T_pred_in_world)
+
+                target_yaw = normalize_yaw_t(prediction[0, 3])
+                T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
+                T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
+                # print("Direction in world within loop:")
+                # print(T_direction_world)
+
+                T_setpoint_world = T_direction_world @ T_pred_in_world
+               
+
+                prediction = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device).unsqueeze(0)  # prediction values
+
+                distance = torch.norm(prediction[0, :3] - target[:3], p=2)
+                angular_loss = 1 - torch.cos(normalize_yaw_t(prediction[0, 3]) - normalize_yaw_t(target[3]))
+
+                loss = distance + angular_loss
+
+                if loss < best_loss:
+                    best_loss = loss.detach().detach().clone()
+                    best_patch = patch.detach().clone()
+                    best_setpoint = prediction[0].detach().clone()
+
+                loss.backward()
+                opt.step()
+
+                patch.data.clamp_(0., 1.)
+                i += 1
+
+            np.save(output_dir / f'patch_{target_idx}.npy', best_patch.detach().cpu().numpy())
+
+            np.save(output_dir / f'T_{target_idx}.npy', T.detach().cpu().numpy())
+
+
+            with torch.no_grad():
+                manipulated_image = project_patch(
+                    patches=best_patch, 
+                    T_matrices=T.unsqueeze(0),  # add batch dimension
+                    images=img
+                )
+
+
+            print("Iterations needed: ", i)
+
+            T_drone_in_world = T_matrix(best_setpoint)
+            all_drone_poses.append(best_setpoint.detach().cpu().numpy())
+
+        else: # random, black, white
+            if patch_mode == 'random':
+                patch = torch.rand((1, 1, 45, 80), device=device, dtype=torch.float32)
+
             manipulated_image = project_patch(
-                patches=patch, 
-                T_matrices=T.unsqueeze(0),  # add batch dimension
-                images=img
-            )
-
-
-
-            # print("Manipulated image shape:", manipulated_image.shape)
-
-
-
-            # print(manipulated_image.min(), manipulated_image.max())
-
-
+                    patches=patch, 
+                    T_matrices=T.unsqueeze(0),  # add batch dimension
+                    images=img
+                )
             x, y, z, yaw = model(manipulated_image*255.)
             # print("x, y, z, yaw:", x, y, z, yaw)
             prediction = torch.stack([x, y, z, yaw])
@@ -556,89 +608,15 @@ if __name__ == "__main__":
             # print(T_direction_world)
 
             T_setpoint_world = T_direction_world @ T_pred_in_world
-            # print("Setpoint world transformation matrix within loop:")
-            # print(T_setpoint_world)
-            # target = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device)
             
 
             prediction = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device).unsqueeze(0)  # prediction values
+            best_setpoint = prediction[0].detach().clone()
+            np.save(output_dir / f'T_{target_idx}.npy', T.detach().cpu().numpy())
 
+            T_drone_in_world = T_setpoint_world.clone()
+            all_drone_poses.append(best_setpoint.detach().cpu().numpy())
 
-
-            # print("Prediction: ", prediction)
-
-            # target = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device, dtype=torch.float32)  # target values
-
-            distance = torch.norm(prediction[0, :3] - target[:3], p=2)
-            angular_loss = 1 - torch.cos(normalize_yaw_t(prediction[0, 3]) - normalize_yaw_t(target[3]))
-
-            loss = distance + angular_loss
-
-            if loss < best_loss:
-                best_loss = loss.detach().detach().clone()
-                best_patch = patch.detach().clone()
-                # best_sf = sf.detach().clone()
-                # best_tx = tx.detach().clone()
-                # best_ty = ty.detach().clone()
-                best_setpoint = prediction[0].detach().clone()
-                # TODO: Drone shouldn't teleport itself
-                # best_T_drone_world = T_setpoint_world.clone().detach()
-
-            # if i % 25 == 0:
-            #     # print(f"Iteration {i}:")
-            #     # print("Scale factor: ", sf.item())
-            #     # print("Translation x: ", tx.item())
-            #     # print("Translation y: ", ty.item())
-
-            #     print("Prediction: ", prediction.detach().cpu().numpy())
-            #     print("Loss: ", loss.detach().cpu().item())
-                # print('tx, ty:', tx.item(), ty.item())
-            # print("Loss: ", loss.detach().cpu().item())
-
-            loss.backward()
-            opt.step()
-
-            patch.data.clamp_(0., 1.)
-            i += 1
-
-            
-
-           
-
-
-        # sf_norm = single_norm(best_sf, scale_min, scale_max)
-        # tx_max = (tx_min + monitor_width) - (sf_norm * 80.)
-        # ty_max = (ty_min + monitor_height) - (sf_norm * 80.)
-
-
-
-        np.save(output_dir / f'patch_{target_idx}.npy', best_patch.detach().cpu().numpy())
-        # T = construct_T_matrix(
-        #     sf=best_sf, tx=best_tx, ty=best_ty, 
-        #     scale_min=scale_min, scale_max=scale_max, 
-        #     tx_min=tx_min, tx_max=tx_max, 
-        #     ty_min=ty_min, ty_max=ty_max,
-        #     noise=False
-        # )
-        np.save(output_dir / f'T_{target_idx}.npy', T.detach().cpu().numpy())
-        # print(scale_min, scale_max, tx_min, tx_max, ty_min, ty_max)
-        # limit = np.array([scale_min, scale_max.detach().cpu().item(), tx_min.detach().cpu().item(), tx_max.detach().cpu().item(), ty_min.detach().cpu().item(), ty_max.detach().cpu().item()])
-        # np.save(output_dir / f'limits_{target_idx}.npy', limit)
-
-        # print("T: ", T)
-
-        with torch.no_grad():
-            manipulated_image = project_patch(
-                patches=best_patch, 
-                T_matrices=T.unsqueeze(0),  # add batch dimension
-                images=img
-            )
-
-
-        
-
-        T_drone_in_world = T_matrix(best_setpoint)
-        all_drone_poses.append(best_setpoint.detach().cpu().numpy())
         
         
         # print(all_drone_poses)
@@ -646,8 +624,6 @@ if __name__ == "__main__":
         print("Current drone pose: ", best_setpoint)
         print("Target pose that was to be reached: ", target)
         
-
-        print("Iterations needed: ", i)
         fig, axs = plt.subplots(1, 2)
         axs[0].imshow(manipulated_image[0, 0].detach().cpu().numpy(), cmap='gray')
         # plt.plot(monitor_corners[:, 0], monitor_corners[:, 1], 'r--', label='Monitor corners')
