@@ -5,6 +5,7 @@ import os
 
 from tqdm import trange
 
+import time
 
 from util import load_model, load_dataset
 
@@ -345,6 +346,7 @@ if __name__ == "__main__":
     parser.add_argument('--mode', type=str, choices=['random', 'idx'], default='idx', help='Mode to select image: random or specific index')
     parser.add_argument('--img_idx', type=int, default=0, help='Index of the image to use from the dataset')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
+    parser.add_argument('--timeout', type=int, default=None, help='Timeout for optimization step in seconds (default: None for no timeout, otherwise int Hz)')
 
     args = parser.parse_args()
 
@@ -365,15 +367,26 @@ if __name__ == "__main__":
 
     print(len(dataset))
 
-    if args.mode == 'random':
-        output_dir = Path(args.trajectory) / f'{args.display_size}z' / f'random' / f'{args.seed}'
+    #TODO: implement different modes: random, black patch, white patch
+    patch_mode = 'optimal'
+
+    projector_size = args.display_size
+    if isinstance(args.timeout, int) or isinstance(args.timeout, float):
+        timeout = 1 / args.timeout  # seconds
+        patch_mode = f'timeout_{args.timeout}Hz'
     else:
-        output_dir = Path(args.trajectory) / f'{args.display_size}z' / f'image_{args.img_idx}' / f'{args.seed}'
+        timeout = None
+
+
+    if args.mode == 'random':
+        output_dir = Path(f'{patch_mode}') / args.trajectory / f'{args.display_size}z' / f'random' / f'{args.seed}'
+    else:
+        output_dir = Path(f'{patch_mode}') / args.trajectory / f'{args.display_size}z' / f'image_{args.img_idx}' / f'{args.seed}'
     print(output_dir)
 
     os.makedirs(output_dir, exist_ok=True)
 
-    projector_size = args.display_size
+
 
 
 
@@ -492,9 +505,11 @@ if __name__ == "__main__":
         # best_ty = ty.clone()
         best_setpoint = None
 
-        # time_start_optim = time.time()
+        time_start_optim_step = time.time()
 
         while loss > 0.01 and i < 5000:
+            if timeout is not None and (time.time() - time_start_optim_step > timeout):  # 30 Hz
+                break
             opt.zero_grad()
 
             # with torch.no_grad():
