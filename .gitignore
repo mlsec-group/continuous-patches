@@ -177,3 +177,6 @@ results/
 *.pickle
 *.pt
 *.png
+optimal/
+timeout*
+logs/
