@@ -1,7 +1,8 @@
 #!/bin/bash
 #SBATCH --partition=cpu-9m
 
-PATCH_MODES=("optimal" "timeout" "black" "white" "random")
+PATCH_MODES=("optimal" "timeout" "random" "black" "white")
+TEMPERATURES=("warm" "cold")
 TRAJECTORIES=("figure8" "square" "circle" "line_x" "line_y")
 DISPLAY_SIZES=(30 60 90 120)
 PIC_MODES=("idx" "random")
@@ -20,13 +21,14 @@ submit_job() {
     local IMG_IDX=$5
     local SEED=$6
     local TIMEOUT=$7
+    local TEMP=$8
 
-    sbatch --export=ALL,PATCH_MODE=${PATCH_MODE},TRAJ=${TRAJ},DISPLAY_SIZE=${DISPLAY_SIZE},IMG_IDX=${IMG_IDX},SEED=${SEED},TIMEOUT=${TIMEOUT} \
-           --output=${LOG_DIR}/job_${TRAJ}_${DISPLAY_SIZE}_${PIC_MODE}_seed_${SEED}_img_${IMG_IDX}.out \
-           --error=${LOG_DIR}/job_${TRAJ}_${DISPLAY_SIZE}_${PIC_MODE}_seed_${SEED}_img_${IMG_IDX}.err <<EOF
+    sbatch --export=ALL,PATCH_MODE=${PATCH_MODE},TRAJ=${TRAJ},DISPLAY_SIZE=${DISPLAY_SIZE},IMG_IDX=${IMG_IDX},SEED=${SEED},TIMEOUT=${TIMEOUT},TEMP=${TEMP} \
+           --output=${LOG_DIR}/job_${TRAJ}_${DISPLAY_SIZE}_${PIC_MODE}_seed_${SEED}_img_${IMG_IDX}_temp_${TEMP}.out \
+           --error=${LOG_DIR}/job_${TRAJ}_${DISPLAY_SIZE}_${PIC_MODE}_seed_${SEED}_img_${IMG_IDX}_temp_${TEMP}.err <<EOF
 #!/bin/bash
 #SBATCH --partition=cpu-9m
-apptainer run --nv /home/piha/container.sif python attack_minimal_single.py -t "${TRAJ}" --patch_mode "${PATCH_MODE}" --display_size "${DISPLAY_SIZE}" --seed "${SEED}" --pic_mode "${PIC_MODE}" --img_idx "${IMG_IDX}" --timeout "${TIMEOUT}"
+apptainer run --nv /home/piha/container.sif python attack_minimal_single.py -t "${TRAJ}" --patch_mode "${PATCH_MODE}" --display_size "${DISPLAY_SIZE}" --seed "${SEED}" --pic_mode "${PIC_MODE}" --img_idx "${IMG_IDX}" --timeout "${TIMEOUT}" --temperature "${TEMP}"
 EOF
 }
 
@@ -39,24 +41,33 @@ for PATCH_MODE in "${PATCH_MODES[@]}"; do
         TIMEOUT_LIST=("0")
     fi
 
+    # Determine if TEMPERATURES should be included
+    if [ "${PATCH_MODE}" = "optimal" ] || [ "${PATCH_MODE}" = "timeout" ]; then
+        TEMP_LIST=("${TEMPERATURES[@]}")
+    else
+        TEMP_LIST=("cold")
+    fi
+
     for TRAJ in "${TRAJECTORIES[@]}"; do
         for DISPLAY_SIZE in "${DISPLAY_SIZES[@]}"; do
             for PIC_MODE in "${PIC_MODES[@]}"; do
                 for TIMEOUT in "${TIMEOUT_LIST[@]}"; do
-                    # Handle 'random' mode
-                    if [ "${PIC_MODE}" = "random" ]; then
-                        IMG_IDX=0
-                        for SEED in $(seq 0 9); do
-                            submit_job "${PATCH_MODE}" "${TRAJ}" "${DISPLAY_SIZE}" "${PIC_MODE}" "${IMG_IDX}" "${SEED}" "${TIMEOUT}"
-                        done
-                    # Handle 'idx' mode
-                    elif [ "${PIC_MODE}" = "idx" ]; then
-                        for IMG_IDX in 505 4847 3059 1860 3205 4861 2613 2309 5431 2847; do
+                    for TEMP in "${TEMP_LIST[@]}"; do
+                        # Handle 'random' mode
+                        if [ "${PIC_MODE}" = "random" ]; then
+                            IMG_IDX=0
                             for SEED in $(seq 0 9); do
-                                submit_job "${PATCH_MODE}" "${TRAJ}" "${DISPLAY_SIZE}" "${PIC_MODE}" "${IMG_IDX}" "${SEED}" "${TIMEOUT}"
+                                submit_job "${PATCH_MODE}" "${TRAJ}" "${DISPLAY_SIZE}" "${PIC_MODE}" "${IMG_IDX}" "${SEED}" "${TIMEOUT}" "${TEMP}"
                             done
-                        done
-                    fi
+                        # Handle 'idx' mode
+                        elif [ "${PIC_MODE}" = "idx" ]; then
+                            for IMG_IDX in 505 4847 3059 1860 3205 4861 2613 2309 5431 2847; do
+                                for SEED in $(seq 0 9); do
+                                    submit_job "${PATCH_MODE}" "${TRAJ}" "${DISPLAY_SIZE}" "${PIC_MODE}" "${IMG_IDX}" "${SEED}" "${TIMEOUT}" "${TEMP}"
+                                done
+                            done
+                        fi
+                    done
                 done
             done
         done

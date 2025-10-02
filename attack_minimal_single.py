@@ -344,6 +344,7 @@ if __name__ == "__main__":
     parser.add_argument('-t', '--trajectory', type=str, choices=['figure8', 'square', 'circle', 'line_x', 'line_y'], default='figure8', help='Target Trajectory')
     parser.add_argument('--display_size', type=int, default=60, help='Size of the display in pixels (default: 60")')
     parser.add_argument('--patch_mode', type=str, choices=['optimal', 'timeout', 'black', 'white', 'random'], default='optimal', help='Mode to initialize the patch: optimal, timeout, black, white, random')
+    parser.add_argument('--temperature', type=str, choices=['warm', 'cold', 'none'], default='cold', help='Either restart from random patch (cold) or from the last patch (warm)')
     parser.add_argument('--pic_mode', type=str, choices=['random', 'idx'], default='idx', help='Mode to select image: random or specific index')
     parser.add_argument('--img_idx', type=int, default=0, help='Index of the image to use from the dataset')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
@@ -382,8 +383,12 @@ if __name__ == "__main__":
 
 
     if args.pic_mode == 'random':
+        if patch_mode == 'optimal' or patch_mode == 'timeout':
+            directory = f'{directory}/{args.temperature}'
         output_dir = Path(f'{directory}') / args.trajectory / f'{args.display_size}z' / f'random' / f'{args.seed}'
     else:
+        if patch_mode == 'optimal' or patch_mode == 'timeout':
+            directory = f'{directory}/{args.temperature}'
         output_dir = Path(f'{directory}') / args.trajectory / f'{args.display_size}z' / f'image_{args.img_idx}' / f'{args.seed}'
     print(output_dir)
 
@@ -502,6 +507,9 @@ if __name__ == "__main__":
         # print(check)
 
         if patch_mode == 'optimal' or patch_mode == 'timeout':
+
+            if args.temperature == 'warm' and target_idx > 1:
+                patch = best_patch.clone().detach().requires_grad_(True)
 
             opt = torch.optim.Adam([patch], lr=1e-1)
             
