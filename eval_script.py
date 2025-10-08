@@ -2,8 +2,10 @@ import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from attack_minimal_single import gen_target_trajectory, normalize_yaw
+import argparse
 
 MODES = ['optimal/cold', 'optimal/warm', 'timeout_10Hz/cold', 
          'timeout_10Hz/warm', 'timeout_20Hz/cold', 'timeout_20Hz/warm', 
@@ -22,7 +24,7 @@ def angular_error(a, b):
     return angular_loss
 
 
-def gen_data(mode):
+def gen_data(mode, recalculate=False):
     for trajectory in tqdm(TRAJECTORIES):
         target_trajectory = gen_target_trajectory(trajectory).detach().cpu().numpy()
 
@@ -48,7 +50,7 @@ def gen_data(mode):
                     poses_fp = f'{seed_dir}/all_drone_poses.npy'
 
                     # Load distances if present, otherwise compute them (if poses exist)
-                    if os.path.exists(distances_fp):
+                    if not recalculate and os.path.exists(distances_fp):
                         distances = np.load(distances_fp)
                     else:
                         if not os.path.exists(poses_fp):
@@ -62,13 +64,13 @@ def gen_data(mode):
                         np.save(distances_fp, distances)
 
                     # Per-seed stats: load if exist, else compute and save
-                    if os.path.exists(mean_fp):
+                    if not recalculate and os.path.exists(mean_fp):
                         mean_d = float(np.load(mean_fp))
                     else:
                         mean_d = float(np.mean(distances))
                         np.save(mean_fp, np.array(mean_d))
 
-                    if os.path.exists(std_fp):
+                    if not recalculate and os.path.exists(std_fp):
                         std_d = float(np.load(std_fp))
                     else:
                         std_d = float(np.std(distances))
@@ -84,13 +86,13 @@ def gen_data(mode):
 
                 agg_mean_fp = f'{path}/mean_distance_over_seeds.npy'
                 agg_std_fp = f'{path}/std_distance_over_seeds.npy'
-                if not os.path.exists(agg_mean_fp):
+                if recalculate or not os.path.exists(agg_mean_fp):
                     np.save(agg_mean_fp, np.array(np.mean(mean_distance_per_seed)))
-                if not os.path.exists(agg_std_fp):
+                if recalculate or not os.path.exists(agg_std_fp):
                     np.save(agg_std_fp, np.array(np.std(mean_distance_per_seed)))
 
 
-def gen_plot_per_image(mode, trajectory, monitor_size, img_idx):
+def gen_plot_per_image(mode, trajectory, monitor_size, img_idx, recalculate=False):
     if img_idx == 'random':
         path = f'{mode}/{trajectory}/{monitor_size}z/random'
     else:
@@ -109,7 +111,7 @@ def gen_plot_per_image(mode, trajectory, monitor_size, img_idx):
     # Save per-timestep mean/std across seeds if missing
     mean_over_seeds_per_timestep_fp = f'{path}/mean_over_seeds_per_timestep.npy'
     std_over_seeds_per_timestep_fp = f'{path}/std_over_seeds_per_timestep.npy'
-    if not os.path.exists(mean_over_seeds_per_timestep_fp) or not os.path.exists(std_over_seeds_per_timestep_fp):
+    if recalculate or not os.path.exists(mean_over_seeds_per_timestep_fp) or not os.path.exists(std_over_seeds_per_timestep_fp):
         mean_over_seeds_per_timestep = all_distances.mean(axis=0)
         std_over_seeds_per_timestep = all_distances.std(axis=0)
         np.save(mean_over_seeds_per_timestep_fp, mean_over_seeds_per_timestep)
@@ -118,7 +120,7 @@ def gen_plot_per_image(mode, trajectory, monitor_size, img_idx):
     # Save per-seed mean/std over time if missing
     per_seed_mean_over_time_fp = f'{path}/per_seed_mean_over_time.npy'
     per_seed_std_over_time_fp = f'{path}/per_seed_std_over_time.npy'
-    if not os.path.exists(per_seed_mean_over_time_fp) or not os.path.exists(per_seed_std_over_time_fp):
+    if recalculate or not os.path.exists(per_seed_mean_over_time_fp) or not os.path.exists(per_seed_std_over_time_fp):
         per_seed_mean_over_time = all_distances.mean(axis=1)
         per_seed_std_over_time = all_distances.std(axis=1)
         np.save(per_seed_mean_over_time_fp, per_seed_mean_over_time)
@@ -126,7 +128,7 @@ def gen_plot_per_image(mode, trajectory, monitor_size, img_idx):
 
     # Plot only if missing
     plot_fp = f'{path}/distance_plot.png'
-    if not os.path.exists(plot_fp):
+    if recalculate or not os.path.exists(plot_fp):
         plt.figure(figsize=(10, 6))
         for i in range(all_distances.shape[0]):
             plt.plot(all_distances[i], label=f'Seed {i}')
@@ -141,11 +143,11 @@ def gen_plot_per_image(mode, trajectory, monitor_size, img_idx):
     return all_distances
 
 
-def gen_plot_per_monitor_size(mode, trajectory, monitor_size):
+def gen_plot_per_monitor_size(mode, trajectory, monitor_size, recalculate=False):
     distances_per_size = []
     img_labels = []
     for img_idx in IMG_IDX:
-        distances = gen_plot_per_image(mode, trajectory, monitor_size, img_idx)  # [seed, timestep]
+        distances = gen_plot_per_image(mode, trajectory, monitor_size, img_idx, recalculate=recalculate)  # [seed, timestep]
         if distances.size == 0:
             continue
         distances_per_size.append(np.mean(distances, axis=0))  # mean over seeds -> curve per image
@@ -159,7 +161,7 @@ def gen_plot_per_monitor_size(mode, trajectory, monitor_size):
     # Save per-timestep mean/std across images if missing
     per_timestep_mean_fp = f'{out_dir}/per_timestep_mean_over_images.npy'
     per_timestep_std_fp = f'{out_dir}/per_timestep_std_over_images.npy'
-    if not os.path.exists(per_timestep_mean_fp) or not os.path.exists(per_timestep_std_fp):
+    if recalculate or not os.path.exists(per_timestep_mean_fp) or not os.path.exists(per_timestep_std_fp):
         if distances_per_size.size > 0:
             np.save(per_timestep_mean_fp, distances_per_size.mean(axis=0))
             np.save(per_timestep_std_fp, distances_per_size.std(axis=0))
@@ -167,7 +169,7 @@ def gen_plot_per_monitor_size(mode, trajectory, monitor_size):
     # Save per-image mean/std over time if missing
     per_image_mean_fp = f'{out_dir}/per_image_mean_over_time.npy'
     per_image_std_fp = f'{out_dir}/per_image_std_over_time.npy'
-    if not os.path.exists(per_image_mean_fp) or not os.path.exists(per_image_std_fp):
+    if recalculate or not os.path.exists(per_image_mean_fp) or not os.path.exists(per_image_std_fp):
         if distances_per_size.size > 0:
             np.save(per_image_mean_fp, distances_per_size.mean(axis=1))
             np.save(per_image_std_fp, distances_per_size.std(axis=1))
@@ -175,14 +177,14 @@ def gen_plot_per_monitor_size(mode, trajectory, monitor_size):
     # Save overall mean/std if missing
     overall_mean_fp = f'{out_dir}/overall_mean.npy'
     overall_std_fp = f'{out_dir}/overall_std.npy'
-    if not os.path.exists(overall_mean_fp) or not os.path.exists(overall_std_fp):
+    if recalculate or not os.path.exists(overall_mean_fp) or not os.path.exists(overall_std_fp):
         if distances_per_size.size > 0:
             np.save(overall_mean_fp, np.array(distances_per_size.mean()))
             np.save(overall_std_fp, np.array(distances_per_size.std()))
 
     # Violin plot of the per-image curves only if missing
     violin_fp = f'{out_dir}/mean_distance_violin_plot.png'
-    if not os.path.exists(violin_fp) and distances_per_size.size > 0:
+    if recalculate or not os.path.exists(violin_fp) and distances_per_size.size > 0:
         plt.figure(figsize=(10, 7))
         plt.violinplot(distances_per_size.T, showmeans=True)
         plt.xlabel('Image Index')
@@ -374,82 +376,154 @@ def write_all_modes_latex_table(all_mode_means, all_mode_stds, decimals=3, outfi
         f.write(tex)
 
 
-if __name__ == "__main__":
+def gen_angular_errors(all_drone_poses, target_trajectory):
+    return np.array([
+        angular_error(all_drone_poses[j], target_trajectory[j])
+        for j in range(len(target_trajectory))
+    ])
 
-    # gen_data('random')
-   
-    all_mode_means = {}
-    all_mode_stds = {}
-
-    for mode in tqdm(MODES):
-
-        try:
-            # Compute missing distances/stats only; load existing where present
-            gen_data(mode)
-        except Exception as e:
-            print(f"Error generating data for mode {mode}: {e}")
-            continue
+def process_mode(mode, recalculate):
+    try:
+        gen_data(mode, recalculate=recalculate)
 
         distances_per_trajectory = []
+        angular_errors_per_trajectory = []
         for trajectory in TRAJECTORIES:
             traj_dir = f'{mode}/{trajectory}'
             os.makedirs(traj_dir, exist_ok=True)
 
             cached_ms_fp = f'{traj_dir}/mean_distance_per_monitor_size.npy'
-            if os.path.exists(cached_ms_fp):
+            cached_angular_fp = f'{traj_dir}/mean_angular_error_per_monitor_size.npy'
+            if not recalculate and os.path.exists(cached_ms_fp) and os.path.exists(cached_angular_fp):
                 mean_per_monitor_size = np.load(cached_ms_fp, allow_pickle=False)
+                mean_angular_per_monitor_size = np.load(cached_angular_fp, allow_pickle=False)
             else:
                 mean_per_monitor_size = []
+                mean_angular_per_monitor_size = []
                 for monitor_size in MONITOR_SIZES:
-                    distance_per_size = gen_plot_per_monitor_size(mode, trajectory, monitor_size)
+                    distance_per_size = gen_plot_per_monitor_size(mode, trajectory, monitor_size, recalculate=recalculate)
                     mean_per_monitor_size.append(distance_per_size)
+
+                    # Generate angular errors
+                    angular_errors = []
+                    for img_idx in IMG_IDX:
+                        if img_idx == 'random':
+                            path = f'{mode}/{trajectory}/{monitor_size}z/random'
+                        else:
+                            path = f'{mode}/{trajectory}/{monitor_size}z/image_{img_idx}'
+                        poses_fp = f'{path}/all_drone_poses.npy'
+                        if os.path.exists(poses_fp):
+                            all_drone_poses = np.load(poses_fp)
+                            target_trajectory = gen_target_trajectory(trajectory).detach().cpu().numpy()
+                            angular_errors.append(gen_angular_errors(all_drone_poses, target_trajectory))
+                    if angular_errors:
+                        mean_angular_errors = np.mean(angular_errors, axis=0)
+                        mean_angular_per_monitor_size.append(mean_angular_errors)
+
                 mean_per_monitor_size = np.array(mean_per_monitor_size)
+                mean_angular_per_monitor_size = np.array(mean_angular_per_monitor_size)
                 np.save(cached_ms_fp, mean_per_monitor_size)
+                np.save(cached_angular_fp, mean_angular_per_monitor_size)
 
             distances_per_trajectory.append(mean_per_monitor_size)
+            angular_errors_per_trajectory.append(mean_angular_per_monitor_size)
 
-        distances_per_trajectory = np.array(distances_per_trajectory) # [traj, ms, img, timestep]
+        distances_per_trajectory = np.array(distances_per_trajectory)  # [traj, ms, img, timestep]
+        angular_errors_per_trajectory = np.array(angular_errors_per_trajectory)  # [traj, ms, img, timestep]
 
-        # Per-mode summary matrices for the mega table
         mode_means = np.mean(distances_per_trajectory, axis=(2, 3))  # [traj, ms]
-        mode_stds  = np.std(distances_per_trajectory, axis=(2, 3))   # [traj, ms]
-        all_mode_means[mode] = mode_means
-        all_mode_stds[mode] = mode_stds
+        mode_stds = np.std(distances_per_trajectory, axis=(2, 3))   # [traj, ms]
 
-        # Create the violin plot for each trajectory (under mode root) only if missing
+        mode_angular_means = np.mean(angular_errors_per_trajectory, axis=(2, 3))  # [traj, ms]
+        mode_angular_stds = np.std(angular_errors_per_trajectory, axis=(2, 3))   # [traj, ms]
+
+        # Generate violin plots for distances and angular errors
         mode_violin_fp = f'{mode}/all_trajectories_mean_distance_violin_plot.png'
-        if not os.path.exists(mode_violin_fp):
+        mode_angular_violin_fp = f'{mode}/all_trajectories_mean_angular_errors_violin_plot.png'
+        if not os.path.exists(mode_violin_fp) or not os.path.exists(mode_angular_violin_fp):
             os.makedirs(mode, exist_ok=True)
             plt.figure(figsize=(15, 10))
             y_min, y_max = float('inf'), float('-inf')
+            angular_y_min, angular_y_max = float('inf'), float('-inf')
             for i, trajectory in enumerate(TRAJECTORIES):
                 data = np.mean(distances_per_trajectory[i], axis=1).T
+                angular_data = np.mean(angular_errors_per_trajectory[i], axis=1).T
                 if data.size > 0:
                     y_min = min(y_min, data.min())
                     y_max = max(y_max, data.max())
+                if angular_data.size > 0:
+                    angular_y_min = min(angular_y_min, angular_data.min())
+                    angular_y_max = max(angular_y_max, angular_data.max())
             for i, trajectory in enumerate(TRAJECTORIES):
                 plt.subplot(2, 3, i+1)
                 data = np.mean(distances_per_trajectory[i], axis=1).T
                 if data.size > 0:
                     plt.violinplot(data, showmeans=True)
                 plt.xlabel('Monitor Size')
-                plt.xticks(ticks=range(1, len(MONITOR_SIZES) + 1), 
-                        labels=MONITOR_SIZES)
+                plt.xticks(ticks=range(1, len(MONITOR_SIZES) + 1), labels=MONITOR_SIZES)
                 plt.ylabel('Mean Euclidean Distance to Target')
                 plt.title(f'{trajectory} Trajectory')
                 if y_min < y_max:
-                    plt.ylim(y_min, y_max+1.)
+                    plt.ylim(y_min, y_max + 1.)
                 plt.grid()
             plt.tight_layout()
             plt.savefig(mode_violin_fp)
             plt.close()
 
-        # Aggregated plots and tables (each function internally skips if outputs exist)
+            plt.figure(figsize=(15, 10))
+            for i, trajectory in enumerate(TRAJECTORIES):
+                plt.subplot(2, 3, i+1)
+                angular_data = np.mean(angular_errors_per_trajectory[i], axis=1).T
+                if angular_data.size > 0:
+                    plt.violinplot(angular_data, showmeans=True)
+                plt.xlabel('Monitor Size')
+                plt.xticks(ticks=range(1, len(MONITOR_SIZES) + 1), labels=MONITOR_SIZES)
+                plt.ylabel('Mean Angular Error')
+                plt.title(f'{trajectory} Trajectory')
+                if angular_y_min < angular_y_max:
+                    plt.ylim(angular_y_min, angular_y_max + 1.)
+                plt.grid()
+            plt.tight_layout()
+            plt.savefig(mode_angular_violin_fp)
+            plt.close()
+
         plot_mean_per_monitor_size_per_trajectory(mode, distances_per_trajectory)
         plot_mean_per_trajectory(mode, distances_per_trajectory)
         write_latex_table(mode, distances_per_trajectory)
 
-    # Write the mega table across all modes at the repo root
+        return mode, mode_means, mode_stds, mode_angular_means, mode_angular_stds
+    except Exception as e:
+        print(f"Error processing mode {mode}: {e}")
+        return mode, None, None, None, None
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Evaluate and generate plots for drone trajectories.")
+    parser.add_argument("--recalculate", action="store_true", help="Force recalculation of all data and plots.")
+    args = parser.parse_args()
+
+    recalculate = args.recalculate
+
+    all_mode_means = {}
+    all_mode_stds = {}
+    all_mode_angular_means = {}
+    all_mode_angular_stds = {}
+
+    with ProcessPoolExecutor() as executor:
+        futures = {executor.submit(process_mode, mode, recalculate): mode for mode in MODES}
+        for future in tqdm(as_completed(futures), total=len(futures)):
+            mode = futures[future]
+            try:
+                mode, mode_means, mode_stds, mode_angular_means, mode_angular_stds = future.result()
+                if mode_means is not None and mode_stds is not None:
+                    all_mode_means[mode] = mode_means
+                    all_mode_stds[mode] = mode_stds
+                if mode_angular_means is not None and mode_angular_stds is not None:
+                    all_mode_angular_means[mode] = mode_angular_means
+                    all_mode_angular_stds[mode] = mode_angular_stds
+            except Exception as e:
+                print(f"Error in parallel processing for mode {mode}: {e}")
+
     write_all_modes_latex_table(all_mode_means, all_mode_stds, decimals=3, outfile='mean_std_distance_all_modes_table.tex')
+    write_all_modes_latex_table(all_mode_angular_means, all_mode_angular_stds, decimals=3, outfile='mean_std_angular_error_all_modes_table.tex')
 
 
