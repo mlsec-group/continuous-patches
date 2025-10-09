@@ -249,7 +249,7 @@ def gen_target_trajectory(trajectory):
         z = np.ones((points.shape[0],))  # Create z with shape (20,)
         yaw = np.zeros((points.shape[0],))  # Create yaw with shape (20,)
         waypoints = np.hstack((points, z[:, None], yaw[:, None]))  # Stack points, z, and yaw to get shape (20, 4)
-        print(waypoints.shape)
+        # print(waypoints.shape)
 
         return torch.tensor(waypoints, dtype=torch.float32)
 

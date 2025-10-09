@@ -9,7 +9,7 @@ import argparse
 
 MODES = ['optimal/cold', 'optimal/warm', 'timeout_10Hz/cold', 
          'timeout_10Hz/warm', 'timeout_20Hz/cold', 'timeout_20Hz/warm', 
-         'timeout_30Hz/cold', 'timeout_30Hz/warm', 'white', 'black', 'random']
+         'timeout_30Hz/cold', 'timeout_30Hz/warm', 'white', 'black', 'random', 'fap']
 MONITOR_SIZES = [30, 60, 90, 120]
 IMG_IDX = [505, 4847, 3059, 1860, 3205, 4861, 2613, 2309, 5431, 2847, 'random']
 TRAJECTORIES = ["figure8", "square", "circle", "line_y", "line_x"]
