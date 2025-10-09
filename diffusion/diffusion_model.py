@@ -5,6 +5,7 @@ from typing import Callable, Optional
 import numpy as np
 
 from tqdm import trange
+import os
 
 # source for UNet: https://github.com/jbergq/simple-diffusion-model/
 
@@ -296,7 +297,7 @@ class DiffusionModel():
         return D_x
     
     def train(self, data_loader: torch.utils.data.DataLoader, device: torch.device, nepochs: int = 10):
-        P_mean = 1.2
+        P_mean = -1.2
         P_std = 1.2
         p_unconditioned = 0.1
 
@@ -330,6 +331,11 @@ class DiffusionModel():
                 mean_loss = np.mean(np.array(losses))
                 losses = []
                 print("Epoch %d,\t Loss %f " % (epoch+1, mean_loss))
+
+            if (epoch+1) % 1000 == 0:
+                print("Saving checkpoint...")
+                os.mkdirs('results/diffusion_training/checkpoints/', exist_ok=True)
+                model.save(f'results/diffusion_training/checkpoints/checkpoint_epoch_{epoch+1}.pth')
 
         return all_losses
 

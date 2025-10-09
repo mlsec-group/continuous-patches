@@ -27,6 +27,47 @@ import glob
 
 DEBUG_GRAD = False
 
+
+
+def bb2camera(bbox, intrinsic, dist_coeffs):
+    fx = np.array(intrinsic)[0][0]
+    fy = np.array(intrinsic)[1][1]
+    ox = np.array(intrinsic)[0][2]
+    oy = np.array(intrinsic)[1][2]
+    
+    ul_image = np.array([bbox[0], bbox[1]], dtype=np.float32)
+    ur_image = np.array([bbox[2], bbox[1]], dtype=np.float32)
+    ll_image = np.array([bbox[0], bbox[3]], dtype=np.float32)
+    lr_image = np.array([bbox[2], bbox[3]], dtype=np.float32)
+    center_image = np.array([(ul_image[0] + lr_image[0])/2, (ul_image[1] + lr_image[1])/2], dtype=np.float32)
+    
+
+    ul_camera = np.array([(ul_image[0]-ox)/fx, (ul_image[1]-oy)/fy, 1.0], dtype=np.float32)
+    ur_camera = np.array([(ur_image[0]-ox)/fx, (ur_image[1]-oy)/fy, 1.0], dtype=np.float32)
+    ll_camera = np.array([(ll_image[0]-ox)/fx, (ll_image[1]-oy)/fy, 1.0], dtype=np.float32)
+    lr_camera = np.array([(lr_image[0]-ox)/fx, (lr_image[1]-oy)/fy, 1.0], dtype=np.float32)
+    center_camera = np.array([(center_image[0]-ox)/fx, (center_image[1]-oy)/fy, 1.0], dtype=np.float32)
+
+
+    ul_camera_norm = ul_camera / np.linalg.norm(ul_camera)
+    ur_camera_norm = ur_camera / np.linalg.norm(ur_camera)
+    ll_camera_norm = ll_camera / np.linalg.norm(ll_camera)
+    lr_camera_norm = lr_camera / np.linalg.norm(lr_camera)
+    center_camera_norm = center_camera / np.linalg.norm(center_camera)
+    
+    center_camera = np.array([0., 0., 0.])
+    
+    return center_camera, ul_camera_norm, ur_camera_norm, ll_camera_norm, lr_camera_norm, center_camera_norm
+
+def line_plane_intersection(plane_normal, plane_point, ray_direction, ray_point, epsilon=1e-6):
+    ndotu = plane_normal.dot(ray_direction)
+    if abs(ndotu) < epsilon:
+        raise RuntimeError("No intersection or line is within plane")
+    w = ray_point - plane_point
+    si = -plane_normal.dot(w) / ndotu
+    Psi = w + si * ray_direction + plane_point
+    return Psi
+
 def scale_tx_ty(sf, tx, ty, patch_size=80, image_size=(96, 160)):
     scaled_patch_size = patch_size * sf
     max_tx = image_size[1] - scaled_patch_size

@@ -468,7 +468,7 @@ def calc_eval_loss(dataset, patch, transformation_matrix, model, target, model_n
             batch, _ = data
             batch = batch.to(patch.device) / 255. # limit images to range [0-1]
 
-            mod_img = place_patch(batch, patch, transformation_matrix)
+            mod_img = place_patch(batch, patch, transformation_matrix, random_perspection=False)
             mod_img *= 255. # convert input images back to range [0-255.]
             mod_img.clamp_(0., 255.)
             if quantized:
