@@ -7,7 +7,7 @@ from tqdm import trange
 
 import time
 
-from util import load_model, load_dataset
+from util import load_dataset
 
 from camera import Camera
 from pathlib import Path
@@ -341,6 +341,7 @@ def get_patch_T(monitor_corners_world):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument('-m', '--model', type=str, choices=['frontnet', 'yolov5'], default='frontnet', help='Model to use for prediction')
     parser.add_argument('-t', '--trajectory', type=str, choices=['figure8', 'square', 'circle', 'line_x', 'line_y'], default='figure8', help='Target Trajectory')
     parser.add_argument('--display_size', type=int, default=60, help='Size of the display in pixels (default: 60")')
     parser.add_argument('--patch_mode', type=str, choices=['optimal', 'timeout', 'black', 'white', 'random', 'fap'], default='optimal', help='Mode to initialize the patch: optimal, timeout, black, white, random')
@@ -359,19 +360,27 @@ if __name__ == "__main__":
 
     # img_idx = args.img_idx
 
+    model_name = args.model
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    model = load_model("pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", device, config="160x32")
-    model.eval()
+    if model_name == 'frontnet':
+        print('Loading Frontnet model...')
+        from util import load_model
+        model = load_model("pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", device, config="160x32")
+        model.eval()
+    elif model_name == 'yolov5':
+        print('Loading YOLOv5 model...')
+        from yolo_bounding import YOLOBox
+        model = YOLOBox()
 
 
     dataset = load_dataset("pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle", batch_size = 1, shuffle = False, drop_last = True, num_workers = 1, train=True, train_set_size=0.9, IMRC=True)
 
     print(len(dataset))
 
-    #TODO: implement different modes: random, black patch, white patch
     patch_mode = args.patch_mode
-    directory = args.patch_mode
+    directory = f'{model_name}/{patch_mode}'
 
     projector_size = args.display_size
 
@@ -561,7 +570,7 @@ if __name__ == "__main__":
             if args.temperature == 'warm' and target_idx > 1:
                 patch = best_patch.clone().detach().requires_grad_(True)
 
-            opt = torch.optim.Adam([patch], lr=1e-1)
+            opt = torch.optim.Adam([patch], lr=1e-2)
             
             loss = torch.inf
             i = 0
@@ -585,10 +594,15 @@ if __name__ == "__main__":
                     images=img
                 )
 
-                x, y, z, yaw = model(manipulated_image*255.)
-                # print("x, y, z, yaw:", x, y, z, yaw)
-                prediction = torch.stack([x, y, z, yaw])
-                prediction = prediction.squeeze(2).mT
+                manipulated_image.clamp_(0., 1.)
+
+                if model_name == 'frontnet':
+                    x, y, z, yaw = model(manipulated_image*255.)
+                    # print("x, y, z, yaw:", x, y, z, yaw)
+                    prediction = torch.stack([x, y, z, yaw])
+                    prediction = prediction.squeeze(2).mT
+                elif model_name == 'yolov5':
+                    prediction = model(manipulated_image*255.)
 
                 T_pred_in_drone = T_matrix(prediction[0])
                 T_pred_in_world = T_drone_in_world @ T_pred_in_drone
@@ -610,6 +624,7 @@ if __name__ == "__main__":
                 angular_loss = 1 - torch.cos(normalize_yaw_t(prediction[0, 3]) - normalize_yaw_t(target[3]))
 
                 loss = distance + angular_loss
+                print(f"Iter {i}, loss: {loss}, distance: {distance}, angle: {angular_loss}")
 
                 if loss < best_loss:
                     best_loss = loss.detach().detach().clone()

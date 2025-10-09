@@ -129,11 +129,15 @@ class Camera:
     
     def batch_xyz_from_boxes(self, boxes):
         batch_size = boxes.shape[0]
-        xyzs = torch.zeros((batch_size, 3), device=boxes.device)
+        xyzs = torch.zeros((batch_size, 4), device=boxes.device)
         # boxes is a tensor of size (B, 4)
         for i in range(batch_size):
             # print('boxes[i]', boxes[i], boxes[i].shape)
             coords = self.tensor_xyz_from_bb(boxes[i])
+            # TODO: figure out how to calculate actual yaw angle
+            # maybe use the ground truth one stored in the dataset for the specific image
+            yaw = torch.zeros(1, device=boxes.device)
+            coords = torch.cat((coords, yaw))
             printd('coords', coords.grad_fn)
             xyzs[i] = coords
 
