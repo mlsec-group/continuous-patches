@@ -1,10 +1,9 @@
 #!/bin/bash
-#SBATCH --partition=cpu-9m
 
-PATCH_MODES=("optimal" "timeout" "random" "black" "white")
+PATCH_MODES=("optimal" "timeout" "random" "black" "white" "fap")
 TEMPERATURES=("warm" "cold")
 TRAJECTORIES=("figure8" "square" "circle" "line_x" "line_y")
-DISPLAY_SIZES=(30 60 90 120)
+DISPLAY_SIZES=(30 40 50 60 70 80 90 100 110 120)
 PIC_MODES=("idx" "random")
 LOG_DIR="logs"
 TIMEOUT_VALUES=(10 20 30)
@@ -27,7 +26,7 @@ submit_job() {
            --output=${LOG_DIR}/job_${TRAJ}_${DISPLAY_SIZE}_${PIC_MODE}_seed_${SEED}_img_${IMG_IDX}_temp_${TEMP}.out \
            --error=${LOG_DIR}/job_${TRAJ}_${DISPLAY_SIZE}_${PIC_MODE}_seed_${SEED}_img_${IMG_IDX}_temp_${TEMP}.err <<EOF
 #!/bin/bash
-#SBATCH --partition=cpu-9m
+#SBATCH --partition=gpu-2h
 apptainer run --nv /home/piha/container.sif python attack_minimal_single.py -t "${TRAJ}" --patch_mode "${PATCH_MODE}" --display_size "${DISPLAY_SIZE}" --seed "${SEED}" --pic_mode "${PIC_MODE}" --img_idx "${IMG_IDX}" --timeout "${TIMEOUT}" --temperature "${TEMP}"
 EOF
 }
