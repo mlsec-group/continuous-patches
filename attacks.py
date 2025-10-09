@@ -33,17 +33,22 @@ def get_transformation(sf, tx, ty):
     # M[..., 1, 2] = ty
     return transformation_matrix.float()
 
-def norm_transformation(sf, tx, ty, scale_min=0.3, scale_max=0.5, tx_min=-10., tx_max=100., ty_min=-10., ty_max=80.):
+def norm_transformation(sf, tx, ty, tx_min, tx_max, ty_min, ty_max):
     # tx_tanh = torch.tanh(tx) #* 0.8
     # ty_tanh = torch.tanh(ty) #* 0.8
+
+    scaled_patch_size = 80 * sf_norm
+    tx_max -= scaled_patch_size
+    ty_max -= scaled_patch_size
 
     # new patch placement implementation might need different tx, ty limits!:
     tx_norm = (tx_max - tx_min) * (torch.tanh(tx) + 1) * 0.5 + tx_min
     ty_norm = (ty_max - ty_min) * (torch.tanh(ty) + 1) * 0.5 + ty_min
 
-    scaling_norm = (scale_max - scale_min) * (torch.tanh(sf) + 1) * 0.5 + scale_min # normalizes scaling factor to range [0.3, 0.5]
+    # scaling_norm = (scale_max - scale_min) * (torch.tanh(sf) + 1) * 0.5 + scale_min # normalizes scaling factor to range [0.3, 0.5]
 
-    return scaling_norm, tx_norm, ty_norm
+    #return scaling_norm, tx_norm, ty_norm
+    return tx_norm, ty_norm
 
 # def get_rotation(yaw, pitch, roll):
 #     rotation_yaw = np.array([[np.cos(yaw), -np.sin(yaw), 0.0, 0.0],
@@ -64,7 +69,7 @@ def norm_transformation(sf, tx, ty, scale_min=0.3, scale_max=0.5, tx_min=-10., t
 #     rotation_matrix = rotation_yaw @ rotation_pitch @ rotation_roll
 #     return rotation_matrix
 
-def gen_noisy_transformations(batch_size, sf, tx, ty, scale_min=0.3, scale_max=0.5):
+def gen_noisy_transformations(batch_size, sf, tx, ty, tx_min, tx_max, ty_min, ty_max):
     # gets sf, tx, ty in [0,1]
     # outputs sf in min/max range and tx, ty in image range [0, 160 or 96]
     noisy_transformation_matrix = []
@@ -74,8 +79,12 @@ def gen_noisy_transformations(batch_size, sf, tx, ty, scale_min=0.3, scale_max=0
         ty_n = ty + np.random.normal(0.0, 0.1)
 
         # scale_norm, tx_norm, ty_norm = norm_transformation(sf_n, tx_n, ty_n, scale_min, scale_max)
-        scaled_tx, scaled_ty = scale_tx_ty(sf_n, tx_n, ty_n, 80)
-        matrix = get_transformation(sf_n, scaled_tx, scaled_ty)
+        # scaled_tx, scaled_ty = scale_tx_ty(sf_n, tx_n, ty_n, 80)
+        tx_norm, ty_norm = norm_transformation(sf_n, tx_n, ty_n, tx_min, tx_max, ty_min, ty_max)
+        #matrix = get_transformation(sf_n, scaled_tx, scaled_ty)
+        # print(matrix)
+
+        matrix = get_transformation(sf_n, tx_norm, ty_norm)
         # print(matrix)
 
         # random_yaw = np.deg2rad(np.random.normal(-10, 10))
@@ -89,12 +98,23 @@ def gen_noisy_transformations(batch_size, sf, tx, ty, scale_min=0.3, scale_max=0
     
     return torch.cat(noisy_transformation_matrix)
 
-def targeted_attack_joint(dataset, patch, model, positions, assignment, targets, lr=3e-2, epochs=10, path="eval/", model_name='frontnet', prob_weight=5, scale_min=0.3, scale_max=0.5, target_offsets = [[0,0,0]], position_offsets=[[0,0,0]], stlc_weights=[1.0]):
+def targeted_attack_joint(dataset, patch, model, positions, assignment, targets, lr=3e-2, epochs=10, path="eval/", model_name='frontnet', prob_weight=5, tx_min = 0., tx_max = 160., ty_min = 0., ty_max = 96., target_offsets = [[0,0,0]], position_offsets=[[0,0,0]], stlc_weights=[1.0]):
     patch_t = patch.clone().requires_grad_(True)
-    positions_t = positions.clone().requires_grad_(True)
+    # positions_t = positions.clone()
+    sf = positions[:, :, 0, :].clone()
+    tx = positions[:, :, 1, :].clone().requires_grad_(True)
+    ty = positions[:, :, 2, :].clone().requires_grad_(True)
+
     # print("Initial position inside joint attack: ", positions_t)
 
-    opt = torch.optim.Adam([patch_t, positions_t], lr=lr)     # eps 1e-4
+    #opt = torch.optim.Adam([patch_t, positions_t], lr=lr)     # eps 1e-4
+    # opt = torch.optim.Adam([patch_t], lr=lr)
+    # print(positions_t.shape)
+    opt = torch.optim.Adam([patch_t, tx, ty], lr=lr)
+
+    positions_t = torch.stack([sf, tx, ty], dim=2) # shape: (num_targets, num_patches, 3, 1)
+    print(positions_t.shape)
+
 
     losses = []
 
@@ -104,7 +124,6 @@ def targeted_attack_joint(dataset, patch, model, positions, assignment, targets,
         best_stats_p = None
 
         for epoch in range(epochs):
-
             actual_loss = torch.tensor(0.).to(patch.device)
             stats = np.zeros((len(patch_t), len(targets)))
             stats_p = np.zeros((len(patch_t), len(targets)))
@@ -128,7 +147,7 @@ def targeted_attack_joint(dataset, patch, model, positions, assignment, targets,
                     active_patches = assignment[:,target_idx]
                     stats[np.invert(active_patches), target_idx] = np.inf
 
-                    noisy_transformations = torch.stack([gen_noisy_transformations(len(batch), scale_factor, tx, ty, scale_min, scale_max) for scale_factor, tx, ty in position[active_patches]])
+                    noisy_transformations = torch.stack([gen_noisy_transformations(len(batch), scale_factor, tx, ty, tx_min, tx_max, ty_min, ty_max) for scale_factor, tx, ty in position[active_patches]])
                     # print(noisy_transformations.shape)
                     #patch_batch = torch.cat([patch_t for _ in range(len(batch))])
                     
@@ -154,7 +173,7 @@ def targeted_attack_joint(dataset, patch, model, positions, assignment, targets,
                         # print("patch batch shape: ", patch_batches.shape)
                         
 
-                        mod_img = place_patch(batch_multi, patch_batches, transformations_multi) 
+                        mod_img = place_patch(batch_multi, patch_batches, transformations_multi, random_perspection=False) 
 
 
                         mod_img *= 255. # convert input images back to range [0-255.]
@@ -496,7 +515,7 @@ def calc_eval_loss(dataset, patch, transformation_matrix, model, target, model_n
 
 #     return targets
 
-def calc_anytime_loss(time_start, test_set, patch, targets, model, optimization_pos_vectors, scale_min, scale_max, model_name='frontnet', quantized=False):
+def calc_anytime_loss(time_start, test_set, patch, targets, model, optimization_pos_vectors, tx_min, tx_max, ty_min, ty_max, model_name='frontnet', quantized=False):
     with torch.no_grad():
         test_loss = []
         for target_idx, target in enumerate(targets):
@@ -504,9 +523,11 @@ def calc_anytime_loss(time_start, test_set, patch, targets, model, optimization_
             for patch_idx in range(len(patch)):
                 # scale_norm, tx_norm, ty_norm = norm_transformation(*optimization_pos_vectors[-1][target_idx][patch_idx], scale_min, scale_max)
                 sf, tx, ty = optimization_pos_vectors[-1][target_idx][patch_idx]
-                scale_tx, scale_ty = scale_tx_ty(sf, tx, ty, 80)
+                tx_norm, ty_norm = norm_transformation(sf, tx, ty, tx_min, tx_max, ty_min, ty_max)
+                # scale_tx, scale_ty = scale_tx_ty(sf, tx, ty, 80)
                 # transformation_matrix = get_transformation(scale_norm, tx_norm, ty_norm).to(patch.device)
-                transformation_matrix = get_transformation(sf, scale_tx, scale_ty).to(patch.device)
+                # transformation_matrix = get_transformation(sf, scale_tx, scale_ty).to(patch.device)
+                transformation_matrix = get_transformation(sf, tx_norm, ty_norm).to(patch.device)
 
 
                 test_losses_per_patch.append(calc_eval_loss(test_set, patch[patch_idx:patch_idx+1], transformation_matrix, model, target, model_name=model_name, quantized=quantized))
@@ -559,8 +580,14 @@ if __name__=="__main__":
     mode = settings['mode']
     quantized = settings['quantized']
     prob_weight = settings['prob_weight']
-    scale_min = settings['scale_min']
-    scale_max = settings['scale_max']
+    # scale_min = settings['scale_min'] # TODO: get rid
+    # scale_max = settings['scale_max'] # TODO: get rid
+    sf = settings['sf']
+    tx_min = settings['tx_min']
+    tx_max = settings['tx_max']
+    ty_min = settings['ty_min']
+    ty_max = settings['ty_max']
+
 
     stlc_target_offsets = torch.tensor([o['target'] for o in settings['stlc']['offsets']], dtype=torch.float, device=device)
     stlc_position_offsets = [o['position'] for o in settings['stlc']['offsets']]
@@ -624,14 +651,19 @@ if __name__=="__main__":
 
     # initialize random position
     # positions = torch.FloatTensor(len(targets), num_patches, 3, 1).uniform_(-1., 1.).to(device)
-    random_scale = np.random.uniform(settings['scale_min'], settings['scale_max'], (num_patches,))
-    random_tx = np.random.uniform(0, 1., (num_patches,))
-    random_ty = np.random.uniform(0, 1., (num_patches,))
+    # random_scale = np.random.uniform(settings['scale_min'], settings['scale_max'], (num_patches,))
+    # random_tx = np.random.uniform(0, 1., (num_patches,))
+    # random_ty = np.random.uniform(0, 1., (num_patches,))
     #scaled_tx, scaled_ty = scale_tx_ty(random_scale, random_tx, random_ty, settings['patch']['size'][0])
+
+    random_tx = np.random.uniform(0., 10., (num_patches,)) # will cause the norm_function to map to tx_min or ~tx_max
+    random_ty = np.random.uniform(0., 10., (num_patches,)) 
+    sf = np.ones_like(random_tx) * sf
 
 
     #positions_n = np.stack([random_scale, scaled_tx, scaled_ty])
-    positions_n = np.stack([random_scale, random_tx, random_ty])
+    #positions_n = np.stack([random_scale, random_tx, random_ty])
+    positions_n = np.stack([sf, random_tx, random_ty])
     np.save(path / 'positions_initial.npy', positions_n)
 
     positions = torch.from_numpy(positions_n).repeat(len(targets), num_patches, 1, 1).to(device)
@@ -712,7 +744,7 @@ if __name__=="__main__":
         anytime_loss = np.load(settings['path'] + '/anytime_loss.npy')
     except FileNotFoundError:
         anytime_loss = np.array([[time(), np.inf]])
-    anytime_losses.append(calc_anytime_loss(time_start, test_set, patch, targets, model, optimization_pos_vectors, scale_min, scale_max, model_name=args.model, quantized=quantized))
+    anytime_losses.append(calc_anytime_loss(time_start, test_set, patch, targets, model, optimization_pos_vectors, tx_min, tx_max, ty_min, ty_max, model_name=args.model, quantized=quantized))
     # print("Anytime losses: ", anytime_losses)
     
     for train_iteration in trange(num_hl_iter):
@@ -726,7 +758,7 @@ if __name__=="__main__":
             stats_all.append(stats)
             stats_p_all.append(stats_p)
         elif mode == "joint" or mode == "hybrid":
-            patch, loss_patch, positions, stats, stats_p = targeted_attack_joint(train_set, patch, model, optimization_pos_vectors[-1], A, model_name=args.model, targets=targets, lr=lr_patch, epochs=num_patch_epochs, path=path, prob_weight=prob_weight, scale_min=scale_min, scale_max=scale_max, target_offsets=stlc_target_offsets, position_offsets=stlc_position_offsets,
+            patch, loss_patch, positions, stats, stats_p = targeted_attack_joint(train_set, patch, model, optimization_pos_vectors[-1], A, model_name=args.model, targets=targets, lr=lr_patch, epochs=num_patch_epochs, path=path, prob_weight=prob_weight, tx_min = tx_min, tx_max=tx_max, ty_min=ty_min, ty_max=ty_max, target_offsets=stlc_target_offsets, position_offsets=stlc_position_offsets,
             stlc_weights=stlc_weights)
             # optimization_pos_vectors.append(positions)
 

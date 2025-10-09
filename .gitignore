@@ -177,4 +177,13 @@ results/
 *.pickle
 *.pt
 *.png
+optimal/
+timeout*
+logs/
+random/
+black/
+white/
+test*/
+fap/
+.mpl/
 *.sif
