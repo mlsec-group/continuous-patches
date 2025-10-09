@@ -51,14 +51,14 @@ class YOLOBox(nn.Module):
         # camera
         self.cam = Camera(cam_config)
 
-    def forward(self, og_imgs, show_imgs=False):
-        imgs = og_imgs / 255.0
+    def forward(self, imgs, show_imgs=False):
+        # imgs = og_imgs / 255.0
 
-        imgs = torch.repeat_interleave(imgs, 3, dim=1)
+        # imgs = torch.repeat_interleave(imgs, 3, dim=1)
 
-        # yolo wants size (320, 640)
-        resized_inputs = torch.nn.functional.interpolate(imgs, size=(TENSOR_DEFAULT_WIDTH//2, TENSOR_DEFAULT_WIDTH), mode="bilinear")
-        output = self.model(resized_inputs)
+        # # yolo wants size (320, 640)
+        # resized_inputs = torch.nn.functional.interpolate(imgs, size=(TENSOR_DEFAULT_WIDTH//2, TENSOR_DEFAULT_WIDTH), mode="bilinear")
+        output = self.model(imgs)
 
         scale_factor = imgs.size()[3] / TENSOR_DEFAULT_WIDTH
         boxes, scores = self.extract_boxes_and_scores(output[0])
@@ -75,11 +75,12 @@ class YOLOBox(nn.Module):
             # true best boxes
             highest_score_idxs = torch.argmax(scores, 1)
 
-            for i in range(min(len(og_imgs), 10)):
+            for i in range(min(len(imgs), 10)):
                 # print(og_imgs.shape)
-                og_img = og_imgs[i].clone().detach().cpu().numpy()
-                og_img = np.moveaxis(og_img, 0, -1)
-                og_img = cv2.cvtColor(og_img,cv2.COLOR_GRAY2RGB)
+                og_img = imgs[i].clone().detach().cpu().numpy() # shape (3, H, W)
+                og_img = (np.moveaxis(og_img, 0, -1) * 255).astype(np.uint8)
+                print(og_img.shape, np.max(og_img), np.min(og_img))
+                og_img = cv2.cvtColor(og_img,cv2.COLOR_RGB2BGR)
 
                 true_best_box = boxes[i, highest_score_idxs[i]] * scale_factor
 
