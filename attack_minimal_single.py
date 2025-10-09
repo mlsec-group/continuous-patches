@@ -343,7 +343,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-t', '--trajectory', type=str, choices=['figure8', 'square', 'circle', 'line_x', 'line_y'], default='figure8', help='Target Trajectory')
     parser.add_argument('--display_size', type=int, default=60, help='Size of the display in pixels (default: 60")')
-    parser.add_argument('--patch_mode', type=str, choices=['optimal', 'timeout', 'black', 'white', 'random'], default='optimal', help='Mode to initialize the patch: optimal, timeout, black, white, random')
+    parser.add_argument('--patch_mode', type=str, choices=['optimal', 'timeout', 'black', 'white', 'random', 'fap'], default='optimal', help='Mode to initialize the patch: optimal, timeout, black, white, random')
     parser.add_argument('--temperature', type=str, choices=['warm', 'cold', 'none'], default='cold', help='Either restart from random patch (cold) or from the last patch (warm)')
     parser.add_argument('--pic_mode', type=str, choices=['random', 'idx'], default='idx', help='Mode to select image: random or specific index')
     parser.add_argument('--img_idx', type=int, default=0, help='Index of the image to use from the dataset')
@@ -395,8 +395,33 @@ if __name__ == "__main__":
     os.makedirs(output_dir, exist_ok=True)
 
 
+    if args.patch_mode == 'fap':
+        import yaml
+        fap_patches = torch.tensor(np.load('fap/last_patch.npy')).to(device).unsqueeze(1)
+        probabilities_per_patch = np.load('fap/stats_p.npy')[-1]
 
+        assignment = {'forward': None, 'backward': None, 'stay': None, 'left': None, 'right': None}
 
+         # SETTINGS
+        with open('fap/settings.yaml') as f:
+            settings = yaml.load(f, Loader=yaml.FullLoader)
+
+        optim_targets = [values for _, values in settings['targets'].items()]
+        optim_targets = np.array(optim_targets, dtype=float).T
+
+        for i, target in enumerate(optim_targets):
+            if np.array_equal(target, np.array([1., 0., 0.])):
+                assignment['stay'] = np.argmax(probabilities_per_patch[:, i])
+            elif np.array_equal(target, np.array([1.5, 0., 0.])):
+                assignment['forward'] = np.argmax(probabilities_per_patch[:, i])
+            elif np.array_equal(target, np.array([0.5, 0., 0.])):
+                assignment['backward'] = np.argmax(probabilities_per_patch[:, i])
+            elif np.array_equal(target, np.array([1., 1., 0.])):
+                assignment['left'] = np.argmax(probabilities_per_patch[:, i])
+            elif np.array_equal(target, np.array([1., -1., 0.])):
+                assignment['right'] = np.argmax(probabilities_per_patch[:, i])
+            else:
+                print("Unknown target:", target)
 
     # img = torch.ones((1, 1, 96, 160), device=device, dtype=torch.float32) * 0.5  # gray image
     # img_idx = np.random.randint(0, len(dataset))
@@ -482,6 +507,31 @@ if __name__ == "__main__":
             patch = torch.zeros((1, 1, 45, 80), device=device, dtype=torch.float32)
         elif patch_mode == 'white':
             patch = torch.ones((1, 1, 45, 80), device=device, dtype=torch.float32)
+        elif patch_mode == 'fap':
+            # check if positive/negative change in x or y in target position is needed relative to current drone pose
+            
+            relative_movement = target[:2] - torch.from_numpy(np.array(all_drone_poses[-1][:2])).to(device)
+
+            max_idx = torch.argmax(torch.abs(relative_movement))
+
+            if max_idx == 0:
+                if relative_movement[max_idx] > 0:
+                    # print("Loading forward patch")
+                    patch = fap_patches[assignment['forward']]
+                elif torch.abs(relative_movement[max_idx]) < 0.2:
+                    # print("Loading stay patch")
+                    patch = fap_patches[assignment['stay']]
+                else:
+                    # print("Loading backward patch")
+                    patch = fap_patches[assignment['backward']]
+            if max_idx == 1:
+                if relative_movement[max_idx] > 0:
+                    # print("Loading left patch")
+                    patch = fap_patches[assignment['left']]
+                else:
+                    # print("Loading right patch")
+                    patch = fap_patches[assignment['right']]
+
         else:
             patch = torch.rand((1, 1, 45, 80), device=device, dtype=torch.float32)  # random patch
 
