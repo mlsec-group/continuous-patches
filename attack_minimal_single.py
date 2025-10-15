@@ -386,7 +386,7 @@ if __name__ == "__main__":
 
     if patch_mode =='timeout' and (isinstance(args.timeout, int) or isinstance(args.timeout, float)):
         timeout = 1 / args.timeout  # seconds
-        directory = f'timeout_{args.timeout}Hz'
+        directory = Path(f'{model_name}/timeout_{args.timeout}Hz')
     else:
         timeout = None
 
@@ -642,6 +642,8 @@ if __name__ == "__main__":
                 patch.data.clamp_(0., 1.)
                 i += 1
 
+            print("Output dir: ", output_dir)
+
             np.save(output_dir / f'patch_{target_idx}.npy', best_patch.detach().cpu().numpy())
 
             np.save(output_dir / f'T_{target_idx}.npy', T.detach().cpu().numpy())
@@ -708,7 +710,7 @@ if __name__ == "__main__":
 
         
         
-        # print(all_drone_poses)
+        print(all_drone_poses)
 
         print("Current drone pose: ", best_setpoint)
         print("Target pose that was to be reached: ", target)
