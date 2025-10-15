@@ -406,13 +406,13 @@ if __name__ == "__main__":
 
     if args.patch_mode == 'fap':
         import yaml
-        fap_patches = torch.tensor(np.load('fap/last_patch.npy')).to(device).unsqueeze(1)
-        probabilities_per_patch = np.load('fap/stats_p.npy')[-1]
+        fap_patches = torch.tensor(np.load(f'{args.model}/fap/last_patch.npy')).to(device).unsqueeze(1)
+        probabilities_per_patch = np.load(f'{args.model}/fap/last_patch.npy')[-1]
 
         assignment = {'forward': None, 'backward': None, 'stay': None, 'left': None, 'right': None}
 
          # SETTINGS
-        with open('fap/settings.yaml') as f:
+        with open(f'{args.model}/fap/settings.yaml') as f:
             settings = yaml.load(f, Loader=yaml.FullLoader)
 
         optim_targets = [values for _, values in settings['targets'].items()]
