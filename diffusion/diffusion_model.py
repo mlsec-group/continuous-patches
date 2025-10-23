@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch import Tensor
 from typing import Callable, Optional
 import numpy as np
+import torch.nn.functional as F
 
 from tqdm import trange
 import os
@@ -68,7 +69,7 @@ class PositionalEncoding(nn.Module):
 
 
 class TargetEncoding(nn.Module):
-    def __init__(self, patch_size: tuple[int, int], embed_channels: int = 1):
+    def __init__(self, patch_size: tuple[int, int], target_size: int = 7, embed_channels: int = 1):
         super().__init__()
 
         # the whole purpose of this is to learn to encode the target 
@@ -78,7 +79,7 @@ class TargetEncoding(nn.Module):
         self.embed_channels = embed_channels
         # ensure patch_size ordering is (height, width)
         self.h, self.w = patch_size
-        self.linear = nn.Linear(6, 512)   # 3 for target only, 6 for target+position
+        self.linear = nn.Linear(target_size, 512)   # 4 for target only, 7 for target+position
         # convolution that projects the linear embedding to a feature map
         # padding chosen to keep reasonable receptive field for non-square patches
         # Project the linear embedding (b, 512, 1, 1) into a feature map of shape
@@ -87,8 +88,8 @@ class TargetEncoding(nn.Module):
         self.conv = nn.ConvTranspose2d(512, self.embed_channels, kernel_size=(self.h, self.w), stride=1, padding=0)
 
     def forward(self, target: Tensor) -> Tensor:
-        print("DEBUGGING")
-        print("target shape in TargetEncoding: ", target.shape)
+        # print("DEBUGGING")
+        # print("target shape in TargetEncoding: ", target.shape)
         out = self.linear(target).unsqueeze(2).unsqueeze(2)
         out = self.conv(out).view(target.shape[0], self.embed_channels, self.h, self.w)
         return out
@@ -133,10 +134,23 @@ class ResNetBlockUp(nn.Module):
         self.block = ResNetBlock(in_size + skip_size, out_size, activation, t_size=t_size)
 
     def forward(self, x: Tensor, x_skip: Tensor = None, t_emb: Tensor = None) -> Tensor:
+        # Upsample by factor 2, but ensure the upsampled feature map exactly
+        # matches the spatial size of the skip connection to avoid off-by-one
+        # mismatches caused by odd-sized inputs / integer division.
         x = self.up(x)
 
-        # Concatenate with encoder skip connection.
+        # If a skip connection is present, resize the upsampled tensor to the
+        # skip's (height, width) exactly before concatenation. This handles
+        # cases where simple scale_factor doubling produces sizes that differ
+        # by 1 due to rounding during downsampling.
         if x_skip is not None:
+                # debug prints kept intentionally for troubleshooting
+                # print("x shape before concat in ResNetBlockUp: ", x.shape)
+                # print("x_skip shape before concat in ResNetBlockUp: ", x_skip.shape)
+            target_h, target_w = x_skip.shape[-2], x_skip.shape[-1]
+            if x.shape[-2] != target_h or x.shape[-1] != target_w:
+                # use bilinear interpolation to avoid introducing artifacts in feature maps
+                x = F.interpolate(x, size=(target_h, target_w), mode='bilinear', align_corners=False)
             x = torch.cat([x, x_skip], dim=1)
         out = self.block(x, t_emb)
         return out
@@ -269,17 +283,27 @@ class UNet(nn.Module):
         target_emb = self.target_embedding(target)
         x = torch.concat((x, target_emb), dim=1)
 
+    # print("DEBUGGING")
+    # print("x shape before conv_in: ", x.shape)
+
         x = self.conv_in(x)
+
+    # print("x shape after conv_in: ", x.shape)
 
         # Store hidden states for U-net skip connections.
         x_i = [x]
 
         # Encoder stage.
         for layer in self.layers[: self.num_layers - 1]:
+            # print("x_i[-1] shape before encoder layer: ", x_i[-1].shape)
+            # print("t_emb shape before encoder layer: ", t_emb.shape)
             x_i.append(layer(x=x_i[-1], t_emb=t_emb))
 
         # Decoder stage.
         for i, layer in enumerate(self.layers[self.num_layers - 1 :]):
+            # print("x_i[-1] shape before decoder layer: ", x_i[-1].shape)
+            # print("x_i[-2 - i] shape before decoder layer: ", x_i[-2 - i].shape)
+            # print("t_emb shape before decoder layer: ", t_emb.shape)
             x_i[-1] = layer(x=x_i[-1], x_skip=x_i[-2 - i], t_emb=t_emb)
 
         out = self.conv_out(x_i[-1])
@@ -332,7 +356,7 @@ class DiffusionModel():
                 model_in = patches + noise # Noise corrupt the data 
                 out = self.denoised_prediction(model_in, conditioning, sigmas)
                 weight = (sigmas ** 2 + self.sigma_data ** 2) / (sigmas * self.sigma_data) ** 2
-                loss = torch.mean(weight * (patches - out)**2) # Compute loss on predictio
+                loss = torch.mean(weight * (patches - out)**2) # Compute loss on prediction
                 losses.append(loss.detach().cpu().numpy())
                 all_losses.append(loss.detach().cpu().numpy())
 
@@ -423,7 +447,7 @@ if __name__ == '__main__':
 
     
     patches = np.array(patches) # shape (N, 45, 80)
-    targets = np.array(targets) # shape (N, 1, 3)
+    targets = np.array(targets) # shape (N, 1, 4) -> x, y, z, yaw 
     positions = np.array(positions) # shape (N, 1, 3), sf in range [0.4, 0.8], tx, ty in range [0, 1]
 
     print("DEBUGGING")
@@ -467,11 +491,12 @@ if __name__ == '__main__':
     sf = np.random.uniform(0.4, 0.8, n_samples)
     tx = np.random.uniform(0., 1., n_samples)
     ty = np.random.uniform(0., 1., n_samples)
-    x = np.random.uniform(0,2,n_samples)
-    y = np.random.uniform(-1,1,n_samples,)
-    z = np.random.uniform(-0.5,0.5,n_samples,)
+    x = np.random.uniform(0., 1.5, n_samples)
+    y = np.random.uniform(-1, 1, n_samples)
+    z = np.random.uniform(-0.5, 0.5, n_samples)
+    yaw = np.random.uniform(-0.3, 0.3, n_samples)
 
-    r_targets = torch.tensor(np.stack((sf, tx, ty, x, y, z)).T, dtype=torch.float32)
+    r_targets = torch.tensor(np.stack((sf, tx, ty, x, y, z, yaw)).T, dtype=torch.float32)
 
     samples = model.sample(n_samples, r_targets, device, patch_size=patch_size, n_steps=25).detach().to('cpu').numpy()
     
