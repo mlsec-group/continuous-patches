@@ -76,11 +76,19 @@ class TargetEncoding(nn.Module):
         # image before processing it
 
         self.embed_channels = embed_channels
+        # ensure patch_size ordering is (height, width)
         self.h, self.w = patch_size
         self.linear = nn.Linear(6, 512)   # 3 for target only, 6 for target+position
-        self.conv = nn.Conv2d(512, 64, kernel_size=2, stride=1, padding=5)
+        # convolution that projects the linear embedding to a feature map
+        # padding chosen to keep reasonable receptive field for non-square patches
+        # Project the linear embedding (b, 512, 1, 1) into a feature map of shape
+        # (b, embed_channels, h, w). Using ConvTranspose2d with kernel_size=(h,w)
+        # maps a 1x1 spatial input to an h x w output.
+        self.conv = nn.ConvTranspose2d(512, self.embed_channels, kernel_size=(self.h, self.w), stride=1, padding=0)
 
     def forward(self, target: Tensor) -> Tensor:
+        print("DEBUGGING")
+        print("target shape in TargetEncoding: ", target.shape)
         out = self.linear(target).unsqueeze(2).unsqueeze(2)
         out = self.conv(out).view(target.shape[0], self.embed_channels, self.h, self.w)
         return out
@@ -226,8 +234,11 @@ class UNet(nn.Module):
             PositionalEncoding(max_time_steps, t_emb_size, device), nn.Linear(t_emb_size, t_emb_size)
         )
 
+        # default target embedding uses the project's patch size (45,80)
+        # keep flexibility to pass a different patch size when constructing
+        # the UNet externally
         if target_emb:
-            self.target_embedding = TargetEncoding([80, 80])
+            self.target_embedding = TargetEncoding((45, 80))
 
         if num_layers < 1:
             raise ValueError(f"num_layers = {num_layers}, expected: num_layers > 0")
@@ -284,6 +295,8 @@ class DiffusionModel():
 
         self.device = device
 
+        # store the patch size used by the diffusion model (height, width)
+        self.patch_size = (45, 80)
         self.model = UNet(in_size=self.in_size, out_size=self.out_size, device=self.device).to(device)
 
     def denoised_prediction(self, x, conditioning, sigma):
@@ -340,7 +353,7 @@ class DiffusionModel():
         return all_losses
 
     @torch.no_grad()
-    def sample(self, n_samples: int, targets: torch.tensor, device: torch.device, patch_size: tuple[int, int], n_steps: int=1_000):
+    def sample(self, n_samples: int, targets: torch.tensor, device: torch.device, patch_size: tuple[int, int] | None = None, n_steps: int=1_000):
         """Alg 2 from the DDPM paper."""
         self.model.eval()
         # make sure that targets is a tensor
@@ -353,6 +366,10 @@ class DiffusionModel():
         sigma_max = 80
         sigma_min = 0.002
         rho = 7
+
+        # use provided patch_size or fall back to model's configured patch size
+        if patch_size is None:
+            patch_size = self.patch_size
 
         x_t = torch.randn((n_samples, 1, *patch_size)).to(device)
         targets = targets.to(device)
@@ -405,9 +422,17 @@ if __name__ == '__main__':
         positions.append(data[i][2])
 
     
-    patches = np.array(patches) # shape (N, 80, 80)
+    patches = np.array(patches) # shape (N, 45, 80)
     targets = np.array(targets) # shape (N, 1, 3)
     positions = np.array(positions) # shape (N, 1, 3), sf in range [0.4, 0.8], tx, ty in range [0, 1]
+
+    print("DEBUGGING")
+    print("patches shape: ", patches.shape)
+    print("targets shape: ", targets.shape)
+    print("positions shape: ", positions.shape)
+
+    print("targets[0]: ", targets[0])
+    print("positions[0]: ", positions[0])
 
     patch_size = patches.shape[-2:]
 
