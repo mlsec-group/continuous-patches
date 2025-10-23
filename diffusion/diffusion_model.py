@@ -429,7 +429,13 @@ if __name__ == '__main__':
     parser.add_argument('--datasets', type=str, nargs='+', required=True, help='Paths to the dataset pickle files.')
     parser.add_argument('--epochs', type=int, default=1_000, help='Number of epochs to train.')
     parser.add_argument('--output', type=str, default='trained_model.pth', help='Path to save the model.')
+    parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility.')
     args = parser.parse_args()
+
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
 
     data = []
     for dataset_path in args.datasets:
