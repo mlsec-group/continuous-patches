@@ -6,9 +6,29 @@ import numpy as np
 import torch.nn.functional as F
 
 from tqdm import trange
+
 import os
+import sys
+
+# Ensure parent folder is on sys.path so we can import util from there
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+print("Project root: ", project_root)
+sys.path.insert(0, project_root)
+
+from util import load_model, load_dataset
+from attack_minimal_single import project_patch, normalize_yaw_t
 
 # source for UNet: https://github.com/jbergq/simple-diffusion-model/
+
+def construct_T_matrix(sf, tx, ty):
+    T_matrix = torch.zeros((3, 3), device=sf.device)
+    scale_T = torch.eye(2, device=sf.device) * sf
+    T_matrix[:2, :2] = scale_T
+    T_matrix[0, 2] = tx
+    T_matrix[1, 2] = ty
+    T_matrix[2, 2] = 1.0
+    return T_matrix
+
 
 class ConvBlock(nn.Module):
     """Simple convolutional block: Conv2D -> BatchNorm -> Activation."""
@@ -323,6 +343,12 @@ class DiffusionModel():
         self.patch_size = (45, 80)
         self.model = UNet(in_size=self.in_size, out_size=self.out_size, device=self.device).to(device)
 
+        self.prediction_model_name = 'frontnet'
+        self.prediction_model = load_model(f"{project_root}/pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", device, config="160x32")
+        self.prediction_model.eval()
+
+        self.dataset = load_dataset(f"{project_root}/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle", batch_size = 32, shuffle = True, drop_last = True, num_workers = 1, train=True, train_set_size=0.9, IMRC=True)
+
     def denoised_prediction(self, x, conditioning, sigma):
         c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
         c_out = sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2).sqrt()
@@ -356,9 +382,69 @@ class DiffusionModel():
                 model_in = patches + noise # Noise corrupt the data 
                 out = self.denoised_prediction(model_in, conditioning, sigmas)
                 weight = (sigmas ** 2 + self.sigma_data ** 2) / (sigmas * self.sigma_data) ** 2
-                loss = torch.mean(weight * (patches - out)**2) # Compute loss on prediction
-                losses.append(loss.detach().cpu().numpy())
-                all_losses.append(loss.detach().cpu().numpy())
+                reconstruction_loss = torch.mean(weight * (patches - out)**2) # Compute loss on prediction
+                losses.append(reconstruction_loss.detach().cpu().numpy())
+                all_losses.append(reconstruction_loss.detach().cpu().numpy())
+
+                # compute prediction model loss
+
+                positions = conditioning[:, :3]  # first 3 values are sf, tx, ty
+                print("DEBUGGING")
+                print("positions shape: ", positions.shape)
+                print("example position: ", positions[0])
+                T_matrices = torch.stack([construct_T_matrix(*position) for position in positions]).to(device)
+                print("T_matrices shape: ", T_matrices.shape)
+                print("example T_matrix: ", T_matrices[0])
+
+                imgs = next(iter(self.dataset))[0].to(device) / 255.0  # normalize to [0, 1]
+                print("imgs shape: ", imgs.shape, " min: ", torch.min(imgs), " max: ", torch.max(imgs))
+
+                manipulated_images = project_patch(
+                    patches=patches,
+                    T_matrices=T_matrices,
+                    images=imgs
+                )
+
+                manipulated_images.clamp_(0., 1.)
+
+                print("manipulated_images shape: ", manipulated_images.shape, " min: ", torch.min(manipulated_images), " max: ", torch.max(manipulated_images))
+
+                if self.prediction_model_name == 'frontnet':
+                    x, y, z, yaw = self.prediction_model(manipulated_images*255.)
+                    # print("x, y, z, yaw:", x, y, z, yaw)
+                    prediction = torch.stack([x, y, z, yaw])
+                    prediction = prediction.squeeze(2).mT
+                elif self.prediction_model_name == 'yolov5':
+                    # resize to 640x320
+                    manipulated_images = torch.nn.functional.interpolate(manipulated_images, size=(320, 640), mode='bilinear', align_corners=False)
+                    # gray to rgb
+                    manipulated_images = manipulated_images.repeat_interleave(3, dim=1)
+
+                    prediction = self.prediction_model(manipulated_images)  # yolo expects images in range [0, 1]
+
+                print("prediction shape: ", prediction.shape)
+                print("example prediction: ", prediction[0])
+
+                target = conditioning[:, -4:]  # last 4 values are the target x, y, z, yaw
+                print("target shape: ", target.shape)
+                print("example target: ", target[0])
+
+                yaw_v = prediction[:, 3]
+                print("yaw_v shape: ", yaw_v.shape)
+                print("example yaw_v: ", yaw_v[0])
+
+                target_yaw_v = target[:, 3]
+                print("target_yaw_v shape: ", target_yaw_v.shape)
+                print("example target_yaw_v: ", target_yaw_v[0])
+
+                mse_losses = torch.stack([F.mse_loss(tar, pre) for tar, pre in zip(target[:, :3], prediction[:, :3])]) # calc mse for each of the predictions of each patch
+                angular_losses = 1 - torch.cos(normalize_yaw_t(yaw_v) - normalize_yaw_t(target_yaw_v))  # angular loss for yaw
+
+                prediction_loss = torch.mean(mse_losses + angular_losses)
+                print("prediction_loss: ", prediction_loss.item())
+                print("reconstruction_loss: ", reconstruction_loss.item())
+
+                loss = reconstruction_loss + (2 * prediction_loss)
 
                 # Bwd pass
                 loss.backward()
@@ -371,7 +457,7 @@ class DiffusionModel():
 
             if (epoch+1) % 1000 == 0:
                 print("Saving checkpoint...")
-                os.mkdirs('results/diffusion_training/checkpoints/', exist_ok=True)
+                os.mkdir('results/diffusion_training/checkpoints/', exist_ok=True)
                 model.save(f'results/diffusion_training/checkpoints/checkpoint_epoch_{epoch+1}.pth')
 
         return all_losses
@@ -434,7 +520,6 @@ if __name__ == '__main__':
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
-    random.seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
     data = []

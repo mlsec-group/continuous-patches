@@ -1,7 +1,13 @@
 import torch
 import sys
+import os
 
-sys.path.insert(0,'pulp-frontnet/PyTorch/')
+# Resolve repo-relative path to pulp-frontnet PyTorch so imports work regardless of cwd
+project_root = os.path.dirname(os.path.abspath(__file__))  # /home/piha/continous-patches
+frontnet_dir = os.path.join(project_root, 'pulp-frontnet', 'PyTorch')
+if frontnet_dir not in sys.path:
+    sys.path.insert(0, frontnet_dir)
+
 from Frontnet.Frontnet import FrontnetModel
 
 from Frontnet.DataProcessor import DataProcessor
@@ -254,7 +260,7 @@ def load_dataset(path, batch_size = 32, shuffle = False, drop_last = True, num_w
     # if training data should be extended by our custom dataset, set IMRC to True
     if IMRC:
         import pickle
-        with open("misc/IMRC_images.pickle", "rb") as f:
+        with open(f"{project_root}/misc/IMRC_images.pickle", "rb") as f:
             imrc_data = pickle.load(f)
 
         imrc_images = imrc_data['x']
