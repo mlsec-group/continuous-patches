@@ -366,8 +366,12 @@ class DiffusionModel():
 
         self.model.train()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, eps=1e-4)
+        all_reco_losses = []
+        all_prediction_losses = []
         all_losses = []
 
+        reco_losses = []
+        prediction_losses = []
         losses = []
         for epoch in trange(nepochs):
             for [patches, conditioning] in data_loader:
@@ -383,21 +387,21 @@ class DiffusionModel():
                 out = self.denoised_prediction(model_in, conditioning, sigmas)
                 weight = (sigmas ** 2 + self.sigma_data ** 2) / (sigmas * self.sigma_data) ** 2
                 reconstruction_loss = torch.mean(weight * (patches - out)**2) # Compute loss on prediction
-                losses.append(reconstruction_loss.detach().cpu().numpy())
-                all_losses.append(reconstruction_loss.detach().cpu().numpy())
+                reco_losses.append(reconstruction_loss.detach().cpu().numpy())
+                all_reco_losses.append(reconstruction_loss.detach().cpu().numpy())
 
                 # compute prediction model loss
 
                 positions = conditioning[:, :3]  # first 3 values are sf, tx, ty
-                print("DEBUGGING")
-                print("positions shape: ", positions.shape)
-                print("example position: ", positions[0])
+                # print("DEBUGGING")
+                # print("positions shape: ", positions.shape)
+                # print("example position: ", positions[0])
                 T_matrices = torch.stack([construct_T_matrix(*position) for position in positions]).to(device)
-                print("T_matrices shape: ", T_matrices.shape)
-                print("example T_matrix: ", T_matrices[0])
+                # print("T_matrices shape: ", T_matrices.shape)
+                # print("example T_matrix: ", T_matrices[0])
 
                 imgs = next(iter(self.dataset))[0].to(device) / 255.0  # normalize to [0, 1]
-                print("imgs shape: ", imgs.shape, " min: ", torch.min(imgs), " max: ", torch.max(imgs))
+                # print("imgs shape: ", imgs.shape, " min: ", torch.min(imgs), " max: ", torch.max(imgs))
 
                 manipulated_images = project_patch(
                     patches=patches,
@@ -407,7 +411,7 @@ class DiffusionModel():
 
                 manipulated_images.clamp_(0., 1.)
 
-                print("manipulated_images shape: ", manipulated_images.shape, " min: ", torch.min(manipulated_images), " max: ", torch.max(manipulated_images))
+                # print("manipulated_images shape: ", manipulated_images.shape, " min: ", torch.min(manipulated_images), " max: ", torch.max(manipulated_images))
 
                 if self.prediction_model_name == 'frontnet':
                     x, y, z, yaw = self.prediction_model(manipulated_images*255.)
@@ -422,29 +426,33 @@ class DiffusionModel():
 
                     prediction = self.prediction_model(manipulated_images)  # yolo expects images in range [0, 1]
 
-                print("prediction shape: ", prediction.shape)
-                print("example prediction: ", prediction[0])
+                # print("prediction shape: ", prediction.shape)
+                # print("example prediction: ", prediction[0])
 
                 target = conditioning[:, -4:]  # last 4 values are the target x, y, z, yaw
-                print("target shape: ", target.shape)
-                print("example target: ", target[0])
+                # print("target shape: ", target.shape)
+                # print("example target: ", target[0])
 
                 yaw_v = prediction[:, 3]
-                print("yaw_v shape: ", yaw_v.shape)
-                print("example yaw_v: ", yaw_v[0])
+                # print("yaw_v shape: ", yaw_v.shape)
+                # print("example yaw_v: ", yaw_v[0])
 
                 target_yaw_v = target[:, 3]
-                print("target_yaw_v shape: ", target_yaw_v.shape)
-                print("example target_yaw_v: ", target_yaw_v[0])
+                # print("target_yaw_v shape: ", target_yaw_v.shape)
+                # print("example target_yaw_v: ", target_yaw_v[0])
 
                 mse_losses = torch.stack([F.mse_loss(tar, pre) for tar, pre in zip(target[:, :3], prediction[:, :3])]) # calc mse for each of the predictions of each patch
                 angular_losses = 1 - torch.cos(normalize_yaw_t(yaw_v) - normalize_yaw_t(target_yaw_v))  # angular loss for yaw
 
                 prediction_loss = torch.mean(mse_losses + angular_losses)
-                print("prediction_loss: ", prediction_loss.item())
-                print("reconstruction_loss: ", reconstruction_loss.item())
+                prediction_losses.append(prediction_loss.detach().cpu().numpy())
+                all_prediction_losses.append(prediction_loss.detach().cpu().numpy())
+                # print("prediction_loss: ", prediction_loss.item())
+                # print("reconstruction_loss: ", reconstruction_loss.item())
 
                 loss = reconstruction_loss + (2 * prediction_loss)
+                losses.append(loss.detach().cpu().numpy())
+                all_losses.append(loss.detach().cpu().numpy())
 
                 # Bwd pass
                 loss.backward()
@@ -452,12 +460,16 @@ class DiffusionModel():
 
             if (epoch+1) % 10 == 0:
                 mean_loss = np.mean(np.array(losses))
+                mean_reco_loss = np.mean(np.array(reco_losses))
+                mean_prediction_loss = np.mean(np.array(prediction_losses))
                 losses = []
-                print("Epoch %d,\t Loss %f " % (epoch+1, mean_loss))
+                reco_losses = []
+                prediction_losses = []
+                print("Epoch %d,\t Loss %f \t Reconstruction Loss %f \t Prediction Loss %f" % (epoch+1, mean_loss, mean_reco_loss, mean_prediction_loss))
 
             if (epoch+1) % 1000 == 0:
                 print("Saving checkpoint...")
-                os.mkdir('results/diffusion_training/checkpoints/', exist_ok=True)
+                os.makedirs('results/diffusion_training/checkpoints/', exist_ok=True)
                 model.save(f'results/diffusion_training/checkpoints/checkpoint_epoch_{epoch+1}.pth')
 
         return all_losses
@@ -541,13 +553,13 @@ if __name__ == '__main__':
     targets = np.array(targets) # shape (N, 1, 4) -> x, y, z, yaw 
     positions = np.array(positions) # shape (N, 1, 3), sf in range [0.4, 0.8], tx, ty in range [0, 1]
 
-    print("DEBUGGING")
-    print("patches shape: ", patches.shape)
-    print("targets shape: ", targets.shape)
-    print("positions shape: ", positions.shape)
+    # print("DEBUGGING")
+    # print("patches shape: ", patches.shape)
+    # print("targets shape: ", targets.shape)
+    # print("positions shape: ", positions.shape)
 
-    print("targets[0]: ", targets[0])
-    print("positions[0]: ", positions[0])
+    # print("targets[0]: ", targets[0])
+    # print("positions[0]: ", positions[0])
 
     patch_size = patches.shape[-2:]
 
