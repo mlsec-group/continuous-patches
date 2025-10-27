@@ -13,11 +13,20 @@ from camera import Camera
 from pathlib import Path
 import matplotlib.pyplot as plt
 
+import pickle
+from scipy.optimize import linprog
+
+
 def normalize_yaw_t(yaw):
     return torch.atan2(torch.sin(yaw), torch.cos(yaw))
 
 def normalize_yaw(yaw):
     return np.atan2(np.sin(yaw), np.cos(yaw))
+
+def dist(c1, c2):
+        elementwise = torch.square(c1 - c2)
+        # elementwise * torch.tensor([1, 1, 2, 2/.4, 2, 2])
+        return torch.sqrt(torch.sum(elementwise, axis=-1))
 
 def _perspective_grid(
 coeffs: list[float], 
@@ -344,7 +353,7 @@ if __name__ == "__main__":
     parser.add_argument('-m', '--model', type=str, choices=['frontnet', 'yolov5'], default='frontnet', help='Model to use for prediction')
     parser.add_argument('-t', '--trajectory', type=str, choices=['figure8', 'square', 'circle', 'line_x', 'line_y'], default='figure8', help='Target Trajectory')
     parser.add_argument('--display_size', type=int, default=60, help='Size of the display in pixels (default: 60")')
-    parser.add_argument('--patch_mode', type=str, choices=['optimal', 'timeout', 'black', 'white', 'random', 'fap', 'diffusion'], default='optimal', help='Mode to initialize the patch: optimal, timeout, black, white, random')
+    parser.add_argument('--patch_mode', type=str, choices=['optimal', 'timeout', 'black', 'white', 'random', 'fap', 'diffusion', 'interpolation'], default='optimal', help='Mode to initialize the patch: optimal, timeout, black, white, random')
     parser.add_argument('--temperature', type=str, choices=['warm', 'cold', 'none'], default='cold', help='Either restart from random patch (cold) or from the last patch (warm)')
     parser.add_argument('--pic_mode', type=str, choices=['random', 'idx'], default='idx', help='Mode to select image: random or specific index')
     parser.add_argument('--img_idx', type=int, default=0, help='Index of the image to use from the dataset')
@@ -437,7 +446,33 @@ if __name__ == "__main__":
         diffusion_model = DiffusionModel(device=device)
 
         # TODO: load either frontnet or yolov5 diffusion model
-        diffusion_model.load(f'diffusion/results/diffusion_training/checkpoints/checkpoint_epoch_620.pth')
+        diffusion_model.load(f'diffusion/results/diffusion_training/trained_test.pth')
+
+    if args.patch_mode == 'interpolation' or args.patch_mode == 'corpus':
+        with open(f"diffusion/frontnet_test.pickle", "rb") as f:
+            patch_dataset = pickle.load(f)
+
+        corpus_patches = []
+        corpus_targets = []
+        corpus_positions = []
+        for i in range(len(patch_dataset)):
+            corpus_patches.append(patch_dataset[i][0])
+            corpus_targets.append(patch_dataset[i][1])
+            corpus_positions.append(patch_dataset[i][2])
+
+
+        corpus_patches = np.array(corpus_patches) # shape (N, 45, 80)
+        corpus_targets = np.array(corpus_targets) # shape (N, 1, 4) -> x, y, z, yaw
+        corpus_positions = np.array(corpus_positions) # shape (N, 1, 3), sf in range [0.4, 0.8], tx, ty in range [0, 1]
+
+        corpus_patches = np.array([(patch - np.min(patch)) / (np.max(patch) - np.min(patch)) for patch in corpus_patches]) # normalize
+        # keep patches as (N, H, W) to match sim_diffusion_attack InterpolatedPatchThread
+        corpus_patches = torch.tensor(corpus_patches, device=device, dtype=torch.float32)
+        corpus_targets = torch.tensor(corpus_targets, device=device, dtype=torch.float32).squeeze(1)
+        corpus_positions = torch.tensor(corpus_positions, device=device, dtype=torch.float32).squeeze(1)
+
+        conditioning_gt = torch.cat((corpus_positions, corpus_targets), dim=1)
+
 
     # img = torch.ones((1, 1, 96, 160), device=device, dtype=torch.float32) * 0.5  # gray image
     # img_idx = np.random.randint(0, len(dataset))
@@ -541,15 +576,22 @@ if __name__ == "__main__":
             
             # relative_movement = target[:2] - torch.from_numpy(np.array(all_drone_poses[-1][:2])).to(device)
             target_yaw = normalize_yaw_t(target[3])
-            T_target_in_world = T_matrix(target)
+            # Desired setpoint in world coordinates (the target pose)
+            T_setpoint_world = T_matrix(target)
+            # Current drone pose in world
             T_drone_in_world = T_matrix(torch.tensor(all_drone_poses[-1], device=device, dtype=torch.float32))
 
+            # Direction transform used later (same convention as in the optimization loop)
             T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
-            T_direction_world[:3, 3] = calc_heading_vec(1., target_yaw).to(device)
-            T_setpoint_world = T_direction_world @ T_target_in_world
+            T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
 
-            T_setpoint_in_drone = torch.inverse(T_drone_in_world) @ T_setpoint_world
-            relative_movement = T_setpoint_in_drone[:3, 3]
+            # Recover the predicted pose in world frame by inverting the direction transform
+            T_pred_in_world = torch.inverse(T_direction_world) @ T_setpoint_world
+
+            # Transform predicted world pose into the drone frame (for conditioning)
+            T_pred_in_drone = torch.inverse(T_drone_in_world) @ T_pred_in_world
+
+            relative_movement = T_pred_in_drone[:2, 3]
 
             max_idx = torch.argmax(torch.abs(relative_movement))
 
@@ -570,24 +612,57 @@ if __name__ == "__main__":
                 else:
                     # print("Loading right patch")
                     patch = fap_patches[assignment['right']]
-        elif patch_mode == 'diffusion':
+        elif patch_mode == 'diffusion' or patch_mode == 'interpolation' or patch_mode == 'corpus':
             target_yaw = normalize_yaw_t(target[3])
-            T_target_in_world = T_matrix(target)
+            # Desired setpoint in world coordinates (the target pose)
+            T_setpoint_world = T_matrix(target)
+            # Current drone pose in world
             T_drone_in_world = T_matrix(torch.tensor(all_drone_poses[-1], device=device, dtype=torch.float32))
 
+            # Direction transform used later (same convention as in the optimization loop)
             T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
-            T_direction_world[:3, 3] = calc_heading_vec(1., target_yaw).to(device)
-            T_setpoint_world = T_direction_world @ T_target_in_world
+            T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
 
-            T_setpoint_in_drone = torch.inverse(T_drone_in_world) @ T_setpoint_world
-            relative_movement = T_setpoint_in_drone[:3, 3]
-            
+            # Recover the predicted pose in world frame by inverting the direction transform
+            T_pred_in_world = torch.inverse(T_direction_world) @ T_setpoint_world
+
+            # Transform predicted world pose into the drone frame (for conditioning)
+            T_pred_in_drone = torch.inverse(T_drone_in_world) @ T_pred_in_world
+
             sf = T[0, 0]
             tx = T[0, 2]
             ty = T[1, 2]
-            conditioning = torch.tensor([sf, tx, ty, *relative_movement, target_yaw], dtype=torch.float32, device=device)
-
-            patch = diffusion_model.sample(1, conditioning, device, patch_size=(45, 80), n_steps=10)
+            conditioning = torch.tensor([sf, tx, ty, *T_pred_in_drone[:3, 3], target_yaw], dtype=torch.float32, device=device)
+            if patch_mode == 'interpolation':
+                # print("Debugging Interpolation Mode")
+                distance = dist(conditioning, conditioning_gt)
+                order = torch.argsort(distance)
+                ordered_combined = conditioning_gt[order].detach().cpu().clone().numpy()
+                # start from the closest single exemplar
+                patch = corpus_patches[order[0]].clone()  # shape (H, W)
+                # print("patch shape before loop: ", patch.shape, patch.min(), patch.max())
+                # print("Patch min/max before loop: ", patch.min(), patch.max(), self.patches.max())
+                for n in range(1, len(order)):
+                    result = linprog(
+                        bounds=[(0,1)]*n,
+                        c=np.ones(n),
+                        A_eq=ordered_combined[:n].T,
+                        b_eq=conditioning.detach().cpu().numpy(),
+                    )
+                    # print(n, result.success, result.fun)
+                    if result.success and result.fun <= 1.:
+                        # coeffs on device and float32
+                        coeffs = torch.as_tensor(result.x, device=device, dtype=torch.float32)
+                        # print(coeffs.sum())
+                        # take the top-n exemplar patches (shape: n, H, W), permute to (H, W, n)
+                        exemplars = corpus_patches[order][:n]  # (n, H, W)
+                        patch = (exemplars.permute(1, 2, 0) * coeffs[None, None, :]).sum(dim=-1)  # (H, W)
+                        break
+                # print("Patch shape after loop: ", patch.shape, patch.min(), patch.max())
+                # make patch compatible with project_patch API: (1, 1, H, W)
+                patch = patch.unsqueeze(0).unsqueeze(0)
+            elif patch_mode == 'diffusion':
+                patch = diffusion_model.sample(1, conditioning, device, patch_size=(45, 80), n_steps=10)
 
         else:
             patch = torch.rand((1, 1, 45, 80), device=device, dtype=torch.float32)  # random patch
