@@ -1,6 +1,6 @@
 #!/bin/bash
 MODELS=("frontnet" "yolov5")
-PATCH_MODES=("optimal" "timeout" "random" "black" "white" "fap")
+PATCH_MODES=("optimal" "timeout" "random" "black" "white" "fap" "diffusion" "interpolation" "corpus")
 TEMPERATURES=("warm" "cold")
 TRAJECTORIES=("figure8" "square" "circle" "line_x" "line_y")
 DISPLAY_SIZES=(30 40 50 60 70 80 90 100 110 120)
@@ -66,7 +66,7 @@ count_total_jobs() {
 wait_for_queue_clear() {
     local spin='-\|/' i=0 max=50 queued denom percent
     while :; do
-        queued=$(squeue -h -u "${USER:-piha}" -p gpu-2h -o '%A' | wc -l)
+        queued=$(squeue -h -u "${USER:-piha}" -o '%A' | wc -l)
         (( queued < max )) && break
         (( i=(i+1)%4 ))
         denom=$(( TOTAL_JOBS > 0 ? TOTAL_JOBS : 1 ))
@@ -95,7 +95,8 @@ submit_job() {
            --output=${LOG_DIR}/job_${MODEL}_${TRAJ}_${DISPLAY_SIZE}_${PIC_MODE}_seed_${SEED}_img_${IMG_IDX}_temp_${TEMP}.out \
            --error=${LOG_DIR}/job_${MODEL}_${TRAJ}_${DISPLAY_SIZE}_${PIC_MODE}_seed_${SEED}_img_${IMG_IDX}_temp_${TEMP}.err <<EOF
 #!/bin/bash
-#SBATCH --partition=gpu-2h
+#SBATCH --partition=gpu-9m
+#SBATCH --gpus-per-node=1
 apptainer run --nv /home/piha/container.sif python attack_minimal_single.py -m "${MODEL}" -t "${TRAJ}" --patch_mode "${PATCH_MODE}" --display_size "${DISPLAY_SIZE}" --seed "${SEED}" --pic_mode "${PIC_MODE}" --img_idx "${IMG_IDX}" --timeout "${TIMEOUT}" --temperature "${TEMP}"
 EOF
 
