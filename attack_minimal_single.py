@@ -353,7 +353,7 @@ if __name__ == "__main__":
     parser.add_argument('-m', '--model', type=str, choices=['frontnet', 'yolov5'], default='frontnet', help='Model to use for prediction')
     parser.add_argument('-t', '--trajectory', type=str, choices=['figure8', 'square', 'circle', 'line_x', 'line_y'], default='figure8', help='Target Trajectory')
     parser.add_argument('--display_size', type=int, default=60, help='Size of the display in pixels (default: 60")')
-    parser.add_argument('--patch_mode', type=str, choices=['optimal', 'timeout', 'black', 'white', 'random', 'fap', 'diffusion', 'interpolation'], default='optimal', help='Mode to initialize the patch: optimal, timeout, black, white, random')
+    parser.add_argument('--patch_mode', type=str, choices=['optimal', 'timeout', 'black', 'white', 'random', 'fap', 'diffusion', 'interpolation', 'corpus'], default='optimal', help='Mode to initialize the patch: optimal, timeout, black, white, random')
     parser.add_argument('--temperature', type=str, choices=['warm', 'cold', 'none'], default='cold', help='Either restart from random patch (cold) or from the last patch (warm)')
     parser.add_argument('--pic_mode', type=str, choices=['random', 'idx'], default='idx', help='Mode to select image: random or specific index')
     parser.add_argument('--img_idx', type=int, default=0, help='Index of the image to use from the dataset')
@@ -632,7 +632,14 @@ if __name__ == "__main__":
             sf = T[0, 0]
             tx = T[0, 2]
             ty = T[1, 2]
+
+            if tx < 5e-2:
+                tx = 5e-2
+            if tx > (1 - 5e-2):
+                tx = 1 - 5e-2
+
             conditioning = torch.tensor([sf, tx, ty, *T_pred_in_drone[:3, 3], target_yaw], dtype=torch.float32, device=device)
+            
             if patch_mode == 'interpolation':
                 # print("Debugging Interpolation Mode")
                 distance = dist(conditioning, conditioning_gt)
@@ -661,6 +668,15 @@ if __name__ == "__main__":
                 # print("Patch shape after loop: ", patch.shape, patch.min(), patch.max())
                 # make patch compatible with project_patch API: (1, 1, H, W)
                 patch = patch.unsqueeze(0).unsqueeze(0)
+            
+            elif patch_mode == 'corpus':
+                distances = dist(conditioning, conditioning_gt)
+                closest_idx = torch.argmin(distances)
+                patch = corpus_patches[closest_idx].unsqueeze(0).unsqueeze(0)  # make patch compatible with project_patch API: (1, 1, H, W)
+                # print("Closest corpus idx:", closest_idx.item(), "Distance:", distances[closest_idx].item())
+                # print("Patch min/max:", patch.min().item(), patch.max().item())
+                # print("Patch shape:", patch.shape)
+            
             elif patch_mode == 'diffusion':
                 patch = diffusion_model.sample(1, conditioning, device, patch_size=(45, 80), n_steps=10)
 
