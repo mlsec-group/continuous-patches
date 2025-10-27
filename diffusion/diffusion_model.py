@@ -384,7 +384,12 @@ class DiffusionModel():
                 noise = torch.randn_like(patches) * sigmas # Sample DIFFERENT random noise for each datapoint
                 
                 model_in = patches + noise # Noise corrupt the data 
-                out = self.denoised_prediction(model_in, conditioning, sigmas)
+                out = self.denoised_prediction(model_in, conditioning, sigmas) # out should be [-1, 1]
+                # print("out shape: ", out.shape, " min: ", torch.min(out), " max: ", torch.max(out))
+                reco_patches = (out + 1) / 2  # map back to [0, 1]
+                reco_patches = reco_patches.clamp(0., 1.)
+                # print("reco_patches shape: ", reco_patches.shape, " min: ", torch.min(reco_patches), " max: ", torch.max(reco_patches))
+                
                 weight = (sigmas ** 2 + self.sigma_data ** 2) / (sigmas * self.sigma_data) ** 2
                 reconstruction_loss = torch.mean(weight * (patches - out)**2) # Compute loss on prediction
                 reco_losses.append(reconstruction_loss.detach().cpu().numpy())
@@ -404,7 +409,7 @@ class DiffusionModel():
                 # print("imgs shape: ", imgs.shape, " min: ", torch.min(imgs), " max: ", torch.max(imgs))
 
                 manipulated_images = project_patch(
-                    patches=patches,
+                    patches=reco_patches,
                     T_matrices=T_matrices,
                     images=imgs
                 )
@@ -467,7 +472,7 @@ class DiffusionModel():
                 prediction_losses = []
                 print("Epoch %d,\t Loss %f \t Reconstruction Loss %f \t Prediction Loss %f" % (epoch+1, mean_loss, mean_reco_loss, mean_prediction_loss))
 
-            if (epoch+1) % 1000 == 0:
+            if (epoch+1) % 10 == 0:
                 print("Saving checkpoint...")
                 os.makedirs('results/diffusion_training/checkpoints/', exist_ok=True)
                 model.save(f'results/diffusion_training/checkpoints/checkpoint_epoch_{epoch+1}.pth')
