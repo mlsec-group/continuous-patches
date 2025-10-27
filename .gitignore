@@ -187,3 +187,5 @@ test*/
 fap/
 .mpl/
 *.sif
+frontnet/
+yolov5/
