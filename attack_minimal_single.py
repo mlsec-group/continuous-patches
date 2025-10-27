@@ -344,7 +344,7 @@ if __name__ == "__main__":
     parser.add_argument('-m', '--model', type=str, choices=['frontnet', 'yolov5'], default='frontnet', help='Model to use for prediction')
     parser.add_argument('-t', '--trajectory', type=str, choices=['figure8', 'square', 'circle', 'line_x', 'line_y'], default='figure8', help='Target Trajectory')
     parser.add_argument('--display_size', type=int, default=60, help='Size of the display in pixels (default: 60")')
-    parser.add_argument('--patch_mode', type=str, choices=['optimal', 'timeout', 'black', 'white', 'random', 'fap'], default='optimal', help='Mode to initialize the patch: optimal, timeout, black, white, random')
+    parser.add_argument('--patch_mode', type=str, choices=['optimal', 'timeout', 'black', 'white', 'random', 'fap', 'diffusion'], default='optimal', help='Mode to initialize the patch: optimal, timeout, black, white, random')
     parser.add_argument('--temperature', type=str, choices=['warm', 'cold', 'none'], default='cold', help='Either restart from random patch (cold) or from the last patch (warm)')
     parser.add_argument('--pic_mode', type=str, choices=['random', 'idx'], default='idx', help='Mode to select image: random or specific index')
     parser.add_argument('--img_idx', type=int, default=0, help='Index of the image to use from the dataset')
@@ -432,6 +432,13 @@ if __name__ == "__main__":
             else:
                 print("Unknown target:", target)
 
+    if args.patch_mode == 'diffusion':
+        from diffusion.diffusion_model import DiffusionModel
+        diffusion_model = DiffusionModel(device=device)
+
+        # TODO: load either frontnet or yolov5 diffusion model
+        diffusion_model.load(f'diffusion/results/diffusion_training/checkpoints/checkpoint_epoch_620.pth')
+
     # img = torch.ones((1, 1, 96, 160), device=device, dtype=torch.float32) * 0.5  # gray image
     # img_idx = np.random.randint(0, len(dataset))
     # img = dataset.dataset[img_idx][0].to(device).unsqueeze(0) / 255.0
@@ -512,6 +519,19 @@ if __name__ == "__main__":
 
         target = target_trajectory[target_idx]
 
+        monitor_corners = calc_monitor_corners(T_drone_in_world, projector_world, camera_extrinsic, camera_intrinsic)
+        # print("Monitor corners:")
+        # print(monitor_corners)
+
+
+        patch_coordinates = torch.tensor([[0., 0., 1.],
+                                          [80., 0., 1.],
+                                          [0., 45., 1.],
+                                          [80., 45., 1.]], dtype=torch.float32, device=device)
+        
+        T = get_patch_T(monitor_corners)
+
+
         if patch_mode == 'black':
             patch = torch.zeros((1, 1, 45, 80), device=device, dtype=torch.float32)
         elif patch_mode == 'white':
@@ -540,6 +560,41 @@ if __name__ == "__main__":
                 else:
                     # print("Loading right patch")
                     patch = fap_patches[assignment['right']]
+        elif patch_mode == 'diffusion':
+            # print("DEBUGGING")
+            # print("Target:", target)
+            # print("Current drone pose:", all_drone_poses[-1])
+            # relative_movement = target[:3] - torch.tensor(all_drone_poses[-1][:3], device=device, dtype=torch.float32)
+            # print("Relative movement:", relative_movement)
+            target_yaw = normalize_yaw_t(target[3])
+            T_target_in_world = T_matrix(target)
+            T_drone_in_world = T_matrix(torch.tensor(all_drone_poses[-1], device=device, dtype=torch.float32))
+
+            T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
+            T_direction_world[:3, 3] = calc_heading_vec(1., target_yaw).to(device)
+            T_setpoint_world = T_direction_world @ T_target_in_world
+
+            T_setpoint_in_drone = torch.inverse(T_drone_in_world) @ T_setpoint_world
+            relative_movement = T_setpoint_in_drone[:3, 3]
+            # print("Relative movement:", relative_movement)
+
+            # T_target_in_drone = T_target_in_world @ torch.inverse(T_drone_in_world) 
+            # print("T_target_in_drone:", T_target_in_drone)
+
+            # relative_movement = T_target_in_drone[:3, 3]
+            # relative_movement[0] += 1.0  # relative x movement from drone to target + 1 meter forward
+            # print("Relative movement:", relative_movement)
+
+            # relative_movement[0] += 1.
+            # target_yaw = normalize_yaw_t(target[3])
+            sf = T[0, 0]
+            tx = T[0, 2]
+            ty = T[1, 2]
+            conditioning = torch.tensor([sf, tx, ty, *relative_movement, target_yaw], dtype=torch.float32, device=device)
+            # print("Conditioning:", conditioning)
+
+            patch = diffusion_model.sample(1, conditioning, device, patch_size=(45, 80), n_steps=10)
+            # print("Patch shape from diffusion:", patch.shape, torch.min(patch), torch.max(patch))
 
         else:
             patch = torch.rand((1, 1, 45, 80), device=device, dtype=torch.float32)  # random patch
@@ -548,18 +603,7 @@ if __name__ == "__main__":
             patch = patch.requires_grad_(True)
 
 
-        monitor_corners = calc_monitor_corners(T_drone_in_world, projector_world, camera_extrinsic, camera_intrinsic)
-        # print("Monitor corners:")
-        # print(monitor_corners)
-
-
-        patch_coordinates = torch.tensor([[0., 0., 1.],
-                                          [80., 0., 1.],
-                                          [0., 45., 1.],
-                                          [80., 45., 1.]], dtype=torch.float32, device=device)
-        
-        T = get_patch_T(monitor_corners)
-
+       
 
         # check = torch.stack([T @ row for row in patch_coordinates])
         # print("Patch coordinates after transformation:")
