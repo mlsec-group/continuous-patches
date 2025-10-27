@@ -539,7 +539,17 @@ if __name__ == "__main__":
         elif patch_mode == 'fap':
             # check if positive/negative change in x or y in target position is needed relative to current drone pose
             
-            relative_movement = target[:2] - torch.from_numpy(np.array(all_drone_poses[-1][:2])).to(device)
+            # relative_movement = target[:2] - torch.from_numpy(np.array(all_drone_poses[-1][:2])).to(device)
+            target_yaw = normalize_yaw_t(target[3])
+            T_target_in_world = T_matrix(target)
+            T_drone_in_world = T_matrix(torch.tensor(all_drone_poses[-1], device=device, dtype=torch.float32))
+
+            T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
+            T_direction_world[:3, 3] = calc_heading_vec(1., target_yaw).to(device)
+            T_setpoint_world = T_direction_world @ T_target_in_world
+
+            T_setpoint_in_drone = torch.inverse(T_drone_in_world) @ T_setpoint_world
+            relative_movement = T_setpoint_in_drone[:3, 3]
 
             max_idx = torch.argmax(torch.abs(relative_movement))
 
@@ -561,11 +571,6 @@ if __name__ == "__main__":
                     # print("Loading right patch")
                     patch = fap_patches[assignment['right']]
         elif patch_mode == 'diffusion':
-            # print("DEBUGGING")
-            # print("Target:", target)
-            # print("Current drone pose:", all_drone_poses[-1])
-            # relative_movement = target[:3] - torch.tensor(all_drone_poses[-1][:3], device=device, dtype=torch.float32)
-            # print("Relative movement:", relative_movement)
             target_yaw = normalize_yaw_t(target[3])
             T_target_in_world = T_matrix(target)
             T_drone_in_world = T_matrix(torch.tensor(all_drone_poses[-1], device=device, dtype=torch.float32))
@@ -576,25 +581,13 @@ if __name__ == "__main__":
 
             T_setpoint_in_drone = torch.inverse(T_drone_in_world) @ T_setpoint_world
             relative_movement = T_setpoint_in_drone[:3, 3]
-            # print("Relative movement:", relative_movement)
-
-            # T_target_in_drone = T_target_in_world @ torch.inverse(T_drone_in_world) 
-            # print("T_target_in_drone:", T_target_in_drone)
-
-            # relative_movement = T_target_in_drone[:3, 3]
-            # relative_movement[0] += 1.0  # relative x movement from drone to target + 1 meter forward
-            # print("Relative movement:", relative_movement)
-
-            # relative_movement[0] += 1.
-            # target_yaw = normalize_yaw_t(target[3])
+            
             sf = T[0, 0]
             tx = T[0, 2]
             ty = T[1, 2]
             conditioning = torch.tensor([sf, tx, ty, *relative_movement, target_yaw], dtype=torch.float32, device=device)
-            # print("Conditioning:", conditioning)
 
             patch = diffusion_model.sample(1, conditioning, device, patch_size=(45, 80), n_steps=10)
-            # print("Patch shape from diffusion:", patch.shape, torch.min(patch), torch.max(patch))
 
         else:
             patch = torch.rand((1, 1, 45, 80), device=device, dtype=torch.float32)  # random patch
