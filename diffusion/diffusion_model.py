@@ -455,7 +455,7 @@ class DiffusionModel():
                 # print("prediction_loss: ", prediction_loss.item())
                 # print("reconstruction_loss: ", reconstruction_loss.item())
 
-                loss = reconstruction_loss + (2 * prediction_loss)
+                loss = reconstruction_loss + (3 * prediction_loss)
                 losses.append(loss.detach().cpu().numpy())
                 all_losses.append(loss.detach().cpu().numpy())
 
