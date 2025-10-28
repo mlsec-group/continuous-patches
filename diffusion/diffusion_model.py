@@ -471,6 +471,16 @@ class DiffusionModel():
                 reco_losses = []
                 prediction_losses = []
                 print("Epoch %d,\t Loss %f \t Reconstruction Loss %f \t Prediction Loss %f" % (epoch+1, mean_loss, mean_reco_loss, mean_prediction_loss))
+                # save some of the manipulated images for visualization
+                # os.makedirs(f'results/diffusion_training/epoch_images/epoch{epoch+1}', exist_ok=True)
+                # for i in range(min(5, manipulated_images.shape[0])):
+                #     img = manipulated_images[i].detach().to('cpu').numpy()
+                #     fig, ax = plt.subplots(1, 1)
+                #     ax.imshow(img.transpose(1, 2, 0), cmap='gray')
+                #     ax.set_title(f'epoch_{epoch+1}_img_{i}')
+                #     ax.set_axis_off()
+                #     fig.savefig(f'results/diffusion_training/epoch_images/epoch{epoch+1}/img_{i}.png', dpi=200)
+                #     plt.close(fig)
 
             if (epoch+1) % 10 == 0:
                 print("Saving checkpoint...")
@@ -557,6 +567,7 @@ if __name__ == '__main__':
     patches = np.array(patches) # shape (N, 45, 80)
     targets = np.array(targets) # shape (N, 1, 4) -> x, y, z, yaw 
     positions = np.array(positions) # shape (N, 1, 3), sf in range [0.4, 0.8], tx, ty in range [0, 1]
+
 
     # print("DEBUGGING")
     # print("patches shape: ", patches.shape)
