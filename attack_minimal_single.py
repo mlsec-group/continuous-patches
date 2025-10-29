@@ -613,21 +613,20 @@ if __name__ == "__main__":
                     # print("Loading right patch")
                     patch = fap_patches[assignment['right']]
         elif patch_mode == 'diffusion' or patch_mode == 'interpolation' or patch_mode == 'corpus':
-            target_yaw = normalize_yaw_t(target[3])
+            # target_yaw = normalize_yaw_t(target[3])
             # Desired setpoint in world coordinates (the target pose)
             T_setpoint_world = T_matrix(target)
+            setpoint_yaw = torch.atan2(T_setpoint_world[1, 0], T_setpoint_world[0, 0])
             # Current drone pose in world
             T_drone_in_world = T_matrix(torch.tensor(all_drone_poses[-1], device=device, dtype=torch.float32))
-
-            # Direction transform used later (same convention as in the optimization loop)
+            
             T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
-            T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
+            T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(setpoint_yaw - torch.pi)).to(device)
 
-            # Recover the predicted pose in world frame by inverting the direction transform
+
             T_pred_in_world = torch.inverse(T_direction_world) @ T_setpoint_world
-
-            # Transform predicted world pose into the drone frame (for conditioning)
             T_pred_in_drone = torch.inverse(T_drone_in_world) @ T_pred_in_world
+            target_yaw = torch.atan2(T_pred_in_drone[1, 0], T_pred_in_drone[0, 0])
 
             sf = T[0, 0]
             tx = T[0, 2]

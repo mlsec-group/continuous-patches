@@ -7,129 +7,67 @@ from camera import Camera
 import argparse
 
 import torch
-
-PATH = 'results/yolo_patches'
-WIDTH = 160
-HEIGHT = 96
-RESULT_PATH = 'results/yolo_result_imgs'
-
-def load_patches(start, end):
-    # patches_on_imgs = []
-    # targets = []
-
-    patch_data = {}
-    cam_config='misc/camera_calibration/calibration.yaml'
-    cam = Camera(cam_config)
-    for i in range(start, end+1):
-        try:
-            with open(f'{PATH}/settings_{i}.yaml') as f:
-                settings = yaml.load(f, Loader=yaml.FullLoader)
-
-            num_targets = len(settings['targets']['x'])
-
-            # load all targets in [[x, y, z, 1.],...] format
-            targets = [[settings['targets']['x'][i], settings['targets']['y'][0], settings['targets']['z'][i], 1.] for i in range(num_targets)]
-
-            # convert from 3d coords to image coordinates
-            target_pxls = [cam.point_from_xyz(t) for t in targets]
-
-            sf, tx, ty = np.load(f'{PATH}/position_norm_{i}.npy')
-            patch = np.load(f'{PATH}/last_patch_{i}.npy')
-
-            # place patches on images at correct positions
-            imgs_w_patch = 255. * img_placed_patch( targets, 
-                                                    patch, 
-                                                    scale_norm=sf, 
-                                                    tx_norm=tx, 
-                                                    ty_norm=ty, 
-                                                    p_idx=0, 
-                                                    random=True,
-                                                    imrc=False)
-            
-
-            # save data in dict mapping patch_id to data
-            patch_data[i] = (imgs_w_patch, target_pxls)
-
-            print(f'======= Patch {i} ========')
-            print('targets', targets)
-            print('pixels', target_pxls)
-            print('sf', sf)
-            print('tx', tx)
-            print('ty', ty)
-            print("\n")
-        except Exception as e:
-            print(f'couldn\'t evalulate patch {i}, error: {e}')
-    # return patches_on_imgs, targets
-    return patch_data
-            
-def valid_target(pxl):
-    return pxl[0] >= 0 and pxl[0] <= WIDTH and pxl[1] >= 0 and pxl[1] <= HEIGHT
-
+from yolo_bounding import YOLOBox
+from attack_minimal_single import T_matrix, normalize_yaw_t, calc_heading_vec
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--start')
-    parser.add_argument('--end')
-    args = parser.parse_args()
 
-    patch_data = load_patches(int(args.start), int(args.end))
+    # model = YOLOBox()
 
-    model = torch.hub.load("ultralytics/yolov5", "yolov5n")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # BGR
-    #          red         blue        green        purple
-    colors = [(0, 0, 255),(255, 0, 0),(0, 255, 0),(255, 0, 255)]
+    random_target_x = np.random.uniform(0.,1.5, 1)
+    random_target_y = np.random.uniform(-1,1, 1)
+    random_target_z = np.random.uniform(-0.5,0.5, 1)
+    
+    random_target_yaw = np.random.uniform(-0.3, 0.3, 1)
 
-    total_loss = 0
-    total_valid = 1
-    out_of_box = 0
-    bad_targets = 0
+    drone_pose_in_world = torch.tensor([1.5, -.2, 1., 0.])  # x, y, z, yaw
+    T_drone_in_world = T_matrix(drone_pose_in_world)
+    print("T_drone_in_world:")
+    print(T_drone_in_world)
 
-    # for each patch
-    for i in patch_data:
-        imgs, targets = patch_data[i][0], patch_data[i][1]
+    target = np.hstack((random_target_x, random_target_y, random_target_z, random_target_yaw))
+    target = torch.tensor(target, dtype=torch.float32)
+    print("Target: ", target)
 
-        # for each target for that batch
-        for t in range(len(imgs)):
-            img, target = imgs[t], targets[t]
-            draw_img = img.squeeze()
-            draw_img = np.expand_dims(draw_img, -1)
-            draw_img = np.repeat(draw_img, 3, -1)
-            reshaped_img = np.repeat(img, 3, axis=0)
-            results = model(reshaped_img)
+    T_pred_in_drone = T_matrix(target)
+    print("T_pred_in_drone:")
+    print(T_pred_in_drone)
 
-            # list: xmin, ymin, xmax, ymax, confidence, class
-            # draw every bounding box predicted by yolo (color indicates confidence)
-            for j, (xmin, ymin, xmax, ymax, _, _) in enumerate(results.xyxy[0]):
+    T_pred_in_world = T_drone_in_world @ T_pred_in_drone
+    print("T_pred_in_world:")
+    print(T_pred_in_world)
+    
+    target_yaw = normalize_yaw_t(target[3])
+    T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
+    T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
+    print("T_direction_world:")
+    print(T_direction_world)
 
-                # check if the target is in the highest confidence bounding box
-                if j == 0:
-                    # if the target is in the image
-                    if valid_target(targets[j]):
-                        center_x = (xmin+xmax)//2
-                        center_y = (ymin+ymax)//2
-                        total_loss += ((center_x - target[0])**2 + (center_y - target[1])**2)**0.5
-                        total_valid += 1
+    T_setpoint_world = T_direction_world @ T_pred_in_world
+    print("T_setpoint_world:")
+    print(T_setpoint_world)
 
-                        # if the target is not within the highest confidence bounding box, print and increment counter
-                        if target[0] < xmin or target[0] > xmax or target[1] < ymin or target[1] > ymax:
-                            print(f'{i} is outside of the yolo box for target {t}')
-                            out_of_box += 1
-                    else:
-                        # invalid target (this shouldn't happen anymore)
-                        print(f'BAD TARGET: patch {i}, target {target}')
-                        bad_targets += 1
+    recovered_target_yaw = torch.atan2(T_setpoint_world[1,0], T_setpoint_world[0,0])
+    print("Recovered target yaw: ", recovered_target_yaw)
 
-                # draw the bounding box
-                cv2.rectangle(draw_img, (int(xmin), int(ymin)), (int(xmax), int(ymax)), colors[j % len(colors)], 1)
-            
-            # draw the target
-            cv2.circle(draw_img, target, 1, (255, 255, 0), 2)
-            cv2.imwrite(f'{RESULT_PATH}/yolo_boxes_{i}_target_{t}.png', draw_img)
-        
-    print('avg loss', total_loss / total_valid)
-    print('total images', total_valid)
-    print('out of box', out_of_box)
-    print('bad target', bad_targets)
-        
+    T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
+    T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(recovered_target_yaw - torch.pi)).to(device)
+    print("T_direction_world:")
+    print(T_direction_world)
 
+    T_pred_in_world_recovered = torch.linalg.inv(T_direction_world) @ T_setpoint_world
+    print("T_pred_in_world_recovered:")
+    print(T_pred_in_world_recovered)
+
+    # reverse process as sanity check to recover target in drone frame
+    T_world_in_drone = torch.linalg.inv(T_drone_in_world)
+    T_pred_in_drone_recovered = T_world_in_drone @ T_pred_in_world_recovered
+    print("T_pred_in_drone_recovered:")
+    print(T_pred_in_drone_recovered)
+
+    # recover yaw
+    recovered_yaw = torch.atan2(T_pred_in_drone_recovered[1,0], T_pred_in_drone_recovered[0,0])
+    print("Recovered yaw: ", recovered_yaw)
+    print("Original target yaw: ", target[3])
