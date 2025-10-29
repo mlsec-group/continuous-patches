@@ -416,7 +416,9 @@ if __name__ == "__main__":
     if args.patch_mode == 'fap':
         import yaml
         fap_patches = torch.tensor(np.load(f'{args.model}/fap/last_patch.npy')).to(device).unsqueeze(1)
-        probabilities_per_patch = np.load(f'{args.model}/fap/last_patch.npy')[-1]
+        probabilities_per_patch = np.load(f'{args.model}/fap/stats_p.npy')[-1]
+
+        # print("FAP probabilities per patch:", probabilities_per_patch)
 
         assignment = {'forward': None, 'backward': None, 'stay': None, 'left': None, 'right': None}
 
@@ -440,6 +442,7 @@ if __name__ == "__main__":
                 assignment['right'] = np.argmax(probabilities_per_patch[:, i])
             else:
                 print("Unknown target:", target)
+        # print("FAP assignment:", assignment)
 
     if args.patch_mode == 'diffusion':
         from diffusion.diffusion_model import DiffusionModel
@@ -574,26 +577,26 @@ if __name__ == "__main__":
         elif patch_mode == 'fap':
             # check if positive/negative change in x or y in target position is needed relative to current drone pose
             
-            # relative_movement = target[:2] - torch.from_numpy(np.array(all_drone_poses[-1][:2])).to(device)
-            target_yaw = normalize_yaw_t(target[3])
-            # Desired setpoint in world coordinates (the target pose)
             T_setpoint_world = T_matrix(target)
+            setpoint_yaw = torch.atan2(T_setpoint_world[1, 0], T_setpoint_world[0, 0])
             # Current drone pose in world
             T_drone_in_world = T_matrix(torch.tensor(all_drone_poses[-1], device=device, dtype=torch.float32))
-
-            # Direction transform used later (same convention as in the optimization loop)
+            
             T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
-            T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
+            T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(setpoint_yaw - torch.pi)).to(device)
 
-            # Recover the predicted pose in world frame by inverting the direction transform
+
             T_pred_in_world = torch.inverse(T_direction_world) @ T_setpoint_world
-
-            # Transform predicted world pose into the drone frame (for conditioning)
             T_pred_in_drone = torch.inverse(T_drone_in_world) @ T_pred_in_world
-
+            target_yaw = torch.atan2(T_pred_in_drone[1, 0], T_pred_in_drone[0, 0])
+            
             relative_movement = T_pred_in_drone[:2, 3]
+            # print("Debugging FAP selection:")
+            # print("Relative movement:", relative_movement)
 
             max_idx = torch.argmax(torch.abs(relative_movement))
+            # print("Max index:", max_idx)
+            # print("Max value:", relative_movement[max_idx])
 
             if max_idx == 0:
                 if relative_movement[max_idx] > 0:
