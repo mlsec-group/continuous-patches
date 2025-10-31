@@ -6,10 +6,11 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from attack_minimal_single import gen_target_trajectory, normalize_yaw
 import argparse
-MODELS = ("frontnet", "yolov5")
+MODELS = ("frontnet", )
 MODES = ['optimal/cold', 'optimal/warm', 'timeout_10Hz/cold', 
          'timeout_10Hz/warm', 'timeout_20Hz/cold', 'timeout_20Hz/warm', 
-         'timeout_30Hz/cold', 'timeout_30Hz/warm', 'white', 'black', 'random', 'fap']
+         'timeout_30Hz/cold', 'timeout_30Hz/warm', 'white', 'black', 'random', 'fap', 
+         'diffusion/1000', 'interpolation/1000', 'corpus/1000']
 MONITOR_SIZES = [30, 40, 50, 60, 70, 80, 90, 100, 110, 120]
 IMG_IDX = [505, 4847, 3059, 1860, 3205, 4861, 2613, 2309, 5431, 2847, 'random']
 TRAJECTORIES = ["figure8", "square", "circle", "line_y", "line_x"]
