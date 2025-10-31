@@ -1,9 +1,12 @@
 #!/bin/bash
-MODELS=("frontnet" "yolov5")
-PATCH_MODES=("optimal" "timeout" "random" "black" "white" "fap" "diffusion" "interpolation" "corpus")
+#MODELS=("frontnet" "yolov5")
+MODELS=("frontnet")
+#PATCH_MODES=("optimal" "timeout" "random" "black" "white" "fap" "diffusion" "interpolation" "corpus")
+PATCH_MODES=("interpolation" "corpus")
 TEMPERATURES=("warm" "cold")
 TRAJECTORIES=("figure8" "square" "circle" "line_x" "line_y")
 DISPLAY_SIZES=(30 40 50 60 70 80 90 100 110 120)
+CORPUS_SIZES=(2000 3000)
 PIC_MODES=("idx" "random")
 LOG_DIR="logs"
 TIMEOUT_VALUES=(10 20 30)
@@ -36,22 +39,29 @@ count_total_jobs() {
             else
                 TEMP_LIST=("cold")
             fi
+            if [ "${PATCH_MODE}" = "corpus" ] || [ "${PATCH_MODE}" = "interpolation" ] || [ "${PATCH_MODE}" = "diffusion" ]; then
+                CORPUS_SIZE_LIST=("${CORPUS_SIZES[@]}")
+            else
+                CORPUS_SIZE_LIST=("1000")
+            fi
             for TRAJ in "${TRAJECTORIES[@]}"; do
-                for DISPLAY_SIZE in "${DISPLAY_SIZES[@]}"; do
-                    for PIC_MODE in "${PIC_MODES[@]}"; do
-                        for TIMEOUT in "${TIMEOUT_LIST[@]}"; do
-                            for TEMP in "${TEMP_LIST[@]}"; do
-                                if [ "${PIC_MODE}" = "random" ]; then
-                                    for SEED in $(seq 0 9); do
-                                        total=$((total+1))
-                                    done
-                                else
-                                    for IMG_IDX in 505 4847 3059 1860 3205 4861 2613 2309 5431 2847; do
+                for CORPUS_SIZE in "${CORPUS_SIZE_LIST[@]}"; do
+                    for DISPLAY_SIZE in "${DISPLAY_SIZES[@]}"; do
+                        for PIC_MODE in "${PIC_MODES[@]}"; do
+                            for TIMEOUT in "${TIMEOUT_LIST[@]}"; do
+                                for TEMP in "${TEMP_LIST[@]}"; do
+                                    if [ "${PIC_MODE}" = "random" ]; then
                                         for SEED in $(seq 0 9); do
                                             total=$((total+1))
                                         done
-                                    done
-                                fi
+                                    else
+                                        for IMG_IDX in 505 4847 3059 1860 3205 4861 2613 2309 5431 2847; do
+                                            for SEED in $(seq 0 9); do
+                                                total=$((total+1))
+                                            done
+                                        done
+                                    fi
+                                done
                             done
                         done
                     done
@@ -87,9 +97,10 @@ submit_job() {
     local DISPLAY_SIZE=$4
     local PIC_MODE=$5
     local IMG_IDX=$6
-    local SEED=$7
-    local TIMEOUT=$8
-    local TEMP=$9
+    local CORPUS_SIZE=$7
+    local SEED=$8
+    local TIMEOUT=$9
+    local TEMP=${10}
 
     sbatch --export=ALL,MODEL=${MODEL},PATCH_MODE=${PATCH_MODE},TRAJ=${TRAJ},DISPLAY_SIZE=${DISPLAY_SIZE},IMG_IDX=${IMG_IDX},SEED=${SEED},TIMEOUT=${TIMEOUT},TEMP=${TEMP} \
            --output=${LOG_DIR}/job_${MODEL}_${TRAJ}_${DISPLAY_SIZE}_${PIC_MODE}_seed_${SEED}_img_${IMG_IDX}_temp_${TEMP}.out \
@@ -97,7 +108,7 @@ submit_job() {
 #!/bin/bash
 #SBATCH --partition=gpu-9m
 #SBATCH --gpus-per-node=1
-apptainer run --nv /home/piha/container.sif python attack_minimal_single.py -m "${MODEL}" -t "${TRAJ}" --patch_mode "${PATCH_MODE}" --display_size "${DISPLAY_SIZE}" --seed "${SEED}" --pic_mode "${PIC_MODE}" --img_idx "${IMG_IDX}" --timeout "${TIMEOUT}" --temperature "${TEMP}"
+apptainer run --nv /home/piha/container.sif python attack_minimal_single.py -m "${MODEL}" -t "${TRAJ}" --patch_mode "${PATCH_MODE}" --display_size "${DISPLAY_SIZE}" --seed "${SEED}" --corpus_size "${CORPUS_SIZE}" --pic_mode "${PIC_MODE}" --img_idx "${IMG_IDX}" --timeout "${TIMEOUT}" --temperature "${TEMP}"
 EOF
 
     ((JOBS_SUBMITTED++))
@@ -127,25 +138,34 @@ for MODEL in "${MODELS[@]}"; do
             TEMP_LIST=("cold")
         fi
 
+        # Determine CORPUS_SIZE values based on PATCH_MODE
+        if [ "${PATCH_MODE}" = "corpus" ] || [ "${PATCH_MODE}" = "interpolation" ] || [ "${PATCH_MODE}" = "diffusion" ]; then
+            CORPUS_SIZE_LIST=("${CORPUS_SIZES[@]}")
+        else
+            CORPUS_SIZE_LIST=("1000")
+        fi
+
         for TRAJ in "${TRAJECTORIES[@]}"; do
-            for DISPLAY_SIZE in "${DISPLAY_SIZES[@]}"; do
-                for PIC_MODE in "${PIC_MODES[@]}"; do
-                    for TIMEOUT in "${TIMEOUT_LIST[@]}"; do
-                        for TEMP in "${TEMP_LIST[@]}"; do
-                            # Handle 'random' mode
-                            if [ "${PIC_MODE}" = "random" ]; then
-                                IMG_IDX=0
-                                for SEED in $(seq 0 9); do
-                                    submit_job "${MODEL}" "${PATCH_MODE}" "${TRAJ}" "${DISPLAY_SIZE}" "${PIC_MODE}" "${IMG_IDX}" "${SEED}" "${TIMEOUT}" "${TEMP}"
-                                done
-                            # Handle 'idx' mode
-                            elif [ "${PIC_MODE}" = "idx" ]; then
-                                for IMG_IDX in 505 4847 3059 1860 3205 4861 2613 2309 5431 2847; do
+            for CORPUS_SIZE in "${CORPUS_SIZE_LIST[@]}"; do
+                for DISPLAY_SIZE in "${DISPLAY_SIZES[@]}"; do
+                    for PIC_MODE in "${PIC_MODES[@]}"; do
+                        for TIMEOUT in "${TIMEOUT_LIST[@]}"; do
+                            for TEMP in "${TEMP_LIST[@]}"; do
+                                # Handle 'random' mode
+                                if [ "${PIC_MODE}" = "random" ]; then
+                                    IMG_IDX=0
                                     for SEED in $(seq 0 9); do
-                                        submit_job "${MODEL}" "${PATCH_MODE}" "${TRAJ}" "${DISPLAY_SIZE}" "${PIC_MODE}" "${IMG_IDX}" "${SEED}" "${TIMEOUT}" "${TEMP}"
+                                        submit_job "${MODEL}" "${PATCH_MODE}" "${TRAJ}" "${DISPLAY_SIZE}" "${PIC_MODE}" "${IMG_IDX}" "${CORPUS_SIZE}" "${SEED}" "${TIMEOUT}" "${TEMP}"
                                     done
-                                done
-                            fi
+                                # Handle 'idx' mode
+                                elif [ "${PIC_MODE}" = "idx" ]; then
+                                    for IMG_IDX in 505 4847 3059 1860 3205 4861 2613 2309 5431 2847; do
+                                        for SEED in $(seq 0 9); do
+                                            submit_job "${MODEL}" "${PATCH_MODE}" "${TRAJ}" "${DISPLAY_SIZE}" "${PIC_MODE}" "${IMG_IDX}" "${CORPUS_SIZE}" "${SEED}" "${TIMEOUT}" "${TEMP}"
+                                        done
+                                    done
+                                fi
+                            done
                         done
                     done
                 done

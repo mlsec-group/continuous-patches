@@ -357,6 +357,7 @@ if __name__ == "__main__":
     parser.add_argument('--temperature', type=str, choices=['warm', 'cold', 'none'], default='cold', help='Either restart from random patch (cold) or from the last patch (warm)')
     parser.add_argument('--pic_mode', type=str, choices=['random', 'idx'], default='idx', help='Mode to select image: random or specific index')
     parser.add_argument('--img_idx', type=int, default=0, help='Index of the image to use from the dataset')
+    parser.add_argument('--corpus_size', type=int, choices=[1000, 2000, 3000], default=1000, help='Number of patches in the corpus (only for corpus/interpolation/diffusion patch mode)')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
     parser.add_argument('--timeout', type=int, default=None, help='Timeout for optimization step in Hz (default: None for no timeout, otherwise int Hz)')
 
@@ -398,6 +399,9 @@ if __name__ == "__main__":
         directory = Path(f'{model_name}/timeout_{args.timeout}Hz')
     else:
         timeout = None
+
+    if args.patch_mode == 'interpolation' or args.patch_mode == 'corpus' or args.patch_mode == 'diffusion':
+        directory = f'{directory}/{args.corpus_size}'
 
 
     if args.pic_mode == 'random':
@@ -452,13 +456,13 @@ if __name__ == "__main__":
         diffusion_model.load(f'diffusion/results/diffusion_training/trained_test.pth')
 
     if args.patch_mode == 'interpolation' or args.patch_mode == 'corpus':
-        with open(f"diffusion/frontnet_test.pickle", "rb") as f:
+        with open(f"diffusion/frontnet3k.pickle", "rb") as f:
             patch_dataset = pickle.load(f)
 
         corpus_patches = []
         corpus_targets = []
         corpus_positions = []
-        for i in range(len(patch_dataset)):
+        for i in range(args.corpus_size):
             corpus_patches.append(patch_dataset[i][0])
             corpus_targets.append(patch_dataset[i][1])
             corpus_positions.append(patch_dataset[i][2])
@@ -644,7 +648,7 @@ if __name__ == "__main__":
             
             if patch_mode == 'interpolation':
                 # print("Debugging Interpolation Mode")
-                distance = dist(conditioning, conditioning_gt)
+                distance = dist(conditioning[:6], conditioning_gt[:, :6])
                 order = torch.argsort(distance)
                 ordered_combined = conditioning_gt[order].detach().cpu().clone().numpy()
                 # start from the closest single exemplar
@@ -672,8 +676,11 @@ if __name__ == "__main__":
                 patch = patch.unsqueeze(0).unsqueeze(0)
             
             elif patch_mode == 'corpus':
-                distances = dist(conditioning, conditioning_gt)
+                # print("Conditioning:", conditioning[:6])
+                distances = dist(conditioning[:6], conditioning_gt[:, :6])
                 closest_idx = torch.argmin(distances)
+                # print("Closest idx:", closest_idx.item())
+                # print("Closest conditioning:", conditioning_gt[closest_idx][:6])
                 patch = corpus_patches[closest_idx].unsqueeze(0).unsqueeze(0)  # make patch compatible with project_patch API: (1, 1, H, W)
                 # print("Closest corpus idx:", closest_idx.item(), "Distance:", distances[closest_idx].item())
                 # print("Patch min/max:", patch.min().item(), patch.max().item())
