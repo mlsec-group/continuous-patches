@@ -484,8 +484,8 @@ class DiffusionModel():
 
             if (epoch+1) % 10 == 0:
                 print("Saving checkpoint...")
-                os.makedirs('results/diffusion_training/checkpoints/', exist_ok=True)
-                model.save(f'results/diffusion_training/checkpoints/checkpoint_epoch_{epoch+1}.pth')
+                os.makedirs(f'results/diffusion_training/{args.corpus_size}/checkpoints/', exist_ok=True)
+                model.save(f'results/diffusion_training/{args.corpus_size}/checkpoints/checkpoint_epoch_{epoch+1}.pth')
 
         return all_losses
 
@@ -542,6 +542,7 @@ if __name__ == '__main__':
     parser.add_argument('--datasets', type=str, nargs='+', required=True, help='Paths to the dataset pickle files.')
     parser.add_argument('--epochs', type=int, default=1_000, help='Number of epochs to train.')
     parser.add_argument('--output', type=str, default='trained_model.pth', help='Path to save the model.')
+    parser.add_argument('--corpus_size', type=int, choices=[1000, 2000, 3000], default=1000, help='Size of the training corpus.')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility.')
     args = parser.parse_args()
 
@@ -558,7 +559,7 @@ if __name__ == '__main__':
     patches = []
     targets = []
     positions = []
-    for i in range(len(data)):
+    for i in range(args.corpus_size):
         patches.append(data[i][0])
         targets.append(data[i][1])
         positions.append(data[i][2])
@@ -602,9 +603,9 @@ if __name__ == '__main__':
     # print("Start training..")
     # model.load(f'results/diffusion_training/{args.output}')
     all_losses = model.train(loader, device, nepochs=args.epochs)
-    
-    os.makedirs('results/diffusion_training', exist_ok=True)
-    model.save(f'results/diffusion_training/{args.output}')
+
+    os.makedirs(f'results/diffusion_training/{args.corpus_size}', exist_ok=True)
+    model.save(f'results/diffusion_training/{args.corpus_size}/{args.output}')
     
     n_samples = 5
     sf = np.random.uniform(0.4, 0.8, n_samples)
