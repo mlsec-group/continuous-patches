@@ -1,8 +1,7 @@
 import yaml
 import numpy as np
-import cv2
+import matplotlib.pyplot as plt
 from util import load_dataset
-from plots import img_placed_patch
 from camera import Camera
 import argparse
 
@@ -11,6 +10,7 @@ from yolo_bounding import YOLOBox
 from attack_minimal_single import T_matrix, normalize_yaw_t, calc_heading_vec, project_patch
 import torch.nn.functional as F
 
+import os
 
 RADIUS = 0.3
 IM_HEIGHT = 96
@@ -253,6 +253,8 @@ if __name__ == "__main__":
     print("Camera Extrinsic:")
     print(camera_extrinsic)
 
+    os.makedirs('debugging/output_patches', exist_ok=True)
+
     bb = None
 
     while bb is None:
@@ -268,7 +270,7 @@ if __name__ == "__main__":
         bb = bb_from_xyz(camera_intrinsic, camera_extrinsic, target[:3], RADIUS)
 
         # check if bb has overlap with image
-        if bb is not None and not check_bb_overlap(bb, cam_image_corner, percentage=0.2):
+        if bb is not None and not check_bb_overlap(bb, cam_image_corner, percentage=0.3):
             bb = None
     
     print("Target xyz: ", target[:3])
@@ -286,9 +288,9 @@ if __name__ == "__main__":
 
 
     dataset_path = 'pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle'
-    train_dataloader = load_dataset(path=dataset_path, batch_size=1, shuffle=True, drop_last=False, num_workers=0)
+    train_dataloader = load_dataset(path=dataset_path, batch_size=32, shuffle=True, drop_last=False, num_workers=0)
 
-    patch = torch.rand(1, 1, 45, 80).to(device) * 255.
+    patch = torch.rand(1, 1, 45, 80).to(device)
     patch.requires_grad_(True)
 
     T = gen_random_patch_coords().unsqueeze(0).to(device)
@@ -298,7 +300,7 @@ if __name__ == "__main__":
     loss = torch.tensor(0.).to(device)
     # loss.requires_grad_(True)
 
-    epochs = 10
+    epochs = 100
 
     for i in range(epochs):
         epoch_loss = 0.
@@ -307,6 +309,10 @@ if __name__ == "__main__":
 
 
             opt.zero_grad()
+
+            batch = batch / 255.
+
+            # print("Batch shape: ", batch.shape, batch.min().item(), batch.max().item())
 
             manipulated_image = project_patch(
                     patches=patch, 
@@ -340,3 +346,23 @@ if __name__ == "__main__":
             patch.data.clamp_(0., 1.)
 
         print(f"Epoch {i+1}/{epochs}, Loss: {epoch_loss/len(train_dataloader)}")
+        # save intermediate patch
+        np_patch = patch.detach().cpu().squeeze().numpy() # 45 x 80
+        # print(np_patch.shape, np_patch.min(), np_patch.max())
+
+
+        # save patch (np_patch in [0,1])
+        plt.imsave(f'debugging/output_patches/patch_epoch_{i+1}.png', np_patch, cmap='gray', vmin=0, vmax=1)
+
+        # visualize on a sample image
+        manipulated_sample = project_patch(
+            patches=patch,
+            T_matrices=T,
+            images=batch[0:1].to(device)
+            )
+        manipulated_sample = manipulated_sample.detach().cpu().numpy().squeeze()  # 96 x 160
+        # print("Manipulated sample shape: ", manipulated_sample.shape, manipulated_sample.min(), manipulated_sample.max())
+
+        plt.imsave(f'debugging/output_patches/manipulated_sample_epoch_{i+1}.png', manipulated_sample, cmap='gray', vmin=0, vmax=1)
+
+        plt.close('all')
