@@ -699,12 +699,20 @@ if __name__ == "__main__":
             print("Predicted relative position (Yolo):", T_pred_in_drone_recovered[:3, 3].detach().cpu().numpy())
 
             # recovered_yaw = torch.atan2(T_pred_in_drone_recovered[1,0], T_pred_in_drone_recovered[0,0])
-
-            bb = bb_from_xyz(camera_intrinsic.detach().cpu().numpy(), camera_extrinsic.detach().cpu().numpy(), T_pred_in_drone_recovered[:3, 3].detach().cpu().numpy(), RADIUS)
-            bb = torch.tensor(bb, dtype=torch.float32).to(device).unsqueeze(0)  # add batch dimension
-            # scale to image of size 320 x 640
-            bb[:, [0, 2]] *= (640.0 / 160.0)  # x coords
-            bb[:, [1, 3]] *= (320.0 / 96.0)   # y coords
+            try:
+                bb = bb_from_xyz(camera_intrinsic.detach().cpu().numpy(), camera_extrinsic.detach().cpu().numpy(), T_pred_in_drone_recovered[:3, 3].detach().cpu().numpy(), RADIUS)
+                bb = torch.tensor(bb, dtype=torch.float32).to(device).unsqueeze(0)  # add batch dimension
+                # scale to image of size 320 x 640
+                bb[:, [0, 2]] *= (640.0 / 160.0)  # x coords
+                bb[:, [1, 3]] *= (320.0 / 96.0)   # y coords
+            
+            except TypeError:
+                print("Bounding box could not be computed, setting to bb detected by Yolo")
+                with torch.no_grad():
+                    img_v = torch.nn.functional.interpolate(img, size=(320, 640), mode='bilinear', align_corners=False)
+                    img_v = torch.repeat_interleave(img_v, repeats=3, dim=1)  # to 3 channels
+                    bb = model(img_v).squeeze(1)
+            
 
 
         monitor_corners = calc_monitor_corners(T_drone_in_world, projector_world, camera_extrinsic, camera_intrinsic)
