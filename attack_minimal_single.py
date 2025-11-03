@@ -578,11 +578,10 @@ if __name__ == "__main__":
         from diffusion.diffusion_model import DiffusionModel
         diffusion_model = DiffusionModel(device=device)
 
-        # TODO: load either frontnet or yolov5 diffusion model
-        diffusion_model.load(f'diffusion/results/diffusion_training/trained_test.pth')
+        diffusion_model.load(f'diffusion/results/diffusion_training/{args.corpus_size}/{model_name}.pth')
 
     if args.patch_mode == 'interpolation' or args.patch_mode == 'corpus':
-        with open(f"diffusion/frontnet3k.pickle", "rb") as f:
+        with open(f"diffusion/{model_name}{args.corpus_size//1000}k.pickle", "rb") as f:
             patch_dataset = pickle.load(f)
 
         corpus_patches = []
@@ -687,31 +686,31 @@ if __name__ == "__main__":
 
         target = target_trajectory[target_idx]
 
-        if model_name == 'yolov5':
-            T_setpoint_world = T_matrix(target)
-            recovered_target_yaw = torch.atan2(T_setpoint_world[1,0], T_setpoint_world[0,0])
-            T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
-            T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(recovered_target_yaw - torch.pi)).to(device)
-            # print("T_direction_world:")
-            T_pred_in_world_recovered = torch.linalg.inv(T_direction_world) @ T_setpoint_world
-            T_pred_in_drone_recovered = torch.linalg.inv(T_drone_in_world) @ T_pred_in_world_recovered
+        # if model_name == 'yolov5':
+        #     T_setpoint_world = T_matrix(target)
+        #     recovered_target_yaw = torch.atan2(T_setpoint_world[1,0], T_setpoint_world[0,0])
+        #     T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
+        #     T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(recovered_target_yaw - torch.pi)).to(device)
+        #     # print("T_direction_world:")
+        #     T_pred_in_world_recovered = torch.linalg.inv(T_direction_world) @ T_setpoint_world
+        #     T_pred_in_drone_recovered = torch.linalg.inv(T_drone_in_world) @ T_pred_in_world_recovered
 
-            print("Predicted relative position (Yolo):", T_pred_in_drone_recovered[:3, 3].detach().cpu().numpy())
+        #     print("Predicted relative position (Yolo):", T_pred_in_drone_recovered[:3, 3].detach().cpu().numpy())
 
-            # recovered_yaw = torch.atan2(T_pred_in_drone_recovered[1,0], T_pred_in_drone_recovered[0,0])
-            try:
-                bb = bb_from_xyz(camera_intrinsic.detach().cpu().numpy(), camera_extrinsic.detach().cpu().numpy(), T_pred_in_drone_recovered[:3, 3].detach().cpu().numpy(), RADIUS)
-                bb = torch.tensor(bb, dtype=torch.float32).to(device).unsqueeze(0)  # add batch dimension
-                # scale to image of size 320 x 640
-                bb[:, [0, 2]] *= (640.0 / 160.0)  # x coords
-                bb[:, [1, 3]] *= (320.0 / 96.0)   # y coords
+        #     # recovered_yaw = torch.atan2(T_pred_in_drone_recovered[1,0], T_pred_in_drone_recovered[0,0])
+        #     try:
+        #         bb = bb_from_xyz(camera_intrinsic.detach().cpu().numpy(), camera_extrinsic.detach().cpu().numpy(), T_pred_in_drone_recovered[:3, 3].detach().cpu().numpy(), RADIUS)
+        #         bb = torch.tensor(bb, dtype=torch.float32).to(device).unsqueeze(0)  # add batch dimension
+        #         # scale to image of size 320 x 640
+        #         bb[:, [0, 2]] *= (640.0 / 160.0)  # x coords
+        #         bb[:, [1, 3]] *= (320.0 / 96.0)   # y coords
             
-            except TypeError:
-                print("Bounding box could not be computed, setting to bb detected by Yolo")
-                with torch.no_grad():
-                    img_v = torch.nn.functional.interpolate(img, size=(320, 640), mode='bilinear', align_corners=False)
-                    img_v = torch.repeat_interleave(img_v, repeats=3, dim=1)  # to 3 channels
-                    bb = model(img_v).squeeze(1)
+        #     except TypeError:
+        #         print("Bounding box could not be computed, setting to bb detected by Yolo")
+        #         with torch.no_grad():
+        #             img_v = torch.nn.functional.interpolate(img, size=(320, 640), mode='bilinear', align_corners=False)
+        #             img_v = torch.repeat_interleave(img_v, repeats=3, dim=1)  # to 3 channels
+        #             bb = model(img_v).squeeze(1)
             
 
 
@@ -929,36 +928,43 @@ if __name__ == "__main__":
                     # print("Target bounding box:", bb, bb.shape)
 
 
-                    loss = F.mse_loss(prediction, bb.repeat(prediction.shape[0], 1))
+                    # loss = F.mse_loss(prediction, bb.repeat(prediction.shape[0], 1))
                     
-                    with torch.no_grad():
+                    # with torch.no_grad():
                         # handle (B,4) outputs
-                        pred_c = prediction.detach().clone()
-                        pred_c[:, [0, 2]] *= (160.0 / 640.0)  # x coords
-                        pred_c[:, [1, 3]] *= (96.0 / 320.0)   # y coords
+                        # pred_c = prediction.detach().clone()
+                    pred_scaled = prediction
+                    pred_scaled[:, [0, 2]] *= (160.0 / 640.0)  # x coords
+                    pred_scaled[:, [1, 3]] *= (96.0 / 320.0)   # y coords
 
 
-                        # print("Scaled prediction:", pred_c)
+                    # print("Scaled prediction:", pred_c)
 
 
-                        pred_c = cam.batch_xyz_from_boxes(pred_c, RADIUS) #  xyzyaw from bounding box
+                    pred_c = cam.batch_xyz_from_boxes(pred_scaled, RADIUS) #  xyzyaw from bounding box
+            
+                    T_pred_in_drone = T_matrix(pred_c[0])
+                    T_pred_in_world = T_drone_in_world @ T_pred_in_drone
+                    # print("T_pred_in_world within loop:")
+                    # print(T_pred_in_world)
+
+                    target_yaw = normalize_yaw_t(pred_c[0, 3])
+                    T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
+                    T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
+                    # print("Direction in world within loop:")
+                    # print(T_direction_world)
+
+                    T_setpoint_world = T_direction_world @ T_pred_in_world
+
+                    pred_c = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device).unsqueeze(0)  # prediction values
+                    distance = torch.norm(pred_c[0, :3] - target[:3], p=2)
+                    angular_loss = 1 - torch.cos(normalize_yaw_t(pred_c[0, 3]) - normalize_yaw_t(target[3]))
+
+                    # x,y,z,yaw loss
+                    loss = distance + angular_loss
                 
-                        T_pred_in_drone = T_matrix(pred_c[0])
-                        T_pred_in_world = T_drone_in_world @ T_pred_in_drone
-                        # print("T_pred_in_world within loop:")
-                        # print(T_pred_in_world)
-
-                        target_yaw = normalize_yaw_t(pred_c[0, 3])
-                        T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
-                        T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
-                        # print("Direction in world within loop:")
-                        # print(T_direction_world)
-
-                        T_setpoint_world = T_direction_world @ T_pred_in_world
-
-                        pred_c = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device).unsqueeze(0)  # prediction values
-                    # bounding box loss
-                    # 
+                # bounding box loss
+                # 
                
                 # print(f"Iter {i}, loss: {loss}, distance: {distance}, angle: {angular_loss}")
 
@@ -1017,7 +1023,7 @@ if __name__ == "__main__":
                     # gray to rgb
                     manipulated_image = manipulated_image.repeat_interleave(3, dim=1)
 
-                    prediction = model(manipulated_image)  # yolo expects images in range [0, 1], out (B, 1, 4)
+                    prediction = model(manipulated_image).squeeze(1)  # yolo expects images in range [0, 1], out (B, 1, 4)
                     
                     with torch.no_grad():
                         # print("YOLOv5 prediction before cam:", prediction.shape)
