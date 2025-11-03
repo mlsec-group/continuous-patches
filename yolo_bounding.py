@@ -30,7 +30,7 @@ SOFTMAX_MULT = 15.
 
 # get random coordinates for where patch should be
 def gen_patch_coords(n, size):
-    points = np.random.randint([0, 0], [IMSIZE[0] - size[0], IMSIZE[1]-size[1]], size=(1, 2))
+    points = np.random.randint([0, 0], [IMSIZE[0] - size[0], IMSIZE[1]-size[1]], size=(n, 2))
     return torch.tensor([([y, x, y+size[0], x+size[1]]) for (y, x) in points])
 
 
@@ -67,36 +67,37 @@ class YOLOBox(nn.Module):
         soft_scores = F.softmax(scores * SOFTMAX_MULT, dim=1)
         soft_scores = soft_scores.unsqueeze(1)
         selected_boxes = torch.bmm(soft_scores, boxes) * scale_factor
+        return selected_boxes
 
-        # printd('selected ', selected_boxes.shape, selected_boxes.grad_fn)
+        # # printd('selected ', selected_boxes.shape, selected_boxes.grad_fn)
 
-        # debugging
-        if show_imgs:
-            # true best boxes
-            highest_score_idxs = torch.argmax(scores, 1)
+        # # debugging
+        # if show_imgs:
+        #     # true best boxes
+        #     highest_score_idxs = torch.argmax(scores, 1)
 
-            for i in range(min(len(imgs), 10)):
-                # print(og_imgs.shape)
-                og_img = imgs[i].clone().detach().cpu().numpy() # shape (3, H, W)
-                og_img = (np.moveaxis(og_img, 0, -1) * 255).astype(np.uint8)
-                print(og_img.shape, np.max(og_img), np.min(og_img))
-                og_img = cv2.cvtColor(og_img,cv2.COLOR_RGB2BGR)
+        #     for i in range(min(len(imgs), 10)):
+        #         # print(og_imgs.shape)
+        #         og_img = imgs[i].clone().detach().cpu().numpy() # shape (3, H, W)
+        #         og_img = (np.moveaxis(og_img, 0, -1) * 255).astype(np.uint8)
+        #         print(og_img.shape, np.max(og_img), np.min(og_img))
+        #         og_img = cv2.cvtColor(og_img,cv2.COLOR_RGB2BGR)
 
-                true_best_box = boxes[i, highest_score_idxs[i]] * scale_factor
+        #         true_best_box = boxes[i, highest_score_idxs[i]] * scale_factor
 
-                xmin, ymin, xmax, ymax = true_best_box.detach().cpu().numpy().astype(int)
-                cv2.rectangle(og_img, (xmin, ymin), (xmax, ymax), (255, 0, 0.), 1)
+        #         xmin, ymin, xmax, ymax = true_best_box.detach().cpu().numpy().astype(int)
+        #         cv2.rectangle(og_img, (xmin, ymin), (xmax, ymax), (255, 0, 0.), 1)
 
-                selected_box = selected_boxes[i][0]
+        #         selected_box = selected_boxes[i][0]
  
-                xmin, ymin, xmax, ymax = int(selected_box[0]), int(selected_box[1]), int(selected_box[2]), int(selected_box[3])
-                cv2.rectangle(og_img, (xmin, ymin), (xmax, ymax), (255, 0, 255.), 1)
+        #         xmin, ymin, xmax, ymax = int(selected_box[0]), int(selected_box[1]), int(selected_box[2]), int(selected_box[3])
+        #         cv2.rectangle(og_img, (xmin, ymin), (xmax, ymax), (255, 0, 255.), 1)
 
-                cv2.imwrite(f'person_new_{i}.png', og_img)
+        #         cv2.imwrite(f'person_new_{i}.png', og_img)
 
-        # print('selected boxes shape', selected_boxes.shape)
-        xyzs = self.cam.batch_xyz_from_boxes(selected_boxes.squeeze(1))  # only using squeeze() here will cause all dimensions to be deleted if there's only one input image
-        return xyzs
+        # # print('selected boxes shape', selected_boxes.shape)
+        # xyzs = self.cam.batch_xyz_from_boxes(selected_boxes.squeeze(1))  # only using squeeze() here will cause all dimensions to be deleted if there's only one input image
+        # return xyzs
     
     def extract_boxes_and_scores(self, yolo_output):
         # Extract bounding boxes and scores from YOLO output

@@ -91,7 +91,7 @@ class Camera:
         return new_xyz
 
     # compute relative position of center of patch in camera frame
-    def tensor_xyz_from_bb(self, bb):
+    def tensor_xyz_from_bb(self, bb, radius=RADIUS):
         
         printd('bounding box', bb.grad_fn)
         center = (bb[1] + bb[3])/2
@@ -114,7 +114,7 @@ class Camera:
         printd('a1 nnorm', a1_norm.grad_fn)
 
         # get the distance    
-        distance = (np.sqrt(2)*RADIUS)/(torch.sqrt(1-torch.dot(a1,a2)/(a1_norm*a2_norm)))
+        distance = (np.sqrt(2)*radius)/(torch.sqrt(1-torch.dot(a1,a2)/(a1_norm*a2_norm)))
 
         printd('distance', distance.grad_fn)
 
@@ -127,19 +127,16 @@ class Camera:
         new_xyz = (torch.linalg.inv(self.camera_extrinsic_tens) @ torch.cat((xyz, torch.ones(1))))[:3]
         return new_xyz
     
-    def batch_xyz_from_boxes(self, boxes):
+    def batch_xyz_from_boxes(self, boxes, radius=RADIUS):
         batch_size = boxes.shape[0]
         xyzs = torch.zeros((batch_size, 4), device=boxes.device)
         # boxes is a tensor of size (B, 4)
         for i in range(batch_size):
             # print('boxes[i]', boxes[i], boxes[i].shape)
-            coords = self.tensor_xyz_from_bb(boxes[i])
-            # TODO: figure out how to calculate actual yaw angle
-            # maybe use the ground truth one stored in the dataset for the specific image
-            yaw = torch.zeros(1, device=boxes.device)
-            coords = torch.cat((coords, yaw))
+            coords = self.tensor_xyz_from_bb(boxes[i], radius)
+            yaw = torch.atan2(coords[1], coords[0])
             printd('coords', coords.grad_fn)
-            xyzs[i] = coords
+            xyzs[i] = torch.cat((coords, yaw.unsqueeze(0)))
 
         return xyzs
 

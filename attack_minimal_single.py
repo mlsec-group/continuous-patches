@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 import numpy as np
 
 import os
@@ -16,6 +17,8 @@ import matplotlib.pyplot as plt
 import pickle
 from scipy.optimize import linprog
 
+RADIUS = 0.3
+
 
 def normalize_yaw_t(yaw):
     return torch.atan2(torch.sin(yaw), torch.cos(yaw))
@@ -27,6 +30,129 @@ def dist(c1, c2):
         elementwise = torch.square(c1 - c2)
         # elementwise * torch.tensor([1, 1, 2, 2/.4, 2, 2])
         return torch.sqrt(torch.sum(elementwise, axis=-1))
+
+def solve_quadratic(a, b, c):
+    """
+    Solves ax^2 + bx + c = 0, returning two real roots.
+    Returns (None, None) if no real roots exist.
+    """
+    # Handle degenerate case (a=0 -> linear equation)
+    if np.abs(a) < 1e-9:
+        if np.abs(b) < 1e-9:
+            return (None, None) # No solution
+        root = -c / b
+        return (root, root)
+        
+    discriminant = b**2 - 4*a*c
+    
+    if discriminant < -1e-9: # Allow for small float errors
+        # No real roots
+        return (None, None)
+    
+    # Ensure discriminant is non-negative
+    sqrt_discriminant = np.sqrt(max(0.0, discriminant))
+    
+    # Calculate roots
+    root1 = (-b + sqrt_discriminant) / (2 * a)
+    root2 = (-b - sqrt_discriminant) / (2 * a)
+    
+    return (root1, root2)
+
+def bb_from_xyz(camera_intrinsic, camera_extrinsic, new_xyz, RADIUS):
+    """
+    Calculates the 2D bounding box silhouette of a sphere
+    centered at new_xyz (world coords) with a given RADIUS.
+    
+    This is the inverse of the xyz_from_bb function.
+    """
+    fx = camera_intrinsic[0, 0]
+    fy = camera_intrinsic[1, 1]
+    ox = camera_intrinsic[0, 2]
+    oy = camera_intrinsic[1, 2]
+
+    # === Step 1: Transform from World Coords to Camera Coords ===
+    # camera_extrinsic is T_c_w (World-to-Camera)
+    new_xyz_h = np.array([*new_xyz, 1.0])
+    xyz_h = camera_extrinsic @ new_xyz_h
+    xyz = xyz_h[:3] # 3D point (sphere center) in camera coordinates
+
+    # === Step 2: Get Center Ray (ac) and Distance ===
+    distance = np.linalg.norm(xyz)
+    
+    # Object is behind the camera (z is negative or zero)
+    if xyz[2] <= 1e-6:
+        print("Error: Object is behind or inside the camera.")
+        return None
+
+    # Camera is inside the sphere, silhouette is not defined
+    if distance < RADIUS:
+        print(f"Error: Camera is inside the object (distance {distance} < RADIUS {RADIUS}).")
+        return None
+
+    # 'ac' is the ray to the center, projected onto the z=1 plane
+    xc_cam = xyz[0] / xyz[2]
+    yc_cam = xyz[1] / xyz[2]
+    ac = np.array([xc_cam, yc_cam, 1.0])
+    norm_ac_sq = np.dot(ac, ac) # norm(ac)^2
+
+    # === Step 3: Find Tangent Angle ===
+    # From geometry: sin(theta/2) = RADIUS / distance
+    # We need cos^2(theta/2) = 1 - sin^2(theta/2)
+    # This is the squared cosine of the angle between the center ray (ac)
+    # and any tangent ray (a_tangent).
+    cos_half_theta_sq = 1.0 - (RADIUS / distance)**2
+    
+    # This is the common 'A' term for our quadratic solvers
+    A = norm_ac_sq * cos_half_theta_sq
+
+    # === Step 4: Solve for Horizontal Tangents (x1_cam, x2_cam) ===
+    # We solve a quadratic equation for x_cam, given yc_cam
+    # (A - xc_cam^2) * x^2 - (2*K1*xc_cam) * x + (A*K1 - K1^2) = 0
+    # where K1 = yc_cam^2 + 1.0
+    
+    K1_x = yc_cam**2 + 1.0
+    a_x = A - xc_cam**2
+    b_x = -2 * K1_x * xc_cam
+    c_x = K1_x * (A - K1_x)
+    
+    x1_cam, x2_cam = solve_quadratic(a_x, b_x, c_x)
+    
+    if x1_cam is None:
+        print("Error: Could not find horizontal tangent rays.")
+        return None
+
+    # === Step 5: Solve for Vertical Tangents (y1_cam, y2_cam) ===
+    # We solve a symmetric quadratic equation for y_cam, given xc_cam
+    # (A - yc_cam^2) * y^2 - (2*K2*yc_cam) * y + (A*K2 - K2^2) = 0
+    # where K2 = xc_cam^2 + 1.0
+    
+    K1_y = xc_cam**2 + 1.0
+    a_y = A - yc_cam**2
+    b_y = -2 * K1_y * yc_cam
+    c_y = K1_y * (A - K1_y)
+    
+    y1_cam, y2_cam = solve_quadratic(a_y, b_y, c_y)
+    
+    if y1_cam is None:
+        print("Error: Could not find vertical tangent rays.")
+        return None
+
+    # === Step 6: Convert Rays back to Pixel Coordinates ===
+    px_1 = x1_cam * fx + ox
+    px_2 = x2_cam * fx + ox
+    
+    py_1 = y1_cam * fy + oy
+    py_2 = y2_cam * fy + oy
+
+    # === Step 7: Construct Bounding Box ===
+    bb = np.array([
+        min(px_1, px_2), # bb[0] = x_min
+        min(py_1, py_2), # bb[1] = y_min
+        max(px_1, px_2), # bb[2] = x_max
+        max(py_1, py_2)  # bb[3] = y_max
+    ])
+    
+    return bb
 
 def _perspective_grid(
 coeffs: list[float], 
@@ -561,6 +687,26 @@ if __name__ == "__main__":
 
         target = target_trajectory[target_idx]
 
+        if model_name == 'yolov5':
+            T_setpoint_world = T_matrix(target)
+            recovered_target_yaw = torch.atan2(T_setpoint_world[1,0], T_setpoint_world[0,0])
+            T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
+            T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(recovered_target_yaw - torch.pi)).to(device)
+            # print("T_direction_world:")
+            T_pred_in_world_recovered = torch.linalg.inv(T_direction_world) @ T_setpoint_world
+            T_pred_in_drone_recovered = torch.linalg.inv(T_drone_in_world) @ T_pred_in_world_recovered
+
+            print("Predicted relative position (Yolo):", T_pred_in_drone_recovered[:3, 3].detach().cpu().numpy())
+
+            # recovered_yaw = torch.atan2(T_pred_in_drone_recovered[1,0], T_pred_in_drone_recovered[0,0])
+
+            bb = bb_from_xyz(camera_intrinsic.detach().cpu().numpy(), camera_extrinsic.detach().cpu().numpy(), T_pred_in_drone_recovered[:3, 3].detach().cpu().numpy(), RADIUS)
+            bb = torch.tensor(bb, dtype=torch.float32).to(device).unsqueeze(0)  # add batch dimension
+            # scale to image of size 320 x 640
+            bb[:, [0, 2]] *= (640.0 / 160.0)  # x coords
+            bb[:, [1, 3]] *= (320.0 / 96.0)   # y coords
+
+
         monitor_corners = calc_monitor_corners(T_drone_in_world, projector_world, camera_extrinsic, camera_intrinsic)
         # print("Monitor corners:")
         # print(monitor_corners)
@@ -738,40 +884,80 @@ if __name__ == "__main__":
                     # print("x, y, z, yaw:", x, y, z, yaw)
                     prediction = torch.stack([x, y, z, yaw])
                     prediction = prediction.squeeze(2).mT
+
+                    T_pred_in_drone = T_matrix(prediction[0])
+                    T_pred_in_world = T_drone_in_world @ T_pred_in_drone
+                    # print("T_pred_in_world within loop:")
+                    # print(T_pred_in_world)
+
+                    target_yaw = normalize_yaw_t(prediction[0, 3])
+                    T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
+                    T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
+                    # print("Direction in world within loop:")
+                    # print(T_direction_world)
+
+                    T_setpoint_world = T_direction_world @ T_pred_in_world
+                
+
+                    prediction = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device).unsqueeze(0)  # prediction values
+                    pred_c = prediction.detach().clone()
+
+                    distance = torch.norm(prediction[0, :3] - target[:3], p=2)
+                    angular_loss = 1 - torch.cos(normalize_yaw_t(prediction[0, 3]) - normalize_yaw_t(target[3]))
+
+                    # x,y,z,yaw loss
+                    loss = distance + angular_loss
+
                 elif model_name == 'yolov5':
                     # resize to 640x320
                     manipulated_image = torch.nn.functional.interpolate(manipulated_image, size=(320, 640), mode='bilinear', align_corners=False)
                     # gray to rgb
                     manipulated_image = manipulated_image.repeat_interleave(3, dim=1)
 
-                    prediction = model(manipulated_image)  # yolo expects images in range [0, 1]
+                    prediction = model(manipulated_image).squeeze(1)  # yolo expects images in range [0, 1], out (B, 4)
+                    # scale from 320x640 to 96x160
 
-                T_pred_in_drone = T_matrix(prediction[0])
-                T_pred_in_world = T_drone_in_world @ T_pred_in_drone
-                # print("T_pred_in_world within loop:")
-                # print(T_pred_in_world)
+                    # print("YOLOv5 prediction before loss calculation:", prediction, prediction.shape)
+                    # print("Target bounding box:", bb, bb.shape)
 
-                target_yaw = normalize_yaw_t(prediction[0, 3])
-                T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
-                T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
-                # print("Direction in world within loop:")
-                # print(T_direction_world)
 
-                T_setpoint_world = T_direction_world @ T_pred_in_world
+                    loss = F.mse_loss(prediction, bb.repeat(prediction.shape[0], 1))
+                    
+                    with torch.no_grad():
+                        # handle (B,4) outputs
+                        pred_c = prediction.detach().clone()
+                        pred_c[:, [0, 2]] *= (160.0 / 640.0)  # x coords
+                        pred_c[:, [1, 3]] *= (96.0 / 320.0)   # y coords
+
+
+                        # print("Scaled prediction:", pred_c)
+
+
+                        pred_c = cam.batch_xyz_from_boxes(pred_c, RADIUS) #  xyzyaw from bounding box
+                
+                        T_pred_in_drone = T_matrix(pred_c[0])
+                        T_pred_in_world = T_drone_in_world @ T_pred_in_drone
+                        # print("T_pred_in_world within loop:")
+                        # print(T_pred_in_world)
+
+                        target_yaw = normalize_yaw_t(pred_c[0, 3])
+                        T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
+                        T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
+                        # print("Direction in world within loop:")
+                        # print(T_direction_world)
+
+                        T_setpoint_world = T_direction_world @ T_pred_in_world
+
+                        pred_c = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device).unsqueeze(0)  # prediction values
+                    # bounding box loss
+                    # 
                
-
-                prediction = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device).unsqueeze(0)  # prediction values
-
-                distance = torch.norm(prediction[0, :3] - target[:3], p=2)
-                angular_loss = 1 - torch.cos(normalize_yaw_t(prediction[0, 3]) - normalize_yaw_t(target[3]))
-
-                loss = distance + angular_loss
                 # print(f"Iter {i}, loss: {loss}, distance: {distance}, angle: {angular_loss}")
 
                 if loss < best_loss:
                     best_loss = loss.detach().detach().clone()
                     best_patch = patch.detach().clone()
-                    best_setpoint = prediction[0].detach().clone()
+                    best_setpoint = pred_c[0].detach().clone()
 
                 loss.backward()
                 opt.step()
@@ -816,14 +1002,29 @@ if __name__ == "__main__":
                 # print("x, y, z, yaw:", x, y, z, yaw)
                 prediction = torch.stack([x, y, z, yaw])
                 prediction = prediction.squeeze(2).mT
+
             elif model_name == 'yolov5':
-                # resize to 640x320
-                manipulated_image = torch.nn.functional.interpolate(manipulated_image, size=(320, 640), mode='bilinear', align_corners=False)
-                # gray to rgb
-                manipulated_image = manipulated_image.repeat_interleave(3, dim=1)
+                    # resize to 640x320
+                    manipulated_image = torch.nn.functional.interpolate(manipulated_image, size=(320, 640), mode='bilinear', align_corners=False)
+                    # gray to rgb
+                    manipulated_image = manipulated_image.repeat_interleave(3, dim=1)
 
-                prediction = model(manipulated_image)  # yolo expects images in range [0, 1]
+                    prediction = model(manipulated_image)  # yolo expects images in range [0, 1], out (B, 1, 4)
+                    
+                    with torch.no_grad():
+                        # print("YOLOv5 prediction before cam:", prediction.shape)
+                        pred_c = prediction.detach().clone()
+                        #scale back to 160x96
+                        pred_c[:, [0, 2]] *= (160.0 / 640.0)  # x coords
+                        pred_c[:, [1, 3]] *= (96.0 / 320.0)   # y coords
 
+                        print("YOLOv5 prediction before scaling to 160x96:", prediction)
+                        print("Scaled bounding box for 160x96 image: ", pred_c)
+
+                        prediction = cam.batch_xyz_from_boxes(pred_c, RADIUS) #  xyzyaw from bounding box
+
+
+            # prediction values
             T_pred_in_drone = T_matrix(prediction[0])
             T_pred_in_world = T_drone_in_world @ T_pred_in_drone
             # print("T_pred_in_world within loop:")
