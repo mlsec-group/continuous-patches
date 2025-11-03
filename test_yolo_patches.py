@@ -191,17 +191,24 @@ def bb_from_xyz(camera_intrinsic, camera_extrinsic, new_xyz, RADIUS):
     return bb
 
 def gen_random_patch_coords():
-    random_sf = np.random.uniform(0.2, 1.1)
-    random_upper_left_x = np.random.uniform(0, 160 - 80 * random_sf, 1)
-    random_upper_left_y = np.random.uniform(0, 96 - 45 * random_sf, 1)
-    random_lower_right_x = random_upper_left_x + 80 * random_sf
-    random_lower_right_y = random_upper_left_y + 45 * random_sf
+    check = False
+    # i = 0
+    while not check:
+        random_sf = np.random.uniform(0.2, 1.1)
+        random_upper_left_x = np.random.uniform(0, 160 - (80 * random_sf), 1)
+        random_upper_left_y = np.random.uniform(0, 96 - (45 * random_sf), 1)
+        random_lower_right_x = random_upper_left_x + (80 * random_sf)
+        random_lower_right_y = random_upper_left_y + (45 * random_sf)
 
-    upper_left = [random_upper_left_x[0], random_upper_left_y[0]]
-    lower_right = [random_lower_right_x[0], random_lower_right_y[0]]
+        upper_left = [random_upper_left_x[0], random_upper_left_y[0]]
+        lower_right = [random_lower_right_x[0], random_lower_right_y[0]]
+        check = check_bb_overlap((*upper_left, *lower_right), [0., 0., 160., 96.], threshold=0.5)
+        # i += 1
+        # print("BB coords: ", (*upper_left, *lower_right))
+        # print(f"Trying to generate random patch coords, attempt {i}, success: {check}")
 
     tx_min = upper_left[0]
-    ty_min = lower_right[1]
+    ty_min = upper_left[1]
 
     T = torch.eye(3, device=device, dtype=torch.float32)  # Identity transformation matrix
     T[:2, :2] *= random_sf  # Scale down to half the size of the patch
@@ -210,31 +217,42 @@ def gen_random_patch_coords():
 
     return T
 
-def check_bb_overlap(bb1, bb2, percentage=0.2):
+def check_bb_overlap(rect1, rect2, threshold=0.5):
     """
-    Check if two bounding boxes overlap by a certain percentage.
-    bb1, bb2: [x_min, y_min, x_max, y_max]
-    percentage: minimum overlap percentage required to return True
+    Return True if at least `threshold` fraction of rect1's area is inside rect2.
+
+    rect1, rect2: (x1, y1, x2, y2) (corners can be in any order)
+    threshold: fraction in [0,1]
     """
-    x_min_overlap = max(bb1[0], bb2[0])
-    y_min_overlap = max(bb1[1], bb2[1])
-    x_max_overlap = min(bb1[2], bb2[2])
-    y_max_overlap = min(bb1[3], bb2[3])
+    # Normalize coordinates (ensure x1<=x2, y1<=y2)
+    ax1, ay1, ax2, ay2 = rect1
+    bx1, by1, bx2, by2 = rect2
 
-    if x_min_overlap < x_max_overlap and y_min_overlap < y_max_overlap:
-        # Calculate areas
-        area_bb1 = (bb1[2] - bb1[0]) * (bb1[3] - bb1[1])
-        area_bb2 = (bb2[2] - bb2[0]) * (bb2[3] - bb2[1])
-        area_overlap = (x_max_overlap - x_min_overlap) * (y_max_overlap - y_min_overlap)
+    ax1, ax2 = min(ax1, ax2), max(ax1, ax2)
+    ay1, ay2 = min(ay1, ay2), max(ay1, ay2)
+    bx1, bx2 = min(bx1, bx2), max(bx1, bx2)
+    by1, by2 = min(by1, by2), max(by1, by2)
 
-        # Calculate overlap percentages
-        overlap_percentage_bb1 = area_overlap / area_bb1
-        overlap_percentage_bb2 = area_overlap / area_bb2
+    # Intersection coordinates
+    ix1 = max(ax1, bx1)
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
 
-        if overlap_percentage_bb1 >= percentage or overlap_percentage_bb2 >= percentage:
-            return True
+    # Intersection area
+    inter_w = max(0.0, ix2 - ix1)
+    inter_h = max(0.0, iy2 - iy1)
+    inter_area = inter_w * inter_h
 
-    return False
+    # Area of rect1
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+
+    if area_a <= 0.0:
+        # Degenerate rect1: treat as not meeting any positive threshold
+        return threshold == 0.0
+
+    fraction_inside = inter_area / area_a
+    return fraction_inside >= threshold
 
 if __name__ == "__main__":
 
@@ -270,7 +288,7 @@ if __name__ == "__main__":
         bb = bb_from_xyz(camera_intrinsic, camera_extrinsic, target[:3], RADIUS)
 
         # check if bb has overlap with image
-        if bb is not None and not check_bb_overlap(bb, cam_image_corner, percentage=0.5):
+        if bb is not None and not check_bb_overlap(bb, cam_image_corner, threshold=0.4):
             bb = None
     
     print("Target xyz: ", target[:3])
@@ -281,7 +299,10 @@ if __name__ == "__main__":
     print("Recovered target xyz: ", xyz)
 
     bb = torch.tensor(bb, dtype=torch.float32).to(device).unsqueeze(0).unsqueeze(0)  # add batch dimension
-
+    # scale to image of size 320 x 640
+    bb[:, :, [0, 2]] *= (640.0 / 160.0)
+    bb[:, :, [1, 3]] *= (320.0 / 96.0)
+    print("Scaled bounding box for 640x320 image: ", bb)
 
     model = YOLOBox()
     model.model.eval()
@@ -295,7 +316,7 @@ if __name__ == "__main__":
 
     T = gen_random_patch_coords().unsqueeze(0).to(device)
 
-    opt = torch.optim.Adam([patch], lr=1e-2)
+    opt = torch.optim.Adam([patch], lr=5e-2)
 
     loss = torch.tensor(0.).to(device)
     # loss.requires_grad_(True)
@@ -331,11 +352,14 @@ if __name__ == "__main__":
             # print("Manipulated image shape after repeat: ", manipulated_image.shape)
 
             prediction = model(manipulated_image) # of shape (B, 1, 4)
+            # print("Prediction shape: ", prediction.shape)
 
-            # print("Prediction: ", prediction, prediction.shape)
+
+            # print("Prediction: ", prediction[0], prediction.shape)
             # print("BB: ", bb, bb.shape)
 
-            loss = F.pairwise_distance(prediction, bb, p=2).mean()
+            #loss = F.smooth_l1_loss(prediction, bb.repeat(manipulated_image.shape[0],1,1))
+            loss = F.mse_loss(prediction, bb.repeat(manipulated_image.shape[0],1,1))
 
             loss.backward()
             opt.step()
@@ -345,8 +369,15 @@ if __name__ == "__main__":
 
             patch.data.clamp_(0., 1.)
 
-        if (i+1) % 10 == 0:
+
+        if (i+1) % 1 == 0:
             print(f"Epoch {i+1}/{epochs}, Loss: {epoch_loss/len(train_dataloader)}")
+            # sanity check loss
+            # with torch.no_grad():
+            #     print(F.mse_loss(prediction, bb))
+            #     print(F.l1_loss(prediction, bb))
+            #     print(F.smooth_l1_loss(prediction, bb))
+            #     print(F.pairwise_distance(prediction, bb).mean())
             # save intermediate patch
             np_patch = patch.detach().cpu().squeeze().numpy() # 45 x 80
             # print(np_patch.shape, np_patch.min(), np_patch.max())
@@ -375,53 +406,41 @@ if __name__ == "__main__":
             pred_bb_np = pred_bb_tensor.detach().cpu().squeeze().numpy()  # [x_min, y_min, x_max, y_max]
 
             # convert to numpy image for saving/visualization
-            manipulated_sample = manipulated_sample.detach().cpu().numpy().squeeze() # 3 x H x W
+            manipulated_sample = manipulated_sample.detach().cpu().numpy().squeeze() # 3 x 320 x 640
             img = manipulated_sample.transpose(1, 2, 0).copy()  # H x W x 3, values in [0,1]
 
             # retrieve ground-truth bb (was stored on device as (1,1,4)) and scale to current image size
             bb_np = bb.detach().cpu().squeeze().numpy()  # [x_min, y_min, x_max, y_max]
-            H, W = img.shape[0], img.shape[1]
-            h_scale = H / 96.0
-            w_scale = W / 160.0
 
-            # scale and clamp ground-truth box
-            gx0 = int(np.round(bb_np[0] * w_scale))
-            gy0 = int(np.round(bb_np[1] * h_scale))
-            gx1 = int(np.round(bb_np[2] * w_scale))
-            gy1 = int(np.round(bb_np[3] * h_scale))
+            # draw ground-truth (green) and prediction (red) boxes on img (H=320, W=640)
+            gt = np.nan_to_num(bb_np).astype(float)
+            pred = np.nan_to_num(pred_bb_np).astype(float)
 
-            gx0 = max(0, min(W - 1, gx0))
-            gx1 = max(0, min(W - 1, gx1))
-            gy0 = max(0, min(H - 1, gy0))
-            gy1 = max(0, min(H - 1, gy1))
+            def to_int_clip(coords, H, W):
+                x1, y1, x2, y2 = coords
+                x1, x2 = int(np.clip(round(min(x1, x2)), 0, W - 1)), int(np.clip(round(max(x1, x2)), 0, W - 1))
+                y1, y2 = int(np.clip(round(min(y1, y2)), 0, H - 1)), int(np.clip(round(max(y1, y2)), 0, H - 1))
+                return x1, y1, x2, y2
 
-            # scale and clamp predicted box
-            px0 = int(np.round(pred_bb_np[0] * w_scale))
-            py0 = int(np.round(pred_bb_np[1] * h_scale))
-            px1 = int(np.round(pred_bb_np[2] * w_scale))
-            py1 = int(np.round(pred_bb_np[3] * h_scale))
+            def draw_box(img, x1, y1, x2, y2, color, width=2):
+                H, W = img.shape[:2]
+                x1, y1, x2, y2 = max(0, x1), max(0, y1), min(W - 1, x2), min(H - 1, y2)
+                for w in range(width):
+                    xl, xr = x1 + w, x2 - w
+                    yt, yb = y1 + w, y2 - w
+                    if xl <= xr:
+                        img[yt, xl:xr+1] = color
+                        img[yb, xl:xr+1] = color
+                    if yt <= yb:
+                        img[yt:yb+1, xl] = color
+                        img[yt:yb+1, xr] = color
 
-            px0 = max(0, min(W - 1, px0))
-            px1 = max(0, min(W - 1, px1))
-            py0 = max(0, min(H - 1, py0))
-            py1 = max(0, min(H - 1, py1))
+            H, W = img.shape[:2]
+            gt_x1, gt_y1, gt_x2, gt_y2 = to_int_clip(gt, H, W)
+            pr_x1, pr_y1, pr_x2, pr_y2 = to_int_clip(pred, H, W)
 
-            # draw rectangles
-            gt_color = np.array([1.0, 0.0, 0.0], dtype=img.dtype)   # red = ground-truth
-            pred_color = np.array([0.0, 1.0, 0.0], dtype=img.dtype) # green = prediction
-            thickness = max(1, int(round(min(H, W) * 0.005)))
-
-            # ground-truth box
-            img[gy0:gy0+thickness, gx0:gx1+1] = gt_color
-            img[max(0, gy1-thickness):gy1+1, gx0:gx1+1] = gt_color
-            img[gy0:gy1+1, gx0:gx0+thickness] = gt_color
-            img[gy0:gy1+1, max(0, gx1-thickness):gx1+1] = gt_color
-
-            # predicted box
-            img[py0:py0+thickness, px0:px1+1] = pred_color
-            img[max(0, py1-thickness):py1+1, px0:px1+1] = pred_color
-            img[py0:py1+1, px0:px0+thickness] = pred_color
-            img[py0:py1+1, max(0, px1-thickness):px1+1] = pred_color
+            draw_box(img, gt_x1, gt_y1, gt_x2, gt_y2, color=np.array([0.0, 1.0, 0.0]), width=2)
+            draw_box(img, pr_x1, pr_y1, pr_x2, pr_y2, color=np.array([1.0, 0.0, 0.0]), width=2)
 
             plt.imsave(f'debugging/output_patches/manipulated_sample_epoch_{i+1}.png', img, vmin=0, vmax=1)
             plt.close()
