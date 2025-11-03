@@ -270,7 +270,7 @@ if __name__ == "__main__":
         bb = bb_from_xyz(camera_intrinsic, camera_extrinsic, target[:3], RADIUS)
 
         # check if bb has overlap with image
-        if bb is not None and not check_bb_overlap(bb, cam_image_corner, percentage=0.3):
+        if bb is not None and not check_bb_overlap(bb, cam_image_corner, percentage=0.5):
             bb = None
     
     print("Target xyz: ", target[:3])
@@ -295,7 +295,7 @@ if __name__ == "__main__":
 
     T = gen_random_patch_coords().unsqueeze(0).to(device)
 
-    opt = torch.optim.Adam([patch], lr=1e-3)
+    opt = torch.optim.Adam([patch], lr=1e-2)
 
     loss = torch.tensor(0.).to(device)
     # loss.requires_grad_(True)
@@ -345,24 +345,83 @@ if __name__ == "__main__":
 
             patch.data.clamp_(0., 1.)
 
-        print(f"Epoch {i+1}/{epochs}, Loss: {epoch_loss/len(train_dataloader)}")
-        # save intermediate patch
-        np_patch = patch.detach().cpu().squeeze().numpy() # 45 x 80
-        # print(np_patch.shape, np_patch.min(), np_patch.max())
+        if (i+1) % 10 == 0:
+            print(f"Epoch {i+1}/{epochs}, Loss: {epoch_loss/len(train_dataloader)}")
+            # save intermediate patch
+            np_patch = patch.detach().cpu().squeeze().numpy() # 45 x 80
+            # print(np_patch.shape, np_patch.min(), np_patch.max())
 
 
-        # save patch (np_patch in [0,1])
-        plt.imsave(f'debugging/output_patches/patch_epoch_{i+1}.png', np_patch, cmap='gray', vmin=0, vmax=1)
+            # save patch (np_patch in [0,1])
+            plt.imsave(f'debugging/output_patches/patch_epoch_{i+1}.png', np_patch, cmap='gray', vmin=0, vmax=1)
+            plt.close()
 
-        # visualize on a sample image
-        manipulated_sample = project_patch(
-            patches=patch,
-            T_matrices=T,
-            images=batch[0:1].to(device)
-            )
-        manipulated_sample = manipulated_sample.detach().cpu().numpy().squeeze()  # 96 x 160
-        # print("Manipulated sample shape: ", manipulated_sample.shape, manipulated_sample.min(), manipulated_sample.max())
+            # visualize on a sample image
+            manipulated_sample = project_patch(
+                patches=patch,
+                T_matrices=T,
+                images=batch[0:1].to(device)
+                )
 
-        plt.imsave(f'debugging/output_patches/manipulated_sample_epoch_{i+1}.png', manipulated_sample, cmap='gray', vmin=0, vmax=1)
+            # print("Manipulated sample shape: ", manipulated_sample.shape, manipulated_sample.min().item(), manipulated_sample.max().item())
 
-        plt.close('all')
+            manipulated_sample = torch.nn.functional.interpolate(manipulated_sample, size=(320, 640), mode='bilinear', align_corners=False)
+            # gray to rgb
+            manipulated_sample = manipulated_sample.repeat_interleave(3, dim=1)
+
+            # --- get model prediction for the sample before converting to numpy ---
+            with torch.no_grad():
+                pred_bb_tensor = model(manipulated_sample)  # expect shape (1,1,4)
+            pred_bb_np = pred_bb_tensor.detach().cpu().squeeze().numpy()  # [x_min, y_min, x_max, y_max]
+
+            # convert to numpy image for saving/visualization
+            manipulated_sample = manipulated_sample.detach().cpu().numpy().squeeze() # 3 x H x W
+            img = manipulated_sample.transpose(1, 2, 0).copy()  # H x W x 3, values in [0,1]
+
+            # retrieve ground-truth bb (was stored on device as (1,1,4)) and scale to current image size
+            bb_np = bb.detach().cpu().squeeze().numpy()  # [x_min, y_min, x_max, y_max]
+            H, W = img.shape[0], img.shape[1]
+            h_scale = H / 96.0
+            w_scale = W / 160.0
+
+            # scale and clamp ground-truth box
+            gx0 = int(np.round(bb_np[0] * w_scale))
+            gy0 = int(np.round(bb_np[1] * h_scale))
+            gx1 = int(np.round(bb_np[2] * w_scale))
+            gy1 = int(np.round(bb_np[3] * h_scale))
+
+            gx0 = max(0, min(W - 1, gx0))
+            gx1 = max(0, min(W - 1, gx1))
+            gy0 = max(0, min(H - 1, gy0))
+            gy1 = max(0, min(H - 1, gy1))
+
+            # scale and clamp predicted box
+            px0 = int(np.round(pred_bb_np[0] * w_scale))
+            py0 = int(np.round(pred_bb_np[1] * h_scale))
+            px1 = int(np.round(pred_bb_np[2] * w_scale))
+            py1 = int(np.round(pred_bb_np[3] * h_scale))
+
+            px0 = max(0, min(W - 1, px0))
+            px1 = max(0, min(W - 1, px1))
+            py0 = max(0, min(H - 1, py0))
+            py1 = max(0, min(H - 1, py1))
+
+            # draw rectangles
+            gt_color = np.array([1.0, 0.0, 0.0], dtype=img.dtype)   # red = ground-truth
+            pred_color = np.array([0.0, 1.0, 0.0], dtype=img.dtype) # green = prediction
+            thickness = max(1, int(round(min(H, W) * 0.005)))
+
+            # ground-truth box
+            img[gy0:gy0+thickness, gx0:gx1+1] = gt_color
+            img[max(0, gy1-thickness):gy1+1, gx0:gx1+1] = gt_color
+            img[gy0:gy1+1, gx0:gx0+thickness] = gt_color
+            img[gy0:gy1+1, max(0, gx1-thickness):gx1+1] = gt_color
+
+            # predicted box
+            img[py0:py0+thickness, px0:px1+1] = pred_color
+            img[max(0, py1-thickness):py1+1, px0:px1+1] = pred_color
+            img[py0:py1+1, px0:px0+thickness] = pred_color
+            img[py0:py1+1, max(0, px1-thickness):px1+1] = pred_color
+
+            plt.imsave(f'debugging/output_patches/manipulated_sample_epoch_{i+1}.png', img, vmin=0, vmax=1)
+            plt.close()
