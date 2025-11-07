@@ -860,7 +860,7 @@ if __name__ == "__main__":
             if args.temperature == 'warm' and target_idx > 1:
                 patch = best_patch.clone().detach().requires_grad_(True)
 
-            opt = torch.optim.Adam([patch], lr=3e-2)
+            opt = torch.optim.Adam([patch], lr=3e-2)  # was at 3e-2
             
             loss = torch.inf
             i = 0
@@ -871,8 +871,9 @@ if __name__ == "__main__":
             best_setpoint = None
 
             time_start_optim_step = time.time()
+            losses = []
 
-            while loss > 0.01 and i < 1000:
+            while loss > 0.01 and i < 5000:
                 if timeout is not None and (time.time() - time_start_optim_step > timeout):  # 30 Hz
                     break
                 opt.zero_grad()
@@ -892,29 +893,6 @@ if __name__ == "__main__":
                     prediction = torch.stack([x, y, z, yaw])
                     prediction = prediction.squeeze(2).mT
 
-                    T_pred_in_drone = T_matrix(prediction[0])
-                    T_pred_in_world = T_drone_in_world @ T_pred_in_drone
-                    # print("T_pred_in_world within loop:")
-                    # print(T_pred_in_world)
-
-                    target_yaw = normalize_yaw_t(prediction[0, 3])
-                    T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
-                    T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
-                    # print("Direction in world within loop:")
-                    # print(T_direction_world)
-
-                    T_setpoint_world = T_direction_world @ T_pred_in_world
-                
-
-                    prediction = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device).unsqueeze(0)  # prediction values
-                    pred_c = prediction.detach().clone()
-
-                    distance = torch.norm(prediction[0, :3] - target[:3], p=2)
-                    angular_loss = 1 - torch.cos(normalize_yaw_t(prediction[0, 3]) - normalize_yaw_t(target[3]))
-
-                    # x,y,z,yaw loss
-                    loss = distance + angular_loss
-
                 elif model_name == 'yolov5':
                     # resize to 640x320
                     manipulated_image = torch.nn.functional.interpolate(manipulated_image, size=(320, 640), mode='bilinear', align_corners=False)
@@ -933,41 +911,49 @@ if __name__ == "__main__":
                     # with torch.no_grad():
                         # handle (B,4) outputs
                         # pred_c = prediction.detach().clone()
-                    pred_scaled = prediction
-                    pred_scaled[:, [0, 2]] *= (160.0 / 640.0)  # x coords
-                    pred_scaled[:, [1, 3]] *= (96.0 / 320.0)   # y coords
+                    # pred_scaled = prediction
+                    prediction[:, [0, 2]] *= (160.0 / 640.0)  # x coords
+                    prediction[:, [1, 3]] *= (96.0 / 320.0)   # y coords
 
 
                     # print("Scaled prediction:", pred_c)
 
 
-                    pred_c = cam.batch_xyz_from_boxes(pred_scaled, RADIUS) #  xyzyaw from bounding box
+                    prediction = cam.batch_xyz_from_boxes(pred_scaled, RADIUS) #  xyzyaw from bounding box
             
-                    T_pred_in_drone = T_matrix(pred_c[0])
-                    T_pred_in_world = T_drone_in_world @ T_pred_in_drone
-                    # print("T_pred_in_world within loop:")
-                    # print(T_pred_in_world)
+                T_pred_in_drone = T_matrix(prediction[0])
+                T_pred_in_world = T_drone_in_world @ T_pred_in_drone
+                # print("T_pred_in_world within loop:")
+                # print(T_pred_in_world)
 
-                    target_yaw = normalize_yaw_t(pred_c[0, 3])
-                    T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
-                    T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
-                    # print("Direction in world within loop:")
-                    # print(T_direction_world)
+                target_yaw = normalize_yaw_t(prediction[0, 3])
+                T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
+                T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
+                # print("Direction in world within loop:")
+                # print(T_direction_world)
 
-                    T_setpoint_world = T_direction_world @ T_pred_in_world
+                T_setpoint_world = T_direction_world @ T_pred_in_world
 
-                    pred_c = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device).unsqueeze(0)  # prediction values
-                    distance = torch.norm(pred_c[0, :3] - target[:3], p=2)
-                    angular_loss = 1 - torch.cos(normalize_yaw_t(pred_c[0, 3]) - normalize_yaw_t(target[3]))
+                # print("Target: ", target)
+                # print("Predicted setpoint in world: ", T_setpoint_world[:3, 3], target_yaw)
 
-                    # x,y,z,yaw loss
-                    loss = distance + angular_loss
+                prediction = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device).unsqueeze(0)  # prediction values
+                # distance = torch.norm(prediction[0, :3] - target[:3], p=2)
+                #distance = F.mse_loss(prediction[0, :3], target[:3])
+                # distance = torch.mean((prediction[0, :3] - target[:3]).pow(2))
+                # distance = torch.sqrt((prediction[0, :3] - target[:3]).pow(2)).mean()
+                distance = torch.dist(prediction[0, :3], target[:3], p=2)
+                angular_loss = 1 - torch.cos(normalize_yaw_t(prediction[0, 3]) - normalize_yaw_t(target[3]))
+
+                # print("Distance old:", distance_old)
+                # print("Distance new:", distance)
+
+                # x,y,z,yaw loss
+                loss = distance + angular_loss
                 
                 # bounding box loss
                 # 
-               
-                # print(f"Iter {i}, loss: {loss}, distance: {distance}, angle: {angular_loss}")
-
+                
                 if loss < best_loss:
                     best_loss = loss.detach().detach().clone()
                     best_patch = patch.detach().clone()
@@ -975,6 +961,11 @@ if __name__ == "__main__":
 
                 loss.backward()
                 opt.step()
+
+                losses.append(loss.detach().cpu().item())
+                if i % 50 == 0:
+                    print(f"Iter {i}, loss: {loss}, distance: {distance}, angle: {angular_loss}, mean loss last 50 iters: {np.mean(losses[-50:])}")
+
 
                 patch.data.clamp_(0., 1.)
                 i += 1
@@ -1025,18 +1016,14 @@ if __name__ == "__main__":
 
                     prediction = model(manipulated_image).squeeze(1)  # yolo expects images in range [0, 1], out (B, 1, 4)
                     
-                    with torch.no_grad():
-                        # print("YOLOv5 prediction before cam:", prediction.shape)
-                        pred_c = prediction.detach().clone()
-                        #scale back to 160x96
-                        pred_c[:, [0, 2]] *= (160.0 / 640.0)  # x coords
-                        pred_c[:, [1, 3]] *= (96.0 / 320.0)   # y coords
+                    #scale back to 160x96
+                    prediction[:, [0, 2]] *= (160.0 / 640.0)  # x coords
+                    prediction[:, [1, 3]] *= (96.0 / 320.0)   # y coords
 
-                        print("YOLOv5 prediction before scaling to 160x96:", prediction)
-                        print("Scaled bounding box for 160x96 image: ", pred_c)
+                    # print("YOLOv5 prediction before scaling to 160x96:", prediction)
+                    # print("Scaled bounding box for 160x96 image: ", prediction)
 
-                        prediction = cam.batch_xyz_from_boxes(pred_c, RADIUS) #  xyzyaw from bounding box
-
+                    prediction = cam.batch_xyz_from_boxes(prediction, RADIUS) #  xyzyaw from bounding box
 
             # prediction values
             T_pred_in_drone = T_matrix(prediction[0])
