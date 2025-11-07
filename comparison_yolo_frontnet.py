@@ -46,10 +46,25 @@ for step, (batch, gt) in enumerate(train_dataloader):
     prediction_yolo[:, [1, 3]] *= (96.0 / 320.0)   # y coords
 
     prediction_yolo = cam.batch_xyz_from_boxes(prediction_yolo, radius) #  xyzyaw from bounding box
+    print("yolo shape: ", prediction_yolo.shape)
+
+    x, y, z, yaw = frontnet(batch)
+    prediction_frontnet = torch.stack([x, y, z, yaw], dim=1)
+    prediction_frontnet = prediction_frontnet.squeeze(2)
+    print("frontnet shape: ", prediction_frontnet.shape)
+
 
     print("GT: ", gt)
     print("YOLO: ", prediction_yolo)
+    print("Frontnet: ", prediction_frontnet)
+
     distance_yolo = torch.norm(gt[:, :3] - prediction_yolo[:, :3], dim=1)
+    distance_frontnet = torch.norm(gt[:, :3] - prediction_frontnet[:, :3], dim=1)
+    print("Distance YOLO: ", distance_yolo)
+    print("Distance Frontnet: ", distance_frontnet)
+
+    distance_yolo_to_frontnet = torch.norm(prediction_yolo[:, :3] - prediction_frontnet[:, :3], dim=1)
+    print("Distance YOLO to Frontnet: ", distance_yolo_to_frontnet)
 
     # gt_yaw = normalize_yaw_t(gt[:, 3])
     # pred_yaw_yolo = normalize_yaw_t(prediction_yolo[:, 3])
