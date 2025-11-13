@@ -51,7 +51,7 @@ class YOLOBox(nn.Module):
         # camera
         self.cam = Camera(cam_config)
 
-    def forward(self, imgs, show_imgs=False):
+    def forward(self, imgs, softmax_mult=15., show_imgs=False):
         # imgs = og_imgs / 255.0
 
         # imgs = torch.repeat_interleave(imgs, 3, dim=1)
@@ -60,15 +60,22 @@ class YOLOBox(nn.Module):
         # resized_inputs = torch.nn.functional.interpolate(imgs, size=(TENSOR_DEFAULT_WIDTH//2, TENSOR_DEFAULT_WIDTH), mode="bilinear")
         output = self.model(imgs)
 
-        scale_factor = imgs.size()[3] / TENSOR_DEFAULT_WIDTH
-        boxes, scores = self.extract_boxes_and_scores(output[0])
+        # preds[0] is [B, num_preds, 5+nc] for YOLOv5: [x,y,w,h,obj,...]
+        logits = output[0] if isinstance(output, (list, tuple)) else output
+        objectness = logits[..., 4]                 # [B, N]
+        person_scores = objectness * logits[..., 5]  # [B, N]
 
-        # take a weighted average of the boxes
-        soft_scores = F.softmax(scores * SOFTMAX_MULT, dim=1)
-        soft_scores = soft_scores.unsqueeze(1)
-        selected_boxes = torch.bmm(soft_scores, boxes) * scale_factor
-        return selected_boxes
+        person_softmax = torch.softmax(person_scores * self.softmax_mult, dim=1)  # [B, N]
 
+        person_box_xywh = (person_softmax.unsqueeze(-1) * logits[..., :4]).sum(dim=1)  # [B, 4]
+        cx, cy, w, h = person_box_xywh.unbind(-1)
+        x1 = cx - w / 2
+        y1 = cy - h / 2
+        x2 = cx + w / 2
+        y2 = cy + h / 2
+        person_boxes_xyxy = torch.stack((x1, y1, x2, y2), dim=-1)  # [B, 4]
+        
+        return person_boxes_xyxy
         # # printd('selected ', selected_boxes.shape, selected_boxes.grad_fn)
 
         # # debugging
