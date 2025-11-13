@@ -27,6 +27,7 @@ class Camera:
         self.distortion_coeffs = np.array(camera_config['dist_coeff'])
 
         self.device = device
+        # print("Camera device:", self.device)
         
         rvec = np.array(camera_config['rvec'])
         tvec = camera_config['tvec']
@@ -44,6 +45,7 @@ class Camera:
         self.camera_extrinsic[-1, -1] = 1.
 
         self.camera_extrinsic_tens = torch.tensor(self.camera_extrinsic, dtype=torch.float32, device=self.device)
+
 
     # originally for updating the calibration using new ground truth data, not used for anything right now
     def update_with_points(self, objs, imgs, img_size):
@@ -92,6 +94,7 @@ class Camera:
     # compute relative position of center of patch in camera frame
     def tensor_xyz_from_bb(self, bb, radius=RADIUS):
         # center row
+        # print("bb:", bb.device, bb.dtype)
         center = (bb[1] + bb[3]) / 2
 
         # build rays without in-place ops to keep autograd graph
@@ -120,6 +123,8 @@ class Camera:
         xyz = distance * ac / (torch.linalg.norm(ac) + 1e-12)
 
         # transform to world (constants are tensors, op remains differentiable wrt xyz)
+        # print("xyz:", xyz.device, xyz.dtype)
+        # print("camera extrinsic:", self.camera_extrinsic_tens.device, self.camera_extrinsic_tens.dtype)
         new_xyz = (torch.linalg.inv(self.camera_extrinsic_tens) @ torch.cat((xyz, torch.ones(1, device=xyz.device, dtype=xyz.dtype))))[:3]
         return new_xyz
     

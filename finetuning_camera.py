@@ -89,43 +89,47 @@ def create_camera_extrinsic(roll, pitch, yaw, tx, ty, tz):
     # print(extrinsic.grad_fn)
     return extrinsic
 
-def tensor_xyz_from_bb(bb, ox, oy, fx, fy, coeffs_extrinsic, radius):
+def tensor_xyz_from_bb(bb, fx, fy, ox, oy, extrinsic, radius):
         
-    # printd('bounding box', bb.grad_fn)
-    center = (bb[1] + bb[3])/2
+    center = (bb[1] + bb[3]) / 2
 
-    # get rays for pixels
-    a1 = torch.ones(3, device=bb.device)
-    a1[0] = (bb[0]-ox)/fx
-    a1[1] = (center-oy)/fy
+    # build rays without in-place ops to keep autograd graph
+    a1x = (bb[0] - ox) / fx
+    a1y = (center - oy) / fy
+    a2x = (bb[2] - ox) / fx
+    a2y = (center - oy) / fy
 
-    a2 = torch.ones(3, device=bb.device)
-    a2[0] = (bb[2]-ox)/fx
-    a2[1] = (center-oy)/fy
-
-    # printd('a1', a1.grad_fn)
+    one = torch.ones_like(a1x)
+    a1 = torch.stack((a1x, a1y, one))
+    a2 = torch.stack((a2x, a2y, one))
 
     # normalize rays
     a1_norm = torch.linalg.norm(a1)
     a2_norm = torch.linalg.norm(a2)
 
-    printd('a1 nnorm', a1_norm.grad_fn)
+    # distance on the circle of radius (differentiable)
+    sqrt2 = torch.sqrt(torch.tensor(2.0, device=bb.device, dtype=bb.dtype))
+    # radius can be float; lift to tensor to keep device/dtype
+    rad = radius if isinstance(radius, torch.Tensor) else torch.tensor(radius, device=bb.device, dtype=torch.float32)
+    cosang = torch.dot(a1, a2) / (a1_norm * a2_norm + 1e-12)
+    distance = sqrt2 * rad / torch.sqrt(1.0 - cosang + 1e-12)
 
-    # get the distance    
-    distance = (np.sqrt(2)*radius)/(torch.sqrt(1-torch.dot(a1,a2)/(a1_norm*a2_norm)))
+    # central ray and xyz
+    ac = (a1 + a2) * 0.5
+    xyz = distance * ac / (torch.linalg.norm(ac) + 1e-12)
 
-    # printd('distance', distance.grad_fn)
 
-    # get central ray
-    ac = (a1+a2)/2
-
-    # get the position
-    xyz = distance*ac/torch.linalg.norm(ac)
-
-    camera_extrinsic = create_camera_extrinsic(*coeffs_extrinsic)
-
-    new_xyz = (torch.linalg.inv(camera_extrinsic) @ torch.cat((xyz, torch.ones(1, device=xyz.device))))[:3]
+    new_xyz = (torch.linalg.inv(extrinsic) @ torch.cat((xyz, torch.ones(1, device=xyz.device, dtype=xyz.dtype))))[:3]
     return new_xyz
+
+def batch_xyz_from_boxes(boxes, fx, fy, ox, oy, extrinsic, radius):
+    # build per-sample outputs and stack to preserve graph
+    outs = []
+    for i in range(boxes.shape[0]):
+        coords = tensor_xyz_from_bb(boxes[i], fx, fy, ox, oy, extrinsic, radius)
+        yaw = torch.atan2(coords[1], coords[0])
+        outs.append(torch.cat((coords, yaw.unsqueeze(0))))
+    return torch.stack(outs, dim=0)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -206,7 +210,7 @@ train_dataloader = load_dataset(path=dataset_path, batch_size=64, shuffle=True, 
 radius = torch.tensor(0.5, device=device, requires_grad=True)
 softmax_mult = torch.tensor(20.0, device=device, requires_grad=True)
 
-opt = torch.optim.Adam([radius, fx, fy, ox, oy, roll, pitch, yaw, tx, ty, tz, softmax_mult], lr=3e-4)
+opt = torch.optim.Adam([radius, fx, fy, ox, oy, roll, pitch, yaw, tx, ty, tz, softmax_mult], lr=1e-3)
 # opt = torch.optim.Adam([radius, roll, pitch, yaw, tx, ty, tz, softmax_mult], lr=1e-2)
 
 scheduler = torch.optim.lr_scheduler.LinearLR(opt, start_factor=1e-2, end_factor=1., total_iters=1000)
@@ -243,7 +247,10 @@ for i in trange(500):
         bounding_box[:, [0, 2]] *= (160.0 / 640.0)  # x coords
         bounding_box[:, [1, 3]] *= (96.0 / 320.0)   # y coords
 
-        prediction_yolo = cam.batch_xyz_from_boxes(bounding_box, radius) #  xyzyaw from bounding box
+        # current_intrinsic = create_camera_intrinsic(fx, fy, ox, oy)
+        current_extrinsic = create_camera_extrinsic(roll, pitch, yaw, tx, ty, tz)
+
+        prediction_yolo = batch_xyz_from_boxes(bounding_box, fx, fy, ox, oy, current_extrinsic, radius) #  xyzyaw from bounding box
         # print("yolo shape: ", prediction_yolo.shape)
 
         fr_x, fr_y, fr_z, fr_yaw = frontnet(batch)
@@ -292,6 +299,7 @@ for i in trange(500):
 
 
         current_intrinsic = create_camera_intrinsic(fx, fy, ox, oy).squeeze(2)
+        # print("Current Intrinsic: ", current_intrinsic.shape, camera_intrinsic.shape)
         l2_intrinsic = torch.norm(current_intrinsic - camera_intrinsic, p=2)
         # l2_extrinsic = torch.norm(current_extrinsic - camera_extrinsic, p=2)
         # print("L2 Intrinsic: ", l2_intrinsic.item())
@@ -305,10 +313,10 @@ for i in trange(500):
 
         # loss = l2_intrinsic + l2_extrinsic + distance_yolo.mean()
         # minimize the top 5 distances
-        # sorted_distances, _ = torch.sort(distance_yolo)
+        sorted_distances, _ = torch.sort(distance_yolo)
         #loss = l2_intrinsic + l2_extrinsic + sorted_distances[:5].mean()
         #loss = extrinsic_error + sorted_distances[:5].mean()
-        loss = l2_intrinsic + extrinsic_error + (10*distance_yolo.mean())
+        loss = l2_intrinsic + extrinsic_error + sorted_distances[:5].mean()
         # print("Loss: ", loss.item())
 
         # l1_distance_intrinsic = torch.abs(fx - camera_intrinsic[0][0]) + torch.abs(fy - camera_intrinsic[1][1]) + torch.abs(ox - camera_intrinsic[0][2]) + torch.abs(oy - camera_intrinsic[1][2])
@@ -336,13 +344,13 @@ for i in trange(500):
 
         epoch_loss_yolo += loss.item()
 
-    if (i+1) % 10 == 0:
+    if (i+1) % 1 == 0:
         print(f"Epoch {i+1}, Loss YOLO: {epoch_loss_yolo / (len(train_dataloader))}, Radius: {radius.item()}, Softmax Mult: {softmax_mult.item()}")
         # print("Distance YOLO: ", distance_yolo.mean().item())
-        current_intrinsic = create_camera_intrinsic(fx.clone().detach(), fy.clone().detach(), ox.clone().detach(), oy.clone().detach())
+        # current_intrinsic = create_camera_intrinsic(fx.clone().detach(), fy.clone().detach(), ox.clone().detach(), oy.clone().detach())
         # print(f"Intrinsic: {current_intrinsic}")
 
-        current_extrinsic = create_camera_extrinsic(roll.clone().detach(), pitch.clone().detach(), yaw.clone().detach(), tx.clone().detach(), ty.clone().detach(), tz.clone().detach())
+        # current_extrinsic = create_camera_extrinsic(roll.clone().detach(), pitch.clone().detach(), yaw.clone().detach(), tx.clone().detach(), ty.clone().detach(), tz.clone().detach())
         # print(f"Extrinsic: {current_extrinsic}")
         # print(f"Example prediction YOLO: {prediction_yolo[0]}, GT: {gt[0]}, Example prediction Frontnet: {prediction_frontnet[0]}")
         # print(f"Mean Angular Error YOLO: {np.mean(angular_errors_yolo)}")

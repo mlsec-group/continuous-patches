@@ -611,7 +611,7 @@ if __name__ == "__main__":
     # img = dataset.dataset[img_idx][0].to(device).unsqueeze(0) / 255.0
     # print(img.shape)
 
-    cam = Camera('camera_calibration.yaml')
+    cam = Camera('camera_calibration.yaml', device=device)
     camera_intrinsic = torch.tensor(cam.camera_intrinsic, device=device, dtype=torch.float32)
     camera_extrinsic = torch.tensor(cam.camera_extrinsic, device=device, dtype=torch.float32)
 
@@ -873,7 +873,7 @@ if __name__ == "__main__":
             time_start_optim_step = time.time()
             losses = []
 
-            while loss > 0.01 and i < 5000:
+            while loss > 0.01 and i < 1000:
                 if timeout is not None and (time.time() - time_start_optim_step > timeout):  # 30 Hz
                     break
                 opt.zero_grad()
@@ -919,7 +919,7 @@ if __name__ == "__main__":
                     # print("Scaled prediction:", pred_c)
 
 
-                    prediction = cam.batch_xyz_from_boxes(pred_scaled, RADIUS) #  xyzyaw from bounding box
+                    prediction = cam.batch_xyz_from_boxes(prediction, RADIUS) #  xyzyaw from bounding box
             
                 T_pred_in_drone = T_matrix(prediction[0])
                 T_pred_in_world = T_drone_in_world @ T_pred_in_drone
@@ -937,13 +937,15 @@ if __name__ == "__main__":
                 # print("Target: ", target)
                 # print("Predicted setpoint in world: ", T_setpoint_world[:3, 3], target_yaw)
 
-                prediction = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device).unsqueeze(0)  # prediction values
+                prediction = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device) # prediction values
                 # distance = torch.norm(prediction[0, :3] - target[:3], p=2)
                 #distance = F.mse_loss(prediction[0, :3], target[:3])
                 # distance = torch.mean((prediction[0, :3] - target[:3]).pow(2))
                 # distance = torch.sqrt((prediction[0, :3] - target[:3]).pow(2)).mean()
-                distance = torch.dist(prediction[0, :3], target[:3], p=2)
-                angular_loss = 1 - torch.cos(normalize_yaw_t(prediction[0, 3]) - normalize_yaw_t(target[3]))
+                # print("Prediction:", prediction.shape)
+                # print("Target:", target.shape)
+                distance = torch.dist(prediction[:3], target[:3], p=2)
+                angular_loss = 1 - torch.cos(normalize_yaw_t(prediction[3]) - normalize_yaw_t(target[3]))
 
                 # print("Distance old:", distance_old)
                 # print("Distance new:", distance)
@@ -957,7 +959,7 @@ if __name__ == "__main__":
                 if loss < best_loss:
                     best_loss = loss.detach().detach().clone()
                     best_patch = patch.detach().clone()
-                    best_setpoint = pred_c[0].detach().clone()
+                    best_setpoint = prediction.detach().clone()
 
                 loss.backward()
                 opt.step()

@@ -49,7 +49,7 @@ class YOLOBox(nn.Module):
         self.model.eval()
 
         # camera
-        self.cam = Camera(cam_config)
+        self.cam = Camera(cam_config, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
     def forward(self, imgs, softmax_mult=15., show_imgs=False):
         # imgs = og_imgs / 255.0
@@ -65,7 +65,7 @@ class YOLOBox(nn.Module):
         objectness = logits[..., 4]                 # [B, N]
         person_scores = objectness * logits[..., 5]  # [B, N]
 
-        person_softmax = torch.softmax(person_scores * self.softmax_mult, dim=1)  # [B, N]
+        person_softmax = torch.softmax(person_scores * 20., dim=1)  # [B, N]
 
         person_box_xywh = (person_softmax.unsqueeze(-1) * logits[..., :4]).sum(dim=1)  # [B, 4]
         cx, cy, w, h = person_box_xywh.unbind(-1)
