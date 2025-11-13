@@ -207,7 +207,7 @@ frontnet.eval()
 dataset_path = 'pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle'
 train_dataloader = load_dataset(path=dataset_path, batch_size=64, shuffle=True, drop_last=False, num_workers=0, IMRC=False)
 
-radius = torch.tensor(0.5, device=device, requires_grad=True)
+radius = torch.tensor(0.25, device=device, requires_grad=True)
 softmax_mult = torch.tensor(20.0, device=device, requires_grad=True)
 
 opt = torch.optim.Adam([radius, fx, fy, ox, oy, roll, pitch, yaw, tx, ty, tz, softmax_mult], lr=1e-3)
@@ -227,6 +227,7 @@ for i in trange(500):
     # print("Current fx, fy, ox, oy: ", fx.item(), fy.item(), ox.item(), oy.item())
     # print("Current roll, pitch, yaw, tx, ty, tz: ", roll.item(), pitch.item(), yaw.item(), tx.item(), ty.item(), tz.item())
 
+    epoch_loss_frontnet = 0.0
 
     angular_errors_yolo = []
 
@@ -265,6 +266,7 @@ for i in trange(500):
         # if torch.all_ze
         # print("Shapes GT: ", gt.shape, " YOLO: ", prediction_yolo.shape, " Frontnet: ", prediction_frontnet.shape)
         distance_yolo = torch.norm(gt[:, :3] - prediction_yolo[:, :3], p=2, dim=1)
+        distance_frontnet = torch.norm(gt[:, :3] - prediction_frontnet[:, :3], p=2, dim=1)
         # else:
         #     distance_yolo = torch.norm(prediction_frontnet[:, :3] - prediction_yolo[:, :3], p=2, dim=1)
         # gt = torch.where(torch.nonzero(gt, ) gt, prediction_frontnet)
@@ -274,50 +276,52 @@ for i in trange(500):
         # print("Original roll, pitch, yaw: ", original_roll.item(), original_pitch.item(), original_yaw.item())
         # print("Current roll, pitch, yaw: ", roll.item(), pitch.item(), yaw.item())
 
-        if original_roll > roll:
-            angular_error_roll = normalize_yaw_t(original_roll - roll)
-        else:
-            angular_error_roll = normalize_yaw_t(roll - original_roll)
-        if original_pitch > pitch:
-            angular_error_pitch = normalize_yaw_t(original_pitch - pitch)
-        else:
-            angular_error_pitch = normalize_yaw_t(pitch - original_pitch)
-        if original_yaw > yaw:
-            angular_error_yaw = normalize_yaw_t(original_yaw - yaw)
-        else:
-            angular_error_yaw = normalize_yaw_t(yaw - original_yaw)
-        translation_current = torch.stack([tx, ty, tz], dim=0)
-        translation_original = torch.stack([original_tx, original_ty, original_tz], dim=0)
-        # print("Shapes translation: ", translation_current.shape, translation_original.shape)
-        distance_extrinsic = torch.norm(translation_current - translation_original, p=2)
+        # if original_roll > roll:
+        #     angular_error_roll = normalize_yaw_t(original_roll - roll)
+        # else:
+        #     angular_error_roll = normalize_yaw_t(roll - original_roll)
+        # if original_pitch > pitch:
+        #     angular_error_pitch = normalize_yaw_t(original_pitch - pitch)
+        # else:
+        #     angular_error_pitch = normalize_yaw_t(pitch - original_pitch)
+        # if original_yaw > yaw:
+        #     angular_error_yaw = normalize_yaw_t(original_yaw - yaw)
+        # else:
+        #     angular_error_yaw = normalize_yaw_t(yaw - original_yaw)
+        # translation_current = torch.stack([tx, ty, tz], dim=0)
+        # translation_original = torch.stack([original_tx, original_ty, original_tz], dim=0)
+        # # print("Shapes translation: ", translation_current.shape, translation_original.shape)
+        # distance_extrinsic = torch.norm(translation_current - translation_original, p=2)
 
-        # print("Angular Errors (roll, pitch, yaw): ", angular_error_roll.item(), angular_error_pitch.item(), angular_error_yaw.item())
-        # print("Distance Extrinsic: ", distance_extrinsic.item())
+        # # print("Angular Errors (roll, pitch, yaw): ", angular_error_roll.item(), angular_error_pitch.item(), angular_error_yaw.item())
+        # # print("Distance Extrinsic: ", distance_extrinsic.item())
 
-        extrinsic_error = angular_error_roll + angular_error_pitch + angular_error_yaw + distance_extrinsic
-        # print("Extrinsic Error: ", extrinsic_error.item())
+        # extrinsic_error = angular_error_roll + angular_error_pitch + angular_error_yaw + distance_extrinsic
+        # # print("Extrinsic Error: ", extrinsic_error.item())
 
 
-        current_intrinsic = create_camera_intrinsic(fx, fy, ox, oy).squeeze(2)
-        # print("Current Intrinsic: ", current_intrinsic.shape, camera_intrinsic.shape)
-        l2_intrinsic = torch.norm(current_intrinsic - camera_intrinsic, p=2)
-        # l2_extrinsic = torch.norm(current_extrinsic - camera_extrinsic, p=2)
-        # print("L2 Intrinsic: ", l2_intrinsic.item())
+        # current_intrinsic = create_camera_intrinsic(fx, fy, ox, oy).squeeze(2)
+        # # print("Current Intrinsic: ", current_intrinsic.shape, camera_intrinsic.shape)
+        # l2_intrinsic = torch.norm(current_intrinsic - camera_intrinsic, p=2)
+        # # l2_extrinsic = torch.norm(current_extrinsic - camera_extrinsic, p=2)
+        # # print("L2 Intrinsic: ", l2_intrinsic.item())
 
-        with torch.no_grad():
-            for gt_yaw, pred_yaw in zip(gt[:, 3], prediction_yolo[:, 3]):
-                norm_gt_yaw = normalize_yaw_t(gt_yaw)
-                norm_pred_yaw = normalize_yaw_t(pred_yaw)
-                angular_error = normalize_yaw_t(norm_gt_yaw - norm_pred_yaw)
-                angular_errors_yolo.append(angular_error.item())
+        # with torch.no_grad():
+        #     for gt_yaw, pred_yaw in zip(gt[:, 3], prediction_yolo[:, 3]):
+        #         norm_gt_yaw = normalize_yaw_t(gt_yaw)
+        #         norm_pred_yaw = normalize_yaw_t(pred_yaw)
+        #         angular_error = normalize_yaw_t(norm_gt_yaw - norm_pred_yaw)
+        #         angular_errors_yolo.append(angular_error.item())
 
-        # loss = l2_intrinsic + l2_extrinsic + distance_yolo.mean()
-        # minimize the top 5 distances
-        sorted_distances, _ = torch.sort(distance_yolo)
-        #loss = l2_intrinsic + l2_extrinsic + sorted_distances[:5].mean()
-        #loss = extrinsic_error + sorted_distances[:5].mean()
-        loss = l2_intrinsic + extrinsic_error + sorted_distances[:5].mean()
+        # # loss = l2_intrinsic + l2_extrinsic + distance_yolo.mean()
+        # # minimize the top 5 distances
+        # # sorted_distances, _ = torch.sort(distance_yolo)
+        # #loss = l2_intrinsic + l2_extrinsic + sorted_distances[:5].mean()
+        # #loss = extrinsic_error + sorted_distances[:5].mean()
+        # loss = l2_intrinsic + extrinsic_error + distance_yolo.mean()
         # print("Loss: ", loss.item())
+
+        loss = distance_yolo.mean()
 
         # l1_distance_intrinsic = torch.abs(fx - camera_intrinsic[0][0]) + torch.abs(fy - camera_intrinsic[1][1]) + torch.abs(ox - camera_intrinsic[0][2]) + torch.abs(oy - camera_intrinsic[1][2])
         # l1_distance_extrinsic = torch.abs(camera_extrinsic[0][3] - tx) + torch.abs(camera_extrinsic[1][3] - ty) + torch.abs(camera_extrinsic[2][3] - tz)
@@ -343,15 +347,18 @@ for i in trange(500):
             best_softmax_mult = softmax_mult.clone().detach().item()
 
         epoch_loss_yolo += loss.item()
+        epoch_loss_frontnet += distance_frontnet.mean().item()
 
-    if (i+1) % 1 == 0:
+    if (i+1) % 10 == 0:
         print(f"Epoch {i+1}, Loss YOLO: {epoch_loss_yolo / (len(train_dataloader))}, Radius: {radius.item()}, Softmax Mult: {softmax_mult.item()}")
-        # print("Distance YOLO: ", distance_yolo.mean().item())
-        # current_intrinsic = create_camera_intrinsic(fx.clone().detach(), fy.clone().detach(), ox.clone().detach(), oy.clone().detach())
-        # print(f"Intrinsic: {current_intrinsic}")
+        print("Distance YOLO: ", distance_yolo.mean().item())
+        print("Distance Frontnet: ", distance_frontnet.mean().item())
+        print("Frontnet Epoch Loss: ", epoch_loss_frontnet / (len(train_dataloader)))
+        current_intrinsic = create_camera_intrinsic(fx.clone().detach(), fy.clone().detach(), ox.clone().detach(), oy.clone().detach())
+        print(f"Intrinsic: {current_intrinsic}")
 
-        # current_extrinsic = create_camera_extrinsic(roll.clone().detach(), pitch.clone().detach(), yaw.clone().detach(), tx.clone().detach(), ty.clone().detach(), tz.clone().detach())
-        # print(f"Extrinsic: {current_extrinsic}")
+        current_extrinsic = create_camera_extrinsic(roll.clone().detach(), pitch.clone().detach(), yaw.clone().detach(), tx.clone().detach(), ty.clone().detach(), tz.clone().detach())
+        print(f"Extrinsic: {current_extrinsic}")
         # print(f"Example prediction YOLO: {prediction_yolo[0]}, GT: {gt[0]}, Example prediction Frontnet: {prediction_frontnet[0]}")
         # print(f"Mean Angular Error YOLO: {np.mean(angular_errors_yolo)}")
         angular_errors_yolo = []
