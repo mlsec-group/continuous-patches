@@ -13,30 +13,74 @@ import csv
 
 from util import opencv2quat, load_dataset, printd
 
-RADIUS = 0.3
 IM_HEIGHT = 96
 IM_WIDTH = 160
 person_width = 10
 
+
+"""
+Loss YOLO: 0.6999452708217389, Rad
+ius: 0.28624844551086426, Softmax Mult: 0.8035333156585693                                                                   
+Distance YOLO to Frontnet Mean:  0.5598743055396401                                                                          
+Original fx, fy, ox, oy:  0.7463185099939119 0.7129203609802661 0.6851143101833982 0.5121119939461743                        
+Current fx, fy, ox, oy:  0.7461588915045999 0.7128049455410148 0.6858263031889653 0.5121848326129889                         
+===================================                                                                                          
+Original extrinsic:  tensor([[ 5.23360e-02, -9.98630e-01, -1.11022e-16,  0.00000e+00],                                       
+        [ 1.73410e-01,  9.08804e-03, -9.84808e-01,  0.00000e+00],                                                            
+        [ 9.83458e-01,  5.15409e-02,  1.73648e-01, -2.50000e-02],                                                            
+        [ 0.00000e+00,  0.00000e+00,  0.00000e+00,  1.00000e+00]], device='cuda:0', dtype=torch.float64)                     
+Current extrinsic:  tensor([[ 5.24579e-02, -9.98693e-01, -2.25711e-05,  4.67449e-04],                                        
+        [ 1.73354e-01,  9.13722e-03, -9.84881e-01, -9.04676e-06],                                                            
+        [ 9.83454e-01,  5.17062e-02,  1.73607e-01, -2.51849e-02],                                                            
+        [ 0.00000e+00,  0.00000e+00,  0.00000e+00,  1.00000e+00]],
+"""
+
 class Camera:
     def __init__(self, path, device='cpu'):
-        with open(path) as f:
-            camera_config = yaml.load(f, Loader=yaml.FullLoader)
-        
-        self.camera_intrinsic = np.array(camera_config['camera_matrix'])
-        self.distortion_coeffs = np.array(camera_config['dist_coeff'])
-
         self.device = device
-        # print("Camera device:", self.device)
-        
-        rvec = np.array(camera_config['rvec'])
-        tvec = camera_config['tvec']
-        self.make_extrinsic(rvec, tvec)
+        self.fx = torch.tensor(74.616, device=self.device, dtype=torch.float32)
+        self.fy = torch.tensor(71.280, device=self.device, dtype=torch.float32)
+        self.ox = torch.tensor(68.583, device=self.device, dtype=torch.float32)
+        self.oy = torch.tensor(51.218, device=self.device, dtype=torch.float32)
+        self.radius = torch.tensor(0.28624844551086426, device=self.device, dtype=torch.float32)  # meters
 
-        self.fx = torch.tensor(self.camera_intrinsic[0][0], device=self.device, dtype=torch.float32)
-        self.fy = torch.tensor(self.camera_intrinsic[1][1], device=self.device, dtype=torch.float32)
-        self.ox = torch.tensor(self.camera_intrinsic[0][2], device=self.device, dtype=torch.float32)
-        self.oy = torch.tensor(self.camera_intrinsic[1][2], device=self.device, dtype=torch.float32)
+        self.camera_intrinsic = np.array([[self.fx.item(), 0, self.ox.item()],
+                                            [0, self.fy.item(), self.oy.item()],
+                                            [0, 0, 1]], dtype=np.float32)
+        self.camera_intrinsic_tens = torch.tensor(self.camera_intrinsic, dtype=torch.float32, device=device)
+
+
+        self.camera_extrinsic = np.array([[ 5.24579e-02, -9.98693e-01, -2.25711e-05,  4.67449e-04],
+                                            [ 1.73354e-01,  9.13722e-03, -9.84881e-01, -9.04676e-06],
+                                            [ 9.83454e-01,  5.17062e-02,  1.73607e-01, -2.51849e-02],
+                                            [ 0.00000e+00,  0.00000e+00,  0.00000e+00,  1.00000e+00]], dtype=np.float32)
+        self.camera_extrinsic_tens = torch.tensor(self.camera_extrinsic, dtype=torch.float32, device=self.device)
+
+
+
+
+        # with open(path) as f:
+        #     camera_config = yaml.load(f, Loader=yaml.FullLoader)
+
+        # self.camera_intrinsic = np.array(camera_config['camera_matrix'])
+        # # self.distortion_coeffs = np.array(camera_config['distortion_coeffs'])
+        # self.camera_intrinsic_tens = torch.tensor(self.camera_intrinsic, dtype=torch.float32, device=device)
+        
+        # self.device = device
+        # # print("Camera device:", self.device)
+        
+        # rvec = np.array(camera_config['rvec'])
+        # tvec = camera_config['tvec']
+        # self.make_extrinsic(rvec, tvec)
+
+        # self.fx = torch.tensor(self.camera_intrinsic[0][0], device=self.device, dtype=torch.float32)
+        # self.fy = torch.tensor(self.camera_intrinsic[1][1], device=self.device, dtype=torch.float32)
+        # self.ox = torch.tensor(self.camera_intrinsic[0][2], device=self.device, dtype=torch.float32)
+        # self.oy = torch.tensor(self.camera_intrinsic[1][2], device=self.device, dtype=torch.float32)
+
+        
+
+        # self.radius = torch.tensor(0.2868165075778961, device=self.device, dtype=torch.float32)  # meters
 
     def make_extrinsic(self, rvec, tvec):
         self.camera_extrinsic = np.zeros((4,4))
@@ -46,6 +90,7 @@ class Camera:
 
         self.camera_extrinsic_tens = torch.tensor(self.camera_extrinsic, dtype=torch.float32, device=self.device)
 
+        
 
     # originally for updating the calibration using new ground truth data, not used for anything right now
     def update_with_points(self, objs, imgs, img_size):
@@ -92,7 +137,7 @@ class Camera:
         return new_xyz
 
     # compute relative position of center of patch in camera frame
-    def tensor_xyz_from_bb(self, bb, radius=RADIUS):
+    def tensor_xyz_from_bb(self, bb):
         # center row
         # print("bb:", bb.device, bb.dtype)
         center = (bb[1] + bb[3]) / 2
@@ -113,10 +158,9 @@ class Camera:
 
         # distance on the circle of radius (differentiable)
         sqrt2 = torch.sqrt(torch.tensor(2.0, device=bb.device, dtype=bb.dtype))
-        # radius can be float; lift to tensor to keep device/dtype
-        rad = radius if isinstance(radius, torch.Tensor) else torch.tensor(radius, device=bb.device, dtype=torch.float32)
+
         cosang = torch.dot(a1, a2) / (a1_norm * a2_norm + 1e-12)
-        distance = sqrt2 * rad / torch.sqrt(1.0 - cosang + 1e-12)
+        distance = sqrt2 * self.radius / torch.sqrt(1.0 - cosang + 1e-12)
 
         # central ray and xyz
         ac = (a1 + a2) * 0.5
@@ -128,11 +172,11 @@ class Camera:
         new_xyz = (torch.linalg.inv(self.camera_extrinsic_tens) @ torch.cat((xyz, torch.ones(1, device=xyz.device, dtype=xyz.dtype))))[:3]
         return new_xyz
     
-    def batch_xyz_from_boxes(self, boxes, radius=RADIUS):
+    def batch_xyz_from_boxes(self, boxes):
         # build per-sample outputs and stack to preserve graph
         outs = []
         for i in range(boxes.shape[0]):
-            coords = self.tensor_xyz_from_bb(boxes[i], radius)
+            coords = self.tensor_xyz_from_bb(boxes[i])
             yaw = torch.atan2(coords[1], coords[0])
             outs.append(torch.cat((coords, yaw.unsqueeze(0))))
         return torch.stack(outs, dim=0)

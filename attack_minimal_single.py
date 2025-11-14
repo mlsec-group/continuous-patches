@@ -17,8 +17,7 @@ import matplotlib.pyplot as plt
 import pickle
 from scipy.optimize import linprog
 
-RADIUS = 0.3
-
+from cv2 import findHomography
 
 def normalize_yaw_t(yaw):
     return torch.atan2(torch.sin(yaw), torch.cos(yaw))
@@ -58,7 +57,7 @@ def solve_quadratic(a, b, c):
     
     return (root1, root2)
 
-def bb_from_xyz(camera_intrinsic, camera_extrinsic, new_xyz, RADIUS):
+def bb_from_xyz(camera_intrinsic, camera_extrinsic, new_xyz, radius):
     """
     Calculates the 2D bounding box silhouette of a sphere
     centered at new_xyz (world coords) with a given RADIUS.
@@ -85,8 +84,8 @@ def bb_from_xyz(camera_intrinsic, camera_extrinsic, new_xyz, RADIUS):
         return None
 
     # Camera is inside the sphere, silhouette is not defined
-    if distance < RADIUS:
-        print(f"Error: Camera is inside the object (distance {distance} < RADIUS {RADIUS}).")
+    if distance < radius:
+        print(f"Error: Camera is inside the object (distance {distance} < radius {radius}).")
         return None
 
     # 'ac' is the ray to the center, projected onto the z=1 plane
@@ -100,7 +99,7 @@ def bb_from_xyz(camera_intrinsic, camera_extrinsic, new_xyz, RADIUS):
     # We need cos^2(theta/2) = 1 - sin^2(theta/2)
     # This is the squared cosine of the angle between the center ray (ac)
     # and any tangent ray (a_tangent).
-    cos_half_theta_sq = 1.0 - (RADIUS / distance)**2
+    cos_half_theta_sq = 1.0 - (radius / distance)**2
     
     # This is the common 'A' term for our quadratic solvers
     A = norm_ac_sq * cos_half_theta_sq
@@ -458,8 +457,7 @@ def get_patch_T(monitor_corners_world):
     monitor_height_right = monitor_corners[3, 1] - monitor_corners[1, 1]
     monitor_height = min(monitor_height_left, monitor_height_right)
 
-    tx_min = max(monitor_corners[0, 0], monitor_corners[2, 0])
-    ty_min = max(monitor_corners[0, 1], monitor_corners[1, 1])
+    tx_min, ty_min = monitor_corners[0, 0], monitor_corners[0, 1]
 
     scale_width = monitor_width / 80.
     scale_height = monitor_height / 45.
@@ -612,8 +610,9 @@ if __name__ == "__main__":
     # print(img.shape)
 
     cam = Camera('camera_calibration.yaml', device=device)
-    camera_intrinsic = torch.tensor(cam.camera_intrinsic, device=device, dtype=torch.float32)
-    camera_extrinsic = torch.tensor(cam.camera_extrinsic, device=device, dtype=torch.float32)
+    camera_intrinsic = cam.camera_intrinsic_tens
+    camera_extrinsic = cam.camera_extrinsic_tens
+    radius = cam.radius
 
     all_drone_poses = []
 
@@ -673,14 +672,11 @@ if __name__ == "__main__":
 
     img_idx = args.img_idx
 
-    for target_idx in trange(1, len(target_trajectory)):
+    for target_idx in trange(1, len(target_trajectory)-1):
 
         if args.pic_mode == 'random':
             img_idx = np.random.randint(0, len(dataset))
             
-
-        if target_idx > 1 and loss > 0.02:
-            target_idx -= 1
 
         img = dataset.dataset[img_idx][0].to(device).unsqueeze(0) / 255.0
 
@@ -715,9 +711,15 @@ if __name__ == "__main__":
 
 
         monitor_corners = calc_monitor_corners(T_drone_in_world, projector_world, camera_extrinsic, camera_intrinsic)
-        # print("Monitor corners:")
-        # print(monitor_corners)
+        print("Monitor corners:")
+        print(monitor_corners)
 
+        # add homogeneous coordinate for homography
+        monitor_corners_homogeneous = torch.tensor([[monitor_corners[0,0], monitor_corners[0,1], 1.],
+                                        [monitor_corners[1,0], monitor_corners[1,1], 1.],
+                                        [monitor_corners[2,0], monitor_corners[2,1], 1.],
+                                        [monitor_corners[3,0], monitor_corners[3,1], 1.]], dtype=torch.float32, device=device)  
+        
 
         patch_coordinates = torch.tensor([[0., 0., 1.],
                                           [80., 0., 1.],
@@ -725,6 +727,13 @@ if __name__ == "__main__":
                                           [80., 45., 1.]], dtype=torch.float32, device=device)
         
         T = get_patch_T(monitor_corners)
+        print("Patch transformation T:")
+
+        print(T)
+
+        # T = findHomography(monitor_corners_homogeneous.detach().cpu().numpy(), patch_coordinates.detach().cpu().numpy())
+        # print("Patch transformation T:")
+        # print(T)
 
 
         if patch_mode == 'black':
@@ -861,6 +870,8 @@ if __name__ == "__main__":
                 patch = best_patch.clone().detach().requires_grad_(True)
 
             opt = torch.optim.Adam([patch], lr=3e-2)  # was at 3e-2
+            scheduler = torch.optim.lr_scheduler.LinearLR(opt, start_factor=1e-2, end_factor=1., total_iters=1000)
+
             
             loss = torch.inf
             i = 0
@@ -873,17 +884,19 @@ if __name__ == "__main__":
             time_start_optim_step = time.time()
             losses = []
 
-            while loss > 0.01 and i < 1000:
+            while loss > 0.01 and i < 3000:
                 if timeout is not None and (time.time() - time_start_optim_step > timeout):  # 30 Hz
                     break
                 opt.zero_grad()
 
-
-                manipulated_image = project_patch(
-                    patches=patch, 
-                    T_matrices=T.unsqueeze(0),  # add batch dimension
-                    images=img
-                )
+                if T[0, 0] > 0.1:  # avoid too small patches
+                    manipulated_image = project_patch(
+                        patches=patch, 
+                        T_matrices=T.unsqueeze(0),  # add batch dimension
+                        images=img
+                    )
+                else:
+                    manipulated_image = img.clone()
 
                 manipulated_image.clamp_(0., 1.)
 
@@ -895,11 +908,11 @@ if __name__ == "__main__":
 
                 elif model_name == 'yolov5':
                     # resize to 640x320
-                    manipulated_image = torch.nn.functional.interpolate(manipulated_image, size=(320, 640), mode='bilinear', align_corners=False)
+                    manipulated_image_inter = torch.nn.functional.interpolate(manipulated_image, size=(320, 640), mode='bilinear', align_corners=False)
                     # gray to rgb
-                    manipulated_image = manipulated_image.repeat_interleave(3, dim=1)
+                    manipulated_image_resized = manipulated_image_inter.repeat_interleave(3, dim=1)
 
-                    prediction = model(manipulated_image).squeeze(1)  # yolo expects images in range [0, 1], out (B, 4)
+                    prediction = model(manipulated_image_resized).squeeze(1)  # yolo expects images in range [0, 1], out (B, 4)
                     # scale from 320x640 to 96x160
 
                     # print("YOLOv5 prediction before loss calculation:", prediction, prediction.shape)
@@ -919,7 +932,7 @@ if __name__ == "__main__":
                     # print("Scaled prediction:", pred_c)
 
 
-                    prediction = cam.batch_xyz_from_boxes(prediction, RADIUS) #  xyzyaw from bounding box
+                    prediction = cam.batch_xyz_from_boxes(prediction) #  xyzyaw from bounding box
             
                 T_pred_in_drone = T_matrix(prediction[0])
                 T_pred_in_world = T_drone_in_world @ T_pred_in_drone
@@ -938,6 +951,10 @@ if __name__ == "__main__":
                 # print("Predicted setpoint in world: ", T_setpoint_world[:3, 3], target_yaw)
 
                 prediction = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device) # prediction values
+                if T[0, 0] < 0.1:
+                    best_patch = patch.detach().clone()
+                    best_setpoint = prediction.detach().clone()
+                    break  # avoid too small patches
                 # distance = torch.norm(prediction[0, :3] - target[:3], p=2)
                 #distance = F.mse_loss(prediction[0, :3], target[:3])
                 # distance = torch.mean((prediction[0, :3] - target[:3]).pow(2))
@@ -963,6 +980,7 @@ if __name__ == "__main__":
 
                 loss.backward()
                 opt.step()
+                scheduler.step()
 
                 losses.append(loss.detach().cpu().item())
                 if i % 50 == 0:
@@ -1012,11 +1030,11 @@ if __name__ == "__main__":
 
             elif model_name == 'yolov5':
                     # resize to 640x320
-                    manipulated_image = torch.nn.functional.interpolate(manipulated_image, size=(320, 640), mode='bilinear', align_corners=False)
+                    manipulated_image_inter = torch.nn.functional.interpolate(manipulated_image, size=(320, 640), mode='bilinear', align_corners=False)
                     # gray to rgb
-                    manipulated_image = manipulated_image.repeat_interleave(3, dim=1)
+                    manipulated_image_resized = manipulated_image_inter.repeat_interleave(3, dim=1)
 
-                    prediction = model(manipulated_image).squeeze(1)  # yolo expects images in range [0, 1], out (B, 1, 4)
+                    prediction = model(manipulated_image_resized).squeeze(1)  # yolo expects images in range [0, 1], out (B, 1, 4)
                     
                     #scale back to 160x96
                     prediction[:, [0, 2]] *= (160.0 / 640.0)  # x coords
@@ -1025,7 +1043,7 @@ if __name__ == "__main__":
                     # print("YOLOv5 prediction before scaling to 160x96:", prediction)
                     # print("Scaled bounding box for 160x96 image: ", prediction)
 
-                    prediction = cam.batch_xyz_from_boxes(prediction, RADIUS) #  xyzyaw from bounding box
+                    prediction = cam.batch_xyz_from_boxes(prediction) #  xyzyaw from bounding box
 
             # prediction values
             T_pred_in_drone = T_matrix(prediction[0])
@@ -1059,8 +1077,14 @@ if __name__ == "__main__":
         fig, axs = plt.subplots(1, 2)
         axs[0].imshow(manipulated_image[0, 0].detach().cpu().numpy(), cmap='gray')
         # plt.plot(monitor_corners[:, 0], monitor_corners[:, 1], 'r--', label='Monitor corners')
-        axs[0].scatter(monitor_corners[:, 0].detach().cpu().numpy(), monitor_corners[:, 1].detach().cpu().numpy(), c='r', label='Monitor corners')
         
+        # monitor_corners are in format (ul_x, ul_y), (ur_x, ur_y), (ll_x, ll_y), (lr_x, lr_y)
+        monitor_corners = monitor_corners.detach().cpu().numpy()
+        axs[0].plot([monitor_corners[0, 0], monitor_corners[1, 0]], [monitor_corners[0, 1], monitor_corners[1, 1]], 'r--')  # top edge
+        axs[0].plot([monitor_corners[0, 0], monitor_corners[2, 0]], [monitor_corners[0, 1], monitor_corners[2, 1]], 'r--')  # left edge
+        axs[0].plot([monitor_corners[1, 0], monitor_corners[3, 0]], [monitor_corners[1, 1], monitor_corners[3, 1]], 'r--')  # right edge
+        axs[0].plot([monitor_corners[2, 0], monitor_corners[3, 0]], [monitor_corners[2, 1], monitor_corners[3, 1]], 'r--')  # bottom edge    
+
         axs[1].plot(target_trajectory[:, 0].detach().cpu().numpy(), target_trajectory[:, 1].detach().cpu().numpy(), 'r--')
         axs[1].plot(np.array(all_drone_poses)[:, 0], np.array(all_drone_poses)[:, 1])
         axs[1].scatter(projector_world[:, 0].detach().cpu().numpy(), projector_world[:, 1].detach().cpu().numpy(), c='b', label='Projector corners')
@@ -1091,7 +1115,7 @@ if __name__ == "__main__":
 
 
     # # euclidean distance between all_drone_poses and target_trajectory
-    distance = np.linalg.norm(all_drone_poses[:, :3] - target_trajectory[:, :3].detach().cpu().numpy())
+    distance = np.linalg.norm(all_drone_poses[:, :3] - target_trajectory[1:, :3].detach().cpu().numpy())
     print("Euclidean distances between drone poses and target trajectory:", distance)
 
 
