@@ -390,8 +390,8 @@ def gen_target_trajectory(trajectory):
 
     if trajectory == 'circle':
         t = np.linspace(0, 2 * np.pi, 20)
-        x = 1.5 * np.cos(t)
-        y = 1.5 * np.sin(t)
+        x = 1 * np.cos(t)
+        y = 1 * np.sin(t)
         z = np.ones_like(t)  # Constant height at 1
         yaw = np.zeros_like(t)  # Constant yaw
         target_trajectory = np.column_stack((x, y, z, yaw))
@@ -416,7 +416,7 @@ def gen_target_trajectory(trajectory):
         return torch.tensor(target_trajectory, dtype=torch.float32)
 
     if trajectory == 'line_y':
-        points = np.array([0., 1.5, 0., -1.5, 0.])
+        points = np.array([0., 1.0, 0., -1.0, 0.])
 
         # Compute cumulative distances along the path
         distances = np.cumsum(np.abs(np.diff(points)))
@@ -436,8 +436,8 @@ def gen_target_trajectory(trajectory):
 
     if trajectory == 'figure8':
         t = np.linspace(0, 2 * np.pi, 20)
-        x = 0.5 * np.sin(2 * t)  # Horizontal figure 8
-        y = 1.5 * np.sin(t)  # Vertical figure 8
+        x = 0.2 * np.sin(2 * t)  # Horizontal figure 8
+        y = 0.8 * np.sin(t)  # Vertical figure 8
         z = np.ones_like(t)  # Constant height at 1
         yaw = np.zeros_like(t)  # Constant yaw
         target_trajectory = np.column_stack((x, y, z, yaw))
@@ -577,6 +577,18 @@ if __name__ == "__main__":
         diffusion_model = DiffusionModel(device=device)
 
         diffusion_model.load(f'diffusion/results/diffusion_training/{args.corpus_size}/{model_name}.pth')
+
+
+    # # tests to improve yolo
+    # with open(f"diffusion/yolo100.pickle", "rb") as f:
+    #     patch_dataset = pickle.load(f)
+
+    #     corpus_patches = []
+    #     for idx_corpus in range(len(patch_dataset)):
+    #         corpus_patches.append(patch_dataset[idx_corpus][0])
+
+    # corpus_patches = np.array(corpus_patches) # shape (N, 45, 80)
+    # random_start_patch = corpus_patches[np.random.randint(0, len(corpus_patches))]
 
     if args.patch_mode == 'interpolation' or args.patch_mode == 'corpus':
         with open(f"diffusion/{model_name}{args.corpus_size//1000}k.pickle", "rb") as f:
@@ -720,21 +732,28 @@ if __name__ == "__main__":
                                         [monitor_corners[2,0], monitor_corners[2,1], 1.],
                                         [monitor_corners[3,0], monitor_corners[3,1], 1.]], dtype=torch.float32, device=device)  
         
+        # patch_coordinates = torch.stack([monitor_corners[0], monitor_corners[3]])
+        patch_size = (int((monitor_corners[3,1] - monitor_corners[0,1]).item()), int((monitor_corners[3,0] - monitor_corners[0,0]).item()))
 
         patch_coordinates = torch.tensor([[0., 0., 1.],
-                                          [80., 0., 1.],
-                                          [0., 45., 1.],
-                                          [80., 45., 1.]], dtype=torch.float32, device=device)
+                                        [patch_size[1], 0., 1.],
+                                        [0., patch_size[0], 1.],
+                                        [patch_size[1], patch_size[0], 1.]], dtype=torch.float32, device=device)
+
+        # patch_coordinates = torch.tensor([[0., 0., 1.],
+        #                                   [80., 0., 1.],
+        #                                   [0., 45., 1.],
+        #                                   [80., 45., 1.]], dtype=torch.float32, device=device)
         
-        T = get_patch_T(monitor_corners)
-        print("Patch transformation T:")
-
-        print(T)
-
-        # T = findHomography(monitor_corners_homogeneous.detach().cpu().numpy(), patch_coordinates.detach().cpu().numpy())
+        # T = get_patch_T(monitor_corners)
         # print("Patch transformation T:")
+
         # print(T)
 
+        T = findHomography(patch_coordinates.detach().cpu().numpy(), monitor_corners_homogeneous.detach().cpu().numpy(), method=1, maxIters=5000)[0]
+        print("Patch transformation T:")
+        print(T)
+        T = torch.tensor(T, dtype=torch.float32, device=device)
 
         if patch_mode == 'black':
             patch = torch.zeros((1, 1, 45, 80), device=device, dtype=torch.float32)
@@ -852,7 +871,9 @@ if __name__ == "__main__":
                 patch = diffusion_model.sample(1, conditioning, device, patch_size=(45, 80), n_steps=10)
 
         else:
-            patch = torch.rand((1, 1, 45, 80), device=device, dtype=torch.float32)  # random patch
+            #patch = torch.rand((1, 1, *patch_size), device=device, dtype=torch.float32)  # random patch
+            patch = torch.tensor(random_start_patch, device=device, dtype=torch.float32).unsqueeze(0).unsqueeze(0)  # random patch from corpus
+            patch = torch.nn.functional.interpolate(patch.clone(), size=patch_size, mode='bilinear', align_corners=False)
 
         if patch_mode == 'optimal' or patch_mode == 'timeout':
             patch = patch.requires_grad_(True)
@@ -867,10 +888,12 @@ if __name__ == "__main__":
         if patch_mode == 'optimal' or patch_mode == 'timeout':
 
             if args.temperature == 'warm' and target_idx > 1:
-                patch = best_patch.clone().detach().requires_grad_(True)
+                patch = best_patch.clone().detach()
+                patch = torch.nn.functional.interpolate(patch.clone(), size=patch_size, mode='bilinear', align_corners=False).requires_grad_(True)
 
-            opt = torch.optim.Adam([patch], lr=3e-2)  # was at 3e-2
-            scheduler = torch.optim.lr_scheduler.LinearLR(opt, start_factor=1e-2, end_factor=1., total_iters=1000)
+            opt = torch.optim.Adam([patch], lr=3e-3)  # was at 3e-2
+            # scheduler = torch.optim.lr_scheduler.LinearLR(opt, start_factor=1e-2, end_factor=1., total_iters=1000)
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=3e-3, total_steps=3000)
 
             
             loss = torch.inf
@@ -913,6 +936,44 @@ if __name__ == "__main__":
                     manipulated_image_resized = manipulated_image_inter.repeat_interleave(3, dim=1)
 
                     prediction = model(manipulated_image_resized).squeeze(1)  # yolo expects images in range [0, 1], out (B, 4)
+
+                    # prediction = prediction.squeeze(1)
+
+                    # # test trying to improve yolo with whole output
+                    # T_setpoint_world = T_matrix(target)
+                    # setpoint_yaw = torch.atan2(T_setpoint_world[1, 0], T_setpoint_world[0, 0])
+                    # # Current drone pose in world
+                    # T_drone_in_world = T_matrix(torch.tensor(all_drone_poses[-1], device=device, dtype=torch.float32))
+                    
+                    # T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
+                    # T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(setpoint_yaw - torch.pi)).to(device)
+
+
+                    # T_pred_in_world = torch.inverse(T_direction_world) @ T_setpoint_world
+                    # T_pred_in_drone = torch.inverse(T_drone_in_world) @ T_pred_in_world
+                    # # target_yaw = torch.atan2(T_pred_in_drone[1, 0], T_pred_in_drone[0, 0])
+
+                    # # whole_output => (B, N, 85) with (x1, y1, w, h, conf, class_probs)
+                    # # print(whole_output.shape)
+                    # # select all boxes
+                    # boxes = whole_output[0, :, :4]  # (N, 4)
+                    # # convert to xyxy
+                    # boxes_xyxy = model.xywh2xyxy(boxes)
+
+                    # possible_box_from_target_xyzyaw = bb_from_xyz(
+                    #     camera_intrinsic.detach().cpu().numpy(), 
+                    #     camera_extrinsic.detach().cpu().numpy(), 
+                    #     T_pred_in_drone[:3, 3].detach().cpu().numpy(), 
+                    #     model.cam.radius.detach().cpu().numpy()
+                    # )  # (4, )
+
+
+
+                    # # print("Possible box from target (xyxy):", possible_box_from_target_xyzyaw)
+
+                    # error_boxes = torch.dist(boxes_xyxy, torch.tensor(possible_box_from_target_xyzyaw, device=device).repeat(boxes_xyxy.shape[0], 1), p=2)  # (N, )
+                    # print("Error boxes:", error_boxes)
+
                     # scale from 320x640 to 96x160
 
                     # print("YOLOv5 prediction before loss calculation:", prediction, prediction.shape)
@@ -968,17 +1029,18 @@ if __name__ == "__main__":
                 # print("Distance new:", distance)
 
                 # x,y,z,yaw loss
-                loss = distance + angular_loss
+                loss = distance + angular_loss #+ (error_boxes * 0.001)  # try adding small weight to yolo box loss
                 
                 # bounding box loss
                 # 
                 
                 if loss < best_loss:
-                    best_loss = loss.detach().detach().clone()
+                    best_loss = loss.detach().clone()
                     best_patch = patch.detach().clone()
                     best_setpoint = prediction.detach().clone()
 
                 loss.backward()
+                patch.grad = patch.grad.sign()
                 opt.step()
                 scheduler.step()
 

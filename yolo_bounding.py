@@ -65,7 +65,7 @@ class YOLOBox(nn.Module):
         objectness = logits[..., 4]                 # [B, N]
         person_scores = objectness * logits[..., 5]  # [B, N]
 
-        person_softmax = torch.softmax(person_scores * 80.35333156585693, dim=1)  # [B, N]
+        person_softmax = torch.softmax(person_scores * 20., dim=1)  # [B, N]
 
         person_box_xywh = (person_softmax.unsqueeze(-1) * logits[..., :4]).sum(dim=1)  # [B, 4]
         cx, cy, w, h = person_box_xywh.unbind(-1)

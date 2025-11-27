@@ -307,6 +307,10 @@ if __name__ == "__main__":
     model = YOLOBox()
     model.model.eval()
 
+    from util import load_model
+    frontnet = load_model("pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", device, config="160x32")
+    frontnet.eval()
+
 
     dataset_path = 'pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle'
     train_dataloader = load_dataset(path=dataset_path, batch_size=32, shuffle=True, drop_last=False, num_workers=0)
@@ -321,7 +325,7 @@ if __name__ == "__main__":
     loss = torch.tensor(0.).to(device)
     # loss.requires_grad_(True)
 
-    epochs = 100
+    epochs = 1
 
     for i in range(epochs):
         epoch_loss = 0.
@@ -345,13 +349,32 @@ if __name__ == "__main__":
 
             # print("Manipulated image shape: ", manipulated_image.shape, manipulated_image.min().item(), manipulated_image.max().item())
 
-            manipulated_image = torch.nn.functional.interpolate(manipulated_image, size=(320, 640), mode='bilinear', align_corners=False)
+            manipulated_image_y = torch.nn.functional.interpolate(manipulated_image, size=(320, 640), mode='bilinear', align_corners=False)
             # gray to rgb
-            manipulated_image = manipulated_image.repeat_interleave(3, dim=1)
+            manipulated_image_y = manipulated_image_y.repeat_interleave(3, dim=1)
 
             # print("Manipulated image shape after repeat: ", manipulated_image.shape)
 
-            prediction = model(manipulated_image) # of shape (B, 1, 4)
+            prediction = model(manipulated_image_y) # of shape (B, 1, 4) xyxy format
+
+            # with torch.no_grad():
+            #     print("Prediction shape: ", prediction.shape)
+            #     pred_c = prediction.clone().detach().squeeze(1)  # (B, 4)
+            #     pred_c[:, [0, 2]] *= (160.0 / 640.0)  # x coords
+            #     pred_c[:, [1, 3]] *= (96.0 / 320.0)   # y coords
+
+            #     pred_c = model.cam.batch_xyz_from_boxes(pred_c, RADIUS) #  xyzyaw from bounding box
+
+            #     x, y, z, yaw = frontnet(manipulated_image*255.)
+            #     prediction_frontnet = torch.stack([x, y, z, yaw])
+            #     prediction_frontnet = prediction_frontnet.squeeze(2).mT
+
+            #     print("Example frontnet prediction: ", prediction_frontnet[0])
+            #     print("Example YOLO prediction: ", pred_c[0])
+
+            #     distance = torch.dist(prediction_frontnet[:, :3], pred_c[:, :3], p=2)
+            #     print("Distance between frontnet and yolo predictions: ", distance.mean().item())
+
             # print("Prediction shape: ", prediction.shape)
 
 
@@ -359,7 +382,7 @@ if __name__ == "__main__":
             # print("BB: ", bb, bb.shape)
 
             #loss = F.smooth_l1_loss(prediction, bb.repeat(manipulated_image.shape[0],1,1))
-            loss = F.mse_loss(prediction, bb.repeat(manipulated_image.shape[0],1,1))
+            # loss = F.mse_loss(prediction, bb.repeat(manipulated_image.shape[0],1,1))
 
             loss.backward()
             opt.step()

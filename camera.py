@@ -19,40 +19,39 @@ person_width = 10
 
 
 """
-Loss YOLO: 0.6999452708217389, Rad
-ius: 0.28624844551086426, Softmax Mult: 0.8035333156585693                                                                   
-Distance YOLO to Frontnet Mean:  0.5598743055396401                                                                          
-Original fx, fy, ox, oy:  0.7463185099939119 0.7129203609802661 0.6851143101833982 0.5121119939461743                        
-Current fx, fy, ox, oy:  0.7461588915045999 0.7128049455410148 0.6858263031889653 0.5121848326129889                         
-===================================                                                                                          
-Original extrinsic:  tensor([[ 5.23360e-02, -9.98630e-01, -1.11022e-16,  0.00000e+00],                                       
-        [ 1.73410e-01,  9.08804e-03, -9.84808e-01,  0.00000e+00],                                                            
-        [ 9.83458e-01,  5.15409e-02,  1.73648e-01, -2.50000e-02],                                                            
-        [ 0.00000e+00,  0.00000e+00,  0.00000e+00,  1.00000e+00]], device='cuda:0', dtype=torch.float64)                     
-Current extrinsic:  tensor([[ 5.24579e-02, -9.98693e-01, -2.25711e-05,  4.67449e-04],                                        
-        [ 1.73354e-01,  9.13722e-03, -9.84881e-01, -9.04676e-06],                                                            
-        [ 9.83454e-01,  5.17062e-02,  1.73607e-01, -2.51849e-02],                                                            
-        [ 0.00000e+00,  0.00000e+00,  0.00000e+00,  1.00000e+00]],
+Radius: 0.22650666534900665, Softmax Mult: 0.9287999868392944
+Distance YOLO to Frontnet Mean:  0.44556783571005215
+Original fx, fy, ox, oy:  0.7463185099939119 0.7129203609802661 0.6851143101833982 0.5121119939461743
+Current fx, fy, ox, oy:  0.8410791925161974 0.7131281085250916 0.7668779826941132 0.5191798133367411
+===================================
+Original extrinsic:  tensor([[ 5.23360e-02, -9.98630e-01, -1.11022e-16,  0.00000e+00],
+        [ 1.73410e-01,  9.08804e-03, -9.84808e-01,  0.00000e+00],
+        [ 9.83458e-01,  5.15409e-02,  1.73648e-01, -2.50000e-02],
+        [ 0.00000e+00,  0.00000e+00,  0.00000e+00,  1.00000e+00]], device='cuda:0', dtype=torch.float64)
+Current extrinsic:  tensor([[ 6.18377e-02, -1.02535e+00, -4.59242e-03, -8.95689e-05],
+        [ 1.78357e-01,  3.03294e-03, -9.79328e-01,  3.99726e-03],
+        [ 9.55689e-01, -9.49713e-03,  1.83065e-01, -2.08924e-01],
+        [ 0.00000e+00,  0.00000e+00,  0.00000e+00,  1.00000e+00]], device='cuda:0', dtype=torch.float64, grad_fn=<StackBackward0>)
+
 """
 
 class Camera:
     def __init__(self, path, device='cpu'):
         self.device = device
-        self.fx = torch.tensor(74.616, device=self.device, dtype=torch.float32)
-        self.fy = torch.tensor(71.280, device=self.device, dtype=torch.float32)
-        self.ox = torch.tensor(68.583, device=self.device, dtype=torch.float32)
-        self.oy = torch.tensor(51.218, device=self.device, dtype=torch.float32)
-        self.radius = torch.tensor(0.28624844551086426, device=self.device, dtype=torch.float32)  # meters
-
+        self.fx = torch.tensor(84.1079, device=self.device, dtype=torch.float32)
+        self.fy = torch.tensor(71.3128, device=self.device, dtype=torch.float32)
+        self.ox = torch.tensor(76.6878, device=self.device, dtype=torch.float32)
+        self.oy = torch.tensor(51.9179, device=self.device, dtype=torch.float32)
+        self.radius = torch.tensor(0.22650666534900665, device=self.device, dtype=torch.float32)  # meters
         self.camera_intrinsic = np.array([[self.fx.item(), 0, self.ox.item()],
                                             [0, self.fy.item(), self.oy.item()],
                                             [0, 0, 1]], dtype=np.float32)
         self.camera_intrinsic_tens = torch.tensor(self.camera_intrinsic, dtype=torch.float32, device=device)
 
 
-        self.camera_extrinsic = np.array([[ 5.24579e-02, -9.98693e-01, -2.25711e-05,  4.67449e-04],
-                                            [ 1.73354e-01,  9.13722e-03, -9.84881e-01, -9.04676e-06],
-                                            [ 9.83454e-01,  5.17062e-02,  1.73607e-01, -2.51849e-02],
+        self.camera_extrinsic = np.array([[ 6.18377e-02, -1.02535e+00, -4.59242e-03, -8.95689e-05],
+                                            [ 1.78357e-01,  3.03294e-03, -9.79328e-01,  3.99726e-03],
+                                            [ 9.55689e-01, -9.49713e-03,  1.83065e-01, -2.08924e-01],
                                             [ 0.00000e+00,  0.00000e+00,  0.00000e+00,  1.00000e+00]], dtype=np.float32)
         self.camera_extrinsic_tens = torch.tensor(self.camera_extrinsic, dtype=torch.float32, device=self.device)
 
