@@ -331,7 +331,7 @@ class UNet(nn.Module):
         return out
 
 class DiffusionModel():
-    def __init__(self, device, in_size=1, out_size=1, lr=1e-4):
+    def __init__(self, device, in_size=1, out_size=1, lr=1e-4, prediction_model_name='frontnet'):
         self.in_size = in_size    # number of channels (1 -> grayscale)
         self.out_size = out_size  # number of channels
         self.lr = lr
@@ -343,9 +343,14 @@ class DiffusionModel():
         self.patch_size = (45, 80)
         self.model = UNet(in_size=self.in_size, out_size=self.out_size, device=self.device).to(device)
 
-        self.prediction_model_name = 'frontnet'
-        self.prediction_model = load_model(f"{project_root}/pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", device, config="160x32")
-        self.prediction_model.eval()
+        self.prediction_model_name = prediction_model_name
+        if self.prediction_model_name == 'yolov5':
+            from yolo_bounding import YOLOBox
+            self.prediction_model = YOLOBox()  
+        
+        elif self.prediction_model_name == 'frontnet':
+            self.prediction_model = load_model(f"{project_root}/pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", device, config="160x32")
+            self.prediction_model.eval()
 
         self.dataset = load_dataset(f"{project_root}/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle", batch_size = 32, shuffle = True, drop_last = True, num_workers = 1, train=True, train_set_size=0.9, IMRC=True)
 
@@ -365,7 +370,8 @@ class DiffusionModel():
         p_unconditioned = 0.1
 
         self.model.train()
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr, eps=1e-4)
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
+        scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=1e-2, end_factor=1., total_iters=1000)
         all_reco_losses = []
         all_prediction_losses = []
         all_losses = []
@@ -396,72 +402,103 @@ class DiffusionModel():
                 all_reco_losses.append(reconstruction_loss.detach().cpu().numpy())
 
                 # compute prediction model loss
+                if epoch >= nepochs // 2:
+                    positions = conditioning[:, :3]  # first 3 values are sf, tx, ty, shape [batch_size, 3]
+                    # add noise to positions for classifier-free guidance
+                    # print("positions before noise: ", positions, positions.shape)
+                    # positions[:, 0] += torch.randn_like(positions[:, 0]) * 0.5  # sf noise
+                    # positions[:, 1] += torch.randn_like(positions[:, 1]) * 2.0  # tx noise
+                    # positions[:, 2] += torch.randn_like(positions[:, 2]) * 2.0  # ty noise
+                    # print("positions after noise: ", positions, positions.shape)
+                    sf_noisy = positions[:, 0] + torch.randn_like(positions[:, 0]) * 0.05  # sf noise
+                    tx_noisy = positions[:, 1] + torch.randn_like(positions[:, 1]) * 2.0  # tx noise
+                    ty_noisy = positions[:, 2] + torch.randn_like(positions[:, 2]) * 2.0  # ty noise
 
-                positions = conditioning[:, :3]  # first 3 values are sf, tx, ty
-                # print("DEBUGGING")
-                # print("positions shape: ", positions.shape)
-                # print("example position: ", positions[0])
-                T_matrices = torch.stack([construct_T_matrix(*position) for position in positions]).to(device)
-                # print("T_matrices shape: ", T_matrices.shape)
-                # print("example T_matrix: ", T_matrices[0])
+                    # print("DEBUGGING")
+                    # print("positions shape: ", positions.shape)
+                    # print("example position: ", positions[0])
+                    T_matrices = torch.stack([construct_T_matrix(sf_noisy[i], tx_noisy[i], ty_noisy[i]) for i in range(positions.shape[0])]).to(device)
+                    # print("T_matrices shape: ", T_matrices.shape)
+                    # print("example T_matrix: ", T_matrices[0])
 
-                imgs = next(iter(self.dataset))[0].to(device) / 255.0  # normalize to [0, 1]
-                # print("imgs shape: ", imgs.shape, " min: ", torch.min(imgs), " max: ", torch.max(imgs))
+                    imgs = next(iter(self.dataset))[0].to(device) / 255.0  # normalize to [0, 1]
+                    # print("imgs shape: ", imgs.shape, " min: ", torch.min(imgs), " max: ", torch.max(imgs))
 
-                manipulated_images = project_patch(
-                    patches=reco_patches,
-                    T_matrices=T_matrices,
-                    images=imgs
-                )
+                    manipulated_images = project_patch(
+                        patches=reco_patches,
+                        T_matrices=T_matrices,
+                        images=imgs
+                    )
 
-                manipulated_images.clamp_(0., 1.)
+                    manipulated_images.clamp_(0., 1.)
 
-                # print("manipulated_images shape: ", manipulated_images.shape, " min: ", torch.min(manipulated_images), " max: ", torch.max(manipulated_images))
+                    # print("manipulated_images shape: ", manipulated_images.shape, " min: ", torch.min(manipulated_images), " max: ", torch.max(manipulated_images))
 
-                if self.prediction_model_name == 'frontnet':
-                    x, y, z, yaw = self.prediction_model(manipulated_images*255.)
-                    # print("x, y, z, yaw:", x, y, z, yaw)
-                    prediction = torch.stack([x, y, z, yaw])
-                    prediction = prediction.squeeze(2).mT
-                elif self.prediction_model_name == 'yolov5':
-                    # resize to 640x320
-                    manipulated_images = torch.nn.functional.interpolate(manipulated_images, size=(320, 640), mode='bilinear', align_corners=False)
-                    # gray to rgb
-                    manipulated_images = manipulated_images.repeat_interleave(3, dim=1)
+                    if self.prediction_model_name == 'frontnet':
+                        x, y, z, yaw = self.prediction_model(manipulated_images*255.)
+                        # print("x, y, z, yaw:", x, y, z, yaw)
+                        prediction = torch.stack([x, y, z, yaw])
+                        prediction = prediction.squeeze(2).mT
+                    elif self.prediction_model_name == 'yolov5':
+                        # resize to 640x320
+                        manipulated_images = torch.nn.functional.interpolate(manipulated_images, size=(320, 640), mode='bilinear', align_corners=False)
+                        # gray to rgb
+                        manipulated_images = manipulated_images.repeat_interleave(3, dim=1)
 
-                    prediction = self.prediction_model(manipulated_images)  # yolo expects images in range [0, 1]
+                        prediction = self.prediction_model(manipulated_images)  # yolo expects images in range [0, 1]
 
-                # print("prediction shape: ", prediction.shape)
-                # print("example prediction: ", prediction[0])
+                    # print("prediction shape: ", prediction.shape)
+                    # print("example prediction: ", prediction[0])
 
-                target = conditioning[:, -4:]  # last 4 values are the target x, y, z, yaw
-                # print("target shape: ", target.shape)
-                # print("example target: ", target[0])
+                    target = conditioning[:, -4:]  # last 4 values are the target x, y, z, yaw
+                    # add noise to target yaw for classifier-free guidance
+                    # target[:, 3] += torch.randn_like(target[:, 3]) * 0.5  # yaw noise
+                    # target[:, 3] = normalize_yaw_t(target[:, 3])
 
-                yaw_v = prediction[:, 3]
-                # print("yaw_v shape: ", yaw_v.shape)
-                # print("example yaw_v: ", yaw_v[0])
+                    # target[:, 0] += torch.randn_like(target[:, 0]) * 0.5  # x noise
+                    # target[:, 1] += torch.randn_like(target[:, 1]) * 0.5  # y noise
+                    # target[:, 2] += torch.randn_like(target[:, 2]) * 0.5  # z noise
+                    target_yaw_noisy = normalize_yaw_t(target[:, 3] + torch.randn_like(target[:, 3]) * 0.05)  # yaw noise
+                    target_x_noisy = target[:, 0] + torch.randn_like(target[:, 0]) * 0.05  # x noise
+                    target_y_noisy = target[:, 1] + torch.randn_like(target[:, 1]) * 0.05  # y noise
+                    target_z_noisy = target[:, 2] + torch.randn_like(target[:, 2]) * 0.05  # z noise
+                    target_noisy = torch.stack([target_x_noisy, target_y_noisy, target_z_noisy, target_yaw_noisy], dim=1)
 
-                target_yaw_v = target[:, 3]
-                # print("target_yaw_v shape: ", target_yaw_v.shape)
-                # print("example target_yaw_v: ", target_yaw_v[0])
+                    # print("target after noise: ", target, target.shape)
 
-                mse_losses = torch.stack([F.mse_loss(tar, pre) for tar, pre in zip(target[:, :3], prediction[:, :3])]) # calc mse for each of the predictions of each patch
-                angular_losses = 1 - torch.cos(normalize_yaw_t(yaw_v) - normalize_yaw_t(target_yaw_v))  # angular loss for yaw
+                    # print("target shape: ", target.shape)
+                    # print("example target: ", target[0])
 
-                prediction_loss = torch.mean(mse_losses + angular_losses)
-                prediction_losses.append(prediction_loss.detach().cpu().numpy())
-                all_prediction_losses.append(prediction_loss.detach().cpu().numpy())
-                # print("prediction_loss: ", prediction_loss.item())
-                # print("reconstruction_loss: ", reconstruction_loss.item())
+                    yaw_v = prediction[:, 3]
+                    # print("yaw_v shape: ", yaw_v.shape)
+                    # print("example yaw_v: ", yaw_v[0])
 
-                loss = reconstruction_loss + (3 * prediction_loss)
-                losses.append(loss.detach().cpu().numpy())
-                all_losses.append(loss.detach().cpu().numpy())
+                    target_yaw_v = target_yaw_noisy
+                    # print("target_yaw_v shape: ", target_yaw_v.shape)
+                    # print("example target_yaw_v: ", target_yaw_v[0])
+
+                    mse_losses = torch.stack([F.mse_loss(tar, pre) for tar, pre in zip(target_noisy[:, :3], prediction[:, :3])]) # calc mse for each of the predictions of each patch
+                    angular_losses = 1 - torch.cos(normalize_yaw_t(yaw_v) - normalize_yaw_t(target_yaw_v))  # angular loss for yaw
+
+                    prediction_loss = torch.mean(mse_losses + angular_losses)
+                    prediction_losses.append(prediction_loss.detach().cpu().numpy())
+                    all_prediction_losses.append(prediction_loss.detach().cpu().numpy())
+                    # print("prediction_loss: ", prediction_loss.item())
+                    # print("reconstruction_loss: ", reconstruction_loss.item())
+
+                    loss = reconstruction_loss + (4 * prediction_loss)
+                    losses.append(loss.detach().cpu().numpy())
+                    all_losses.append(loss.detach().cpu().numpy())
+                
+                else:
+                    loss = reconstruction_loss
+                    losses.append(loss.detach().cpu().numpy())
+                    all_losses.append(loss.detach().cpu().numpy())
 
                 # Bwd pass
                 loss.backward()
                 optimizer.step()
+                scheduler.step()
 
             if (epoch+1) % 10 == 0:
                 mean_loss = np.mean(np.array(losses))
@@ -482,7 +519,7 @@ class DiffusionModel():
                 #     fig.savefig(f'results/diffusion_training/epoch_images/epoch{epoch+1}/img_{i}.png', dpi=200)
                 #     plt.close(fig)
 
-            if (epoch+1) % 10 == 0:
+            if (epoch+1) % 100 == 0:
                 print("Saving checkpoint...")
                 os.makedirs(f'results/diffusion_training/{args.corpus_size}/checkpoints/', exist_ok=True)
                 model.save(f'results/diffusion_training/{args.corpus_size}/checkpoints/checkpoint_epoch_{epoch+1}.pth')
@@ -550,6 +587,8 @@ if __name__ == '__main__':
     np.random.seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
 
+    torch.autograd.set_detect_anomaly(True)
+
     data = []
     for dataset_path in args.datasets:
         with open(dataset_path, 'rb') as f:
@@ -559,15 +598,17 @@ if __name__ == '__main__':
     patches = []
     targets = []
     positions = []
-    for i in range(args.corpus_size):
+
+    for i in range(len(data)):
         patches.append(data[i][0])
         targets.append(data[i][1])
         positions.append(data[i][2])
 
     
     patches = np.array(patches) # shape (N, 45, 80)
-    targets = np.array(targets) # shape (N, 1, 4) -> x, y, z, yaw 
-    positions = np.array(positions) # shape (N, 1, 3), sf in range [0.4, 0.8], tx, ty in range [0, 1]
+    targets = np.array(targets) # shape (N, 1, 4) -> x, y, z, yaw, x in range [0, 1.5], [-1, 1], [-0.5, 0.5], [-0.3, 0.3]
+    positions = np.array(positions) # shape (N, 1, 3), sf in range [0.31, 0.99], tx, ty in range [0, 85]
+
 
 
     # print("DEBUGGING")
