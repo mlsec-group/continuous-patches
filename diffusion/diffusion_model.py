@@ -331,7 +331,7 @@ class UNet(nn.Module):
         return out
 
 class DiffusionModel():
-    def __init__(self, device, in_size=1, out_size=1, lr=1e-4, prediction_model_name='frontnet'):
+    def __init__(self, device, in_size=1, out_size=1, lr=3e-3, prediction_model_name='frontnet'):
         self.in_size = in_size    # number of channels (1 -> grayscale)
         self.out_size = out_size  # number of channels
         self.lr = lr
@@ -403,9 +403,9 @@ class DiffusionModel():
                 all_reco_losses.append(reconstruction_loss.detach().cpu().numpy())
 
                 # compute prediction model loss
-                if epoch >= nepochs // 2:
-                    if epoch == nepochs // 2:
-                        scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=self.lr, total_steps=len(data_loader) * (nepochs // 2))
+                if epoch >= 50:
+                    if epoch == 50:
+                        scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=self.lr, total_steps=len(data_loader) * (nepochs - 50))
                     # positions = conditioning[:, :3]  # first 3 values are sf, tx, ty, shape [batch_size, 3]
                     # # add noise to positions for classifier-free guidance
                     # # print("positions before noise: ", positions, positions.shape)
@@ -467,7 +467,7 @@ class DiffusionModel():
                     # print("prediction shape: ", prediction.shape)
                     # print("example prediction: ", prediction[0])
 
-                    target = conditioning[:, -4:]  # last 4 values are the target x, y, z, yaw
+                    #target = conditioning[:, -4:]  # last 4 values are the target x, y, z, yaw
                     # add noise to target yaw for classifier-free guidance
                     # target[:, 3] += torch.randn_like(target[:, 3]) * 0.5  # yaw noise
                     # target[:, 3] = normalize_yaw_t(target[:, 3])
@@ -490,17 +490,22 @@ class DiffusionModel():
                     # print("yaw_v shape: ", yaw_v.shape)
                     # print("example yaw_v: ", yaw_v[0])
 
-                    target_yaw_v = target[:, 3]
+                    pred_target = conditioning_random[:, -4:]  # last 4 values are the target x, y, z, yaw
+
+                    target_yaw_v = pred_target[:, 3]
                     #target_yaw_v = target_yaw_noisy
                     # print("target_yaw_v shape: ", target_yaw_v.shape)
                     # print("example target_yaw_v: ", target_yaw_v[0])
 
-                    mse_losses = torch.stack([F.mse_loss(tar, pre) for tar, pre in zip(target[:, :3], prediction[:, :3])]) # calc mse for each of the predictions of each patch
+                    mse_losses = torch.stack([F.mse_loss(tar, pre) for tar, pre in zip(pred_target[:, :3], prediction[:, :3])]) # calc mse for each of the predictions of each patch
                     angular_losses = 1 - torch.cos(normalize_yaw_t(yaw_v) - normalize_yaw_t(target_yaw_v))  # angular loss for yaw
 
-                    prediction_loss = torch.mean(mse_losses + angular_losses)
-                    prediction_losses.append(prediction_loss.detach().cpu().numpy())
-                    all_prediction_losses.append(prediction_loss.detach().cpu().numpy())
+                    #prediction_loss = torch.mean(mse_losses + angular_losses)
+                    prediction_loss = mse_losses + angular_losses
+                    sorted_prediction_losses = torch.sort(prediction_loss, descending=True)[0]
+                    top5_prediction_losses = sorted_prediction_losses[:5]
+                    prediction_losses.append(torch.mean(prediction_loss).detach().cpu().numpy())
+                    all_prediction_losses.append(torch.mean(prediction_loss).detach().cpu().numpy())
                     # print("prediction_loss: ", prediction_loss.item())
                     # print("reconstruction_loss: ", reconstruction_loss.item())
 
@@ -511,7 +516,7 @@ class DiffusionModel():
 
                     # loss = sorted_combined_losses[:5].mean()  # focus on the worst 5 samples in the batch
 
-                    loss = reconstruction_loss + (4 * prediction_loss)
+                    loss = reconstruction_loss + (10 * top5_prediction_losses.mean())
                     losses.append(loss.detach().cpu().numpy())
                     all_losses.append(loss.detach().cpu().numpy())
                 
@@ -546,8 +551,8 @@ class DiffusionModel():
 
             if (epoch+1) % 100 == 0:
                 print("Saving checkpoint...")
-                os.makedirs(f'results/diffusion_training/{args.corpus_size}/checkpoints/', exist_ok=True)
-                model.save(f'results/diffusion_training/{args.corpus_size}/checkpoints/checkpoint_epoch_{epoch+1}.pth')
+                os.makedirs(f'results/diffusion_training/{self.prediction_model_name}/{100}/checkpoints/', exist_ok=True)
+                model.save(f'results/diffusion_training/{self.prediction_model_name}/{100}/checkpoints/checkpoint_epoch_{epoch+1}.pth')
 
                 test_sample_losses = self.eval(num_samples=10, data_loader=self.test_set, device=device)
                 print(f"Test sample losses at epoch {epoch+1}: {test_sample_losses}, mean: {np.mean(test_sample_losses)}")
@@ -596,6 +601,8 @@ class DiffusionModel():
                     manipulated_image = manipulated_image.repeat_interleave(3, dim=1)
 
                     prediction = self.prediction_model(manipulated_image)  # yolo expects images in range [0, 1]
+                    yaw_pred = prediction[:, 3]
+                
                 target = conditioning[-4:].unsqueeze(0)  # last 4 values are the target x, y, z, yaw
                 mse_losses = torch.stack([F.mse_loss(tar, pre) for tar, pre in zip(target[:, :3], prediction[:, :3])]) # calc mse for each of the predictions of each patch
                 angular_losses = 1 - torch.cos(normalize_yaw_t(yaw_pred) - normalize_yaw_t(target[:, 3]))  # angular loss for yaw
@@ -609,10 +616,10 @@ class DiffusionModel():
 
 
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def sample(self, n_samples: int, targets: torch.tensor, device: torch.device, patch_size: tuple[int, int] | None = None, n_steps: int=1_000):
         """Alg 2 from the DDPM paper."""
-        self.model.eval()
+        # self.model.eval()
         # make sure that targets is a tensor
         if not isinstance(targets, torch.Tensor):
             targets = torch.tensor(targets)
@@ -659,6 +666,7 @@ if __name__ == '__main__':
     import matplotlib.pyplot as plt
 
     parser = argparse.ArgumentParser()
+    parser.add_argument('-m', '--model', type=str, choices=['frontnet', 'yolov5'], default='frontnet', help='Prediction model to use for training.')
     parser.add_argument('--datasets', type=str, nargs='+', required=True, help='Paths to the dataset pickle files.')
     parser.add_argument('--epochs', type=int, default=1_000, help='Number of epochs to train.')
     parser.add_argument('--output', type=str, default='trained_model.pth', help='Path to save the model.')
@@ -721,15 +729,15 @@ if __name__ == '__main__':
     # model = UNet(in_size=1, out_size=1, device=device)
     # model.to(device)
 
-    model = DiffusionModel(device)
+    model = DiffusionModel(device, prediction_model_name=args.model)
 
     # training
     # print("Start training..")
     # model.load(f'results/diffusion_training/{args.output}')
     all_losses = model.train(loader, device, nepochs=args.epochs)
 
-    os.makedirs(f'results/diffusion_training/{args.corpus_size}', exist_ok=True)
-    model.save(f'results/diffusion_training/{args.corpus_size}/{args.output}')
+    os.makedirs(f'results/diffusion_training/{args.model}/{100}', exist_ok=True)
+    model.save(f'results/diffusion_training/{args.model}/{100}/{args.output}')
     
     n_samples = 5
     sf = np.random.uniform(0.4, 0.8, n_samples)
@@ -752,5 +760,5 @@ if __name__ == '__main__':
         ax.imshow(sample[0], cmap='gray')
         ax.set_title(f'sample {i}')
         ax.set_axis_off()
-    fig.savefig(f'results/diffusion_training/samples1.png', dpi=200)
+    fig.savefig(f'results/diffusion_training/{args.model}/{100}/samples1.png', dpi=200)
     plt.show()
