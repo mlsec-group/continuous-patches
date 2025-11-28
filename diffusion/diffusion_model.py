@@ -430,6 +430,7 @@ class DiffusionModel():
 
                     conditioning_random = torch.tensor(np.stack((sf, tx, ty, x, y, z, yaw)).T, dtype=torch.float32).to(device)
                     sampled_patches = self.sample(n_samples=patches.shape[0], targets=conditioning_random, device=device, n_steps=25).to(device)
+                    # print("sampled_patches shape: ", sampled_patches.shape, " min: ", torch.min(sampled_patches), " max: ", torch.max(sampled_patches))
 
                     # print("DEBUGGING")
                     # print("positions shape: ", positions.shape)
@@ -463,6 +464,16 @@ class DiffusionModel():
                         manipulated_images = manipulated_images.repeat_interleave(3, dim=1)
 
                         prediction = self.prediction_model(manipulated_images)  # yolo expects images in range [0, 1]
+                        # print("prediction from yolov5: ", prediction[0])
+
+                        #scale back to 160x96
+                        prediction[:, [0, 2]] *= (160.0 / 640.0)  # x coords
+                        prediction[:, [1, 3]] *= (96.0 / 320.0)   # y coords
+
+                        # print("YOLOv5 prediction before scaling to 160x96:", prediction)
+                        # print("Scaled bounding box for 160x96 image: ", prediction)
+
+                        prediction = self.prediction_model.cam.batch_xyz_from_boxes(prediction) #  xyzyaw from bounding box
 
                     # print("prediction shape: ", prediction.shape)
                     # print("example prediction: ", prediction[0])
@@ -490,16 +501,15 @@ class DiffusionModel():
                     # print("yaw_v shape: ", yaw_v.shape)
                     # print("example yaw_v: ", yaw_v[0])
 
-                    pred_target = conditioning_random[:, -4:]  # last 4 values are the target x, y, z, yaw
 
-                    target_yaw_v = pred_target[:, 3]
+                    target_yaw_v = conditioning_random[:, -1]
                     #target_yaw_v = target_yaw_noisy
                     # print("target_yaw_v shape: ", target_yaw_v.shape)
                     # print("example target_yaw_v: ", target_yaw_v[0])
 
-                    mse_losses = torch.stack([F.mse_loss(tar, pre) for tar, pre in zip(pred_target[:, :3], prediction[:, :3])]) # calc mse for each of the predictions of each patch
+                    mse_losses = torch.stack([F.mse_loss(tar, pre) for tar, pre in zip(conditioning_random[:, 3:6], prediction[:, :3])]) # calc mse for each of the predictions of each patch
                     angular_losses = 1 - torch.cos(normalize_yaw_t(yaw_v) - normalize_yaw_t(target_yaw_v))  # angular loss for yaw
-
+                    # print(angular_losses)
                     #prediction_loss = torch.mean(mse_losses + angular_losses)
                     prediction_loss = mse_losses + angular_losses
                     sorted_prediction_losses = torch.sort(prediction_loss, descending=True)[0]
