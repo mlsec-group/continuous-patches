@@ -390,8 +390,8 @@ def gen_target_trajectory(trajectory):
 
     if trajectory == 'circle':
         t = np.linspace(0, 2 * np.pi, 20)
-        x = 1 * np.cos(t)
-        y = 1 * np.sin(t)
+        x = 0.5 * np.cos(t)
+        y = 0.5 * np.sin(t)
         z = np.ones_like(t)  # Constant height at 1
         yaw = np.zeros_like(t)  # Constant yaw
         target_trajectory = np.column_stack((x, y, z, yaw))
@@ -437,11 +437,65 @@ def gen_target_trajectory(trajectory):
     if trajectory == 'figure8':
         t = np.linspace(0, 2 * np.pi, 20)
         x = 0.2 * np.sin(2 * t)  # Horizontal figure 8
-        y = 0.8 * np.sin(t)  # Vertical figure 8
+        y = 0.6 * np.sin(t)  # Vertical figure 8
         z = np.ones_like(t)  # Constant height at 1
         yaw = np.zeros_like(t)  # Constant yaw
         target_trajectory = np.column_stack((x, y, z, yaw))
         return torch.tensor(target_trajectory, dtype=torch.float32)
+
+    if trajectory == 'diagonal_line':
+        points_x = np.array([0., 0.6, 0., -0.6, 0.])
+        points_y = np.array([0., 0.6, 0., -0.6, 0.])
+
+        # Compute cumulative distances along the path
+        distances = np.cumsum(np.sqrt(np.diff(points_x)**2 + np.diff(points_y)**2))
+        distances = np.insert(distances, 0, 0)  # start at 0
+
+        # Generate 20 evenly spaced distances
+        even_distances = np.linspace(0, distances[-1], 20)
+
+        # Interpolate to get evenly spaced points
+        x = np.interp(even_distances, distances, points_x)
+        y = np.interp(even_distances, distances, points_y)
+        z = np.ones_like(x)  # Constant height at 1
+        yaw = np.zeros_like(x)  # Constant yaw
+        target_trajectory = np.column_stack((x, y, z, yaw))
+        return torch.tensor(target_trajectory, dtype=torch.float32)
+    if trajectory == 'triangle':
+        corners = np.array([
+            [0.6, 0.],
+            [0., 0.5],
+            [0., -0.5],
+            [0.6, 0.] 
+        ])
+
+        edges = list(zip(corners[:-1], corners[1:]))
+        n_edges = len(edges)
+
+        # Reserve 1 point per corner, distribute the rest
+        extra_points = 20 - n_edges  
+        base = extra_points // n_edges
+        remainder = extra_points % n_edges
+
+        points = []
+        for i, (start, end) in enumerate(edges):
+            # Number of points on this edge (including the corner at 'end')
+            num_on_edge = base + (1 if i < remainder else 0) + 1
+
+            # Interpolate along the edge
+            xs = np.linspace(start[0], end[0], num_on_edge, endpoint=False)
+            ys = np.linspace(start[1], end[1], num_on_edge, endpoint=False)
+            edge_points = np.column_stack([xs, ys])
+
+            points.extend(edge_points)
+
+        points = np.array(points)
+
+        z = np.ones((points.shape[0],))  # Create z with shape (20,)
+        yaw = np.zeros((points.shape[0],))  # Create yaw with shape (20,)
+        waypoints = np.hstack((points, z[:, None], yaw[:, None]))  # Stack points, z, and yaw to get shape (20, 4)
+
+        return torch.tensor(waypoints, dtype=torch.float32)
     else:
         raise ValueError("Unknown trajectory type")
     
@@ -475,7 +529,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('-m', '--model', type=str, choices=['frontnet', 'yolov5'], default='frontnet', help='Model to use for prediction')
-    parser.add_argument('-t', '--trajectory', type=str, choices=['figure8', 'square', 'circle', 'line_x', 'line_y'], default='figure8', help='Target Trajectory')
+    parser.add_argument('-t', '--trajectory', type=str, choices=['figure8', 'square', 'circle', 'line_x', 'line_y', 'diagonal_line', 'triangle'], default='figure8', help='Target Trajectory')
     parser.add_argument('--display_size', type=int, default=60, help='Size of the display in pixels (default: 60")')
     parser.add_argument('--patch_mode', type=str, choices=['optimal', 'timeout', 'black', 'white', 'random', 'fap', 'diffusion', 'interpolation', 'corpus'], default='optimal', help='Mode to initialize the patch: optimal, timeout, black, white, random')
     parser.add_argument('--temperature', type=str, choices=['warm', 'cold', 'none'], default='cold', help='Either restart from random patch (cold) or from the last patch (warm)')
@@ -576,7 +630,7 @@ if __name__ == "__main__":
         from diffusion.diffusion_model import DiffusionModel
         diffusion_model = DiffusionModel(device=device)
 
-        diffusion_model.load(f'diffusion/results/diffusion_training/{args.corpus_size}/{model_name}.pth')
+        diffusion_model.load(f'results/diffusion_training/{model_name}/{100}/frontnet100test.pth')
 
 
     # # tests to improve yolo
@@ -733,17 +787,18 @@ if __name__ == "__main__":
                                         [monitor_corners[3,0], monitor_corners[3,1], 1.]], dtype=torch.float32, device=device)  
         
         # patch_coordinates = torch.stack([monitor_corners[0], monitor_corners[3]])
-        patch_size = (int((monitor_corners[3,1] - monitor_corners[0,1]).item()), int((monitor_corners[3,0] - monitor_corners[0,0]).item()))
-
-        patch_coordinates = torch.tensor([[0., 0., 1.],
-                                        [patch_size[1], 0., 1.],
-                                        [0., patch_size[0], 1.],
-                                        [patch_size[1], patch_size[0], 1.]], dtype=torch.float32, device=device)
+        # patch_size = (int((monitor_corners[3,1] - monitor_corners[0,1]).item()), int((monitor_corners[3,0] - monitor_corners[0,0]).item()))
 
         # patch_coordinates = torch.tensor([[0., 0., 1.],
-        #                                   [80., 0., 1.],
-        #                                   [0., 45., 1.],
-        #                                   [80., 45., 1.]], dtype=torch.float32, device=device)
+        #                                 [patch_size[1], 0., 1.],
+        #                                 [0., patch_size[0], 1.],
+        #                                 [patch_size[1], patch_size[0], 1.]], dtype=torch.float32, device=device)
+
+
+        patch_coordinates = torch.tensor([[0., 0., 1.],
+                                          [80., 0., 1.],
+                                          [0., 45., 1.],
+                                          [80., 45., 1.]], dtype=torch.float32, device=device)
         
         # T = get_patch_T(monitor_corners)
         # print("Patch transformation T:")
@@ -871,9 +926,9 @@ if __name__ == "__main__":
                 patch = diffusion_model.sample(1, conditioning, device, patch_size=(45, 80), n_steps=10)
 
         else:
-            #patch = torch.rand((1, 1, *patch_size), device=device, dtype=torch.float32)  # random patch
-            patch = torch.tensor(random_start_patch, device=device, dtype=torch.float32).unsqueeze(0).unsqueeze(0)  # random patch from corpus
-            patch = torch.nn.functional.interpolate(patch.clone(), size=patch_size, mode='bilinear', align_corners=False)
+            patch = torch.rand((1, 1, *patch_size), device=device, dtype=torch.float32)  # random patch
+            # patch = torch.tensor(random_start_patch, device=device, dtype=torch.float32).unsqueeze(0).unsqueeze(0)  # random patch from corpus
+            # patch = torch.nn.functional.interpolate(patch.clone(), size=patch_size, mode='bilinear', align_corners=False)
 
         if patch_mode == 'optimal' or patch_mode == 'timeout':
             patch = patch.requires_grad_(True)
@@ -888,15 +943,15 @@ if __name__ == "__main__":
         if patch_mode == 'optimal' or patch_mode == 'timeout':
 
             if args.temperature == 'warm' and target_idx > 1:
-                patch = best_patch.clone().detach()
+                patch = best_patch.clone().detach()#.requires_grad_(True)
                 patch = torch.nn.functional.interpolate(patch.clone(), size=patch_size, mode='bilinear', align_corners=False).requires_grad_(True)
 
-            opt = torch.optim.Adam([patch], lr=3e-3)  # was at 3e-2
+            opt = torch.optim.Adam([patch], lr=1e-2)  # was at 3e-2
             # scheduler = torch.optim.lr_scheduler.LinearLR(opt, start_factor=1e-2, end_factor=1., total_iters=1000)
-            scheduler = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=3e-3, total_steps=3000)
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=1e-2, total_steps=5000)
 
             
-            loss = torch.inf
+            distance = torch.inf
             i = 0
 
             best_loss = torch.inf
@@ -907,10 +962,14 @@ if __name__ == "__main__":
             time_start_optim_step = time.time()
             losses = []
 
-            while loss > 0.01 and i < 3000:
+            while distance > 0.05 and i < 5000:
                 if timeout is not None and (time.time() - time_start_optim_step > timeout):  # 30 Hz
                     break
                 opt.zero_grad()
+
+                if model_name == 'yolov5':
+                    img = torch.nn.functional.interpolate(img, size=(320, 640), mode='bilinear', align_corners=False)
+
 
                 if T[0, 0] > 0.1:  # avoid too small patches
                     manipulated_image = project_patch(
@@ -921,6 +980,10 @@ if __name__ == "__main__":
                 else:
                     manipulated_image = img.clone()
 
+                # # add noise to manipulated image
+                # noise = torch.randn_like(manipulated_image) * 0.1
+                # manipulated_image = manipulated_image + noise
+
                 manipulated_image.clamp_(0., 1.)
 
                 if model_name == 'frontnet':
@@ -930,11 +993,8 @@ if __name__ == "__main__":
                     prediction = prediction.squeeze(2).mT
 
                 elif model_name == 'yolov5':
-                    # resize to 640x320
-                    manipulated_image_inter = torch.nn.functional.interpolate(manipulated_image, size=(320, 640), mode='bilinear', align_corners=False)
-                    # gray to rgb
-                    manipulated_image_resized = manipulated_image_inter.repeat_interleave(3, dim=1)
 
+                    manipulated_image_resized = manipulated_image.repeat_interleave(3, dim=1)  # to 3 channels
                     prediction = model(manipulated_image_resized).squeeze(1)  # yolo expects images in range [0, 1], out (B, 4)
 
                     # prediction = prediction.squeeze(1)
@@ -1045,9 +1105,9 @@ if __name__ == "__main__":
                 scheduler.step()
 
                 losses.append(loss.detach().cpu().item())
-                if i % 50 == 0:
+                if i % 100 == 0:
                     print(f"Iter {i}, loss: {loss}, distance: {distance}, angle: {angular_loss}, mean loss last 50 iters: {np.mean(losses[-50:])}")
-
+                    # print("Std last 50 losses:", np.std(losses[-50:]))
 
                 patch.data.clamp_(0., 1.)
                 i += 1
