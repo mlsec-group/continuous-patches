@@ -525,13 +525,86 @@ def get_patch_T(monitor_corners_world):
 
     return T
 
+class SimpleDroneController:
+    def __init__(self, max_vel=1.0, max_yaw_rate=0.5, kp_pos=1.0, kp_yaw=2.0):
+        """
+        Args:
+            max_vel: Maximum velocity in m/s
+            max_yaw_rate: Maximum yaw rate in rad/s
+            kp_pos: Proportional gain for position (higher = snappier)
+            kp_yaw: Proportional gain for yaw
+        """
+        self.max_vel = max_vel
+        self.max_yaw_rate = max_yaw_rate
+        self.kp_pos = kp_pos
+        self.kp_yaw = kp_yaw
+
+    def normalize_angle(self, angle):
+        """Wraps angle to [-pi, pi] to find shortest rotation path."""
+        return (angle + np.pi) % (2 * np.pi) - np.pi
+
+    def step(self, current_state, target_state, dt):
+        """
+        Moves the drone towards target for duration dt.
+        
+        Args:
+            current_state: dict or list [x, y, z, yaw]
+            target_state: dict or list [x, y, z, yaw]
+            dt: time step in seconds
+            
+        Returns:
+            new_state: [x, y, z, yaw]
+            cmd_vel: The velocity command used [vx, vy, vz, yaw_rate] (for logging)
+        """
+        # Unpack states (assuming list format [x, y, z, yaw])
+        curr_pos = np.array(current_state[:3])
+        curr_yaw = current_state[3]
+        
+        targ_pos = np.array(target_state[:3])
+        targ_yaw = target_state[3]
+
+        # --- 1. Position Control ---
+        # Calculate error vector
+        pos_error = targ_pos - curr_pos
+        
+        # Calculate desired velocity (P-controller)
+        vel_cmd = pos_error * self.kp_pos
+        
+        # Clip velocity to max speed (maintain direction)
+        speed = np.linalg.norm(vel_cmd)
+        if speed > self.max_vel:
+            vel_cmd = (vel_cmd / speed) * self.max_vel
+
+        # --- 2. Yaw Control ---
+        # Calculate yaw error (shortest path)
+        yaw_error = self.normalize_angle(targ_yaw - curr_yaw)
+        
+        # Calculate desired yaw rate
+        yaw_rate_cmd = yaw_error * self.kp_yaw
+        
+        # Clip yaw rate
+        yaw_rate_cmd = np.clip(yaw_rate_cmd, -self.max_yaw_rate, self.max_yaw_rate)
+
+        # --- 3. Integration (Simulation Step) ---
+        # Update position: x_new = x_old + v * dt
+        new_pos = curr_pos + vel_cmd * dt
+        
+        # Update yaw: yaw_new = yaw_old + rate * dt
+        new_yaw = self.normalize_angle(curr_yaw + yaw_rate_cmd * dt)
+        
+        # Pack result
+        new_state = list(new_pos) + [new_yaw]
+        cmd_vel = list(vel_cmd) + [yaw_rate_cmd]
+        
+        return new_state, cmd_vel
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('-m', '--model', type=str, choices=['frontnet', 'yolov5'], default='frontnet', help='Model to use for prediction')
     parser.add_argument('-t', '--trajectory', type=str, choices=['figure8', 'square', 'circle', 'line_x', 'line_y', 'diagonal_line', 'triangle'], default='figure8', help='Target Trajectory')
     parser.add_argument('--display_size', type=int, default=60, help='Size of the display in pixels (default: 60")')
-    parser.add_argument('--patch_mode', type=str, choices=['optimal', 'timeout', 'black', 'white', 'random', 'fap', 'diffusion', 'interpolation', 'corpus'], default='optimal', help='Mode to initialize the patch: optimal, timeout, black, white, random')
+    parser.add_argument('--patch_mode', type=str, choices=['optimal', 'velo', 'timeout', 'black', 'white', 'random', 'fap', 'diffusion', 'interpolation', 'corpus'], default='optimal', help='Mode to initialize the patch: optimal, timeout, black, white, random')
     parser.add_argument('--temperature', type=str, choices=['warm', 'cold', 'none'], default='cold', help='Either restart from random patch (cold) or from the last patch (warm)')
     parser.add_argument('--pic_mode', type=str, choices=['random', 'idx'], default='idx', help='Mode to select image: random or specific index')
     parser.add_argument('--img_idx', type=int, default=0, help='Index of the image to use from the dataset')
@@ -583,16 +656,22 @@ if __name__ == "__main__":
 
 
     if args.pic_mode == 'random':
-        if patch_mode == 'optimal' or patch_mode == 'timeout':
+        if patch_mode == 'optimal' or patch_mode == 'timeout' or patch_mode == 'velo':
             directory = f'{directory}/{args.temperature}'
         output_dir = Path(f'{directory}') / args.trajectory / f'{args.display_size}z' / f'random' / f'{args.seed}'
     else:
-        if patch_mode == 'optimal' or patch_mode == 'timeout':
+        if patch_mode == 'optimal' or patch_mode == 'timeout' or patch_mode == 'velo':
             directory = f'{directory}/{args.temperature}'
         output_dir = Path(f'{directory}') / args.trajectory / f'{args.display_size}z' / f'image_{args.img_idx}' / f'{args.seed}'
     print(output_dir)
 
     os.makedirs(output_dir, exist_ok=True)
+
+
+    if args.model == 'frontnet':
+        initial_patch_size = (45, 80)  # Height, Width
+    elif args.model == 'yolov5':
+        initial_patch_size = (150, 320)  # Height, Width
 
 
     if args.patch_mode == 'fap':
@@ -780,6 +859,12 @@ if __name__ == "__main__":
         print("Monitor corners:")
         print(monitor_corners)
 
+        if model_name == 'yolov5':
+            # scale from 96x160 to 320x640
+            monitor_corners[:, 0] *= (640.0 / 160.0)  # x coords
+            monitor_corners[:, 1] *= (320.0 / 96.0)   # y coords
+
+
         # add homogeneous coordinate for homography
         monitor_corners_homogeneous = torch.tensor([[monitor_corners[0,0], monitor_corners[0,1], 1.],
                                         [monitor_corners[1,0], monitor_corners[1,1], 1.],
@@ -787,7 +872,7 @@ if __name__ == "__main__":
                                         [monitor_corners[3,0], monitor_corners[3,1], 1.]], dtype=torch.float32, device=device)  
         
         # patch_coordinates = torch.stack([monitor_corners[0], monitor_corners[3]])
-        # patch_size = (int((monitor_corners[3,1] - monitor_corners[0,1]).item()), int((monitor_corners[3,0] - monitor_corners[0,0]).item()))
+        # current_patch_size = (int((monitor_corners[3,1] - monitor_corners[0,1]).item()), int((monitor_corners[3,0] - monitor_corners[0,0]).item()))
 
         # patch_coordinates = torch.tensor([[0., 0., 1.],
         #                                 [patch_size[1], 0., 1.],
@@ -796,9 +881,9 @@ if __name__ == "__main__":
 
 
         patch_coordinates = torch.tensor([[0., 0., 1.],
-                                          [80., 0., 1.],
-                                          [0., 45., 1.],
-                                          [80., 45., 1.]], dtype=torch.float32, device=device)
+                                          [initial_patch_size[1], 0., 1.],
+                                          [0., initial_patch_size[0], 1.],
+                                          [initial_patch_size[1], initial_patch_size[0], 1.]], dtype=torch.float32, device=device)
         
         # T = get_patch_T(monitor_corners)
         # print("Patch transformation T:")
@@ -811,9 +896,9 @@ if __name__ == "__main__":
         T = torch.tensor(T, dtype=torch.float32, device=device)
 
         if patch_mode == 'black':
-            patch = torch.zeros((1, 1, 45, 80), device=device, dtype=torch.float32)
+            patch = torch.zeros((1, 1, initial_patch_size[0], initial_patch_size[1]), device=device, dtype=torch.float32)
         elif patch_mode == 'white':
-            patch = torch.ones((1, 1, 45, 80), device=device, dtype=torch.float32)
+            patch = torch.ones((1, 1, initial_patch_size[0], initial_patch_size[1]), device=device, dtype=torch.float32)
         elif patch_mode == 'fap':
             # check if positive/negative change in x or y in target position is needed relative to current drone pose
             
@@ -923,14 +1008,14 @@ if __name__ == "__main__":
                 # print("Patch shape:", patch.shape)
             
             elif patch_mode == 'diffusion':
-                patch = diffusion_model.sample(1, conditioning, device, patch_size=(45, 80), n_steps=10)
+                patch = diffusion_model.sample(1, conditioning, device, patch_size=initial_patch_size, n_steps=10)
 
         else:
-            patch = torch.rand((1, 1, *patch_size), device=device, dtype=torch.float32)  # random patch
+            patch = torch.rand((1, 1, initial_patch_size[0], initial_patch_size[1]), device=device, dtype=torch.float32)  # random patch
             # patch = torch.tensor(random_start_patch, device=device, dtype=torch.float32).unsqueeze(0).unsqueeze(0)  # random patch from corpus
             # patch = torch.nn.functional.interpolate(patch.clone(), size=patch_size, mode='bilinear', align_corners=False)
 
-        if patch_mode == 'optimal' or patch_mode == 'timeout':
+        if patch_mode == 'optimal' or patch_mode == 'timeout' or patch_mode == 'velo':
             patch = patch.requires_grad_(True)
 
 
@@ -940,11 +1025,11 @@ if __name__ == "__main__":
         # print("Patch coordinates after transformation:")
         # print(check)
 
-        if patch_mode == 'optimal' or patch_mode == 'timeout':
+        if patch_mode == 'optimal' or patch_mode == 'timeout' or patch_mode == 'velo':
 
             if args.temperature == 'warm' and target_idx > 1:
-                patch = best_patch.clone().detach()#.requires_grad_(True)
-                patch = torch.nn.functional.interpolate(patch.clone(), size=patch_size, mode='bilinear', align_corners=False).requires_grad_(True)
+                patch = best_patch.clone().detach().requires_grad_(True)
+                # patch = torch.nn.functional.interpolate(patch.clone(), size=patch_size, mode='bilinear', align_corners=False).requires_grad_(True)
 
             opt = torch.optim.Adam([patch], lr=1e-2)  # was at 3e-2
             # scheduler = torch.optim.lr_scheduler.LinearLR(opt, start_factor=1e-2, end_factor=1., total_iters=1000)
@@ -1053,7 +1138,7 @@ if __name__ == "__main__":
                     # print("Scaled prediction:", pred_c)
 
 
-                    prediction = cam.batch_xyz_from_boxes(prediction) #  xyzyaw from bounding box
+                    prediction = model.cam.batch_xyz_from_boxes(prediction) #  xyzyaw from bounding box
             
                 T_pred_in_drone = T_matrix(prediction[0])
                 T_pred_in_world = T_drone_in_world @ T_pred_in_drone
@@ -1134,7 +1219,11 @@ if __name__ == "__main__":
 
         else: # random, black, white
             if patch_mode == 'random':
-                patch = torch.rand((1, 1, 45, 80), device=device, dtype=torch.float32)
+                patch = torch.rand((1, 1, initial_patch_size[0], initial_patch_size[1]), device=device, dtype=torch.float32)
+
+
+            if model_name == 'yolov5':
+                img = torch.nn.functional.interpolate(img, size=(320, 640), mode='bilinear', align_corners=False)
 
             manipulated_image = project_patch(
                     patches=patch, 
@@ -1152,7 +1241,7 @@ if __name__ == "__main__":
 
             elif model_name == 'yolov5':
                     # resize to 640x320
-                    manipulated_image_inter = torch.nn.functional.interpolate(manipulated_image, size=(320, 640), mode='bilinear', align_corners=False)
+                    # manipulated_image_inter = torch.nn.functional.interpolate(manipulated_image, size=(320, 640), mode='bilinear', align_corners=False)
                     # gray to rgb
                     manipulated_image_resized = manipulated_image_inter.repeat_interleave(3, dim=1)
 
@@ -1165,7 +1254,7 @@ if __name__ == "__main__":
                     # print("YOLOv5 prediction before scaling to 160x96:", prediction)
                     # print("Scaled bounding box for 160x96 image: ", prediction)
 
-                    prediction = cam.batch_xyz_from_boxes(prediction) #  xyzyaw from bounding box
+                    prediction = model.cam.batch_xyz_from_boxes(prediction) #  xyzyaw from bounding box
 
             # prediction values
             T_pred_in_drone = T_matrix(prediction[0])
