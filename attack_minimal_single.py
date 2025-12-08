@@ -473,7 +473,7 @@ def gen_target_trajectory(trajectory):
         n_edges = len(edges)
 
         # Reserve 1 point per corner, distribute the rest
-        extra_points = 20 - n_edges  
+        extra_points = 18 - n_edges  
         base = extra_points // n_edges
         remainder = extra_points % n_edges
 
@@ -494,6 +494,9 @@ def gen_target_trajectory(trajectory):
         z = np.ones((points.shape[0],))  # Create z with shape (20,)
         yaw = np.zeros((points.shape[0],))  # Create yaw with shape (20,)
         waypoints = np.hstack((points, z[:, None], yaw[:, None]))  # Stack points, z, and yaw to get shape (20, 4)
+        # add initial and final point to complete the triangle
+        init_pose = np.array([[0., 0., 1., 0.]])
+        waypoints = np.vstack((init_pose, waypoints, init_pose))
 
         return torch.tensor(waypoints, dtype=torch.float32)
     else:
@@ -525,7 +528,7 @@ def get_patch_T(monitor_corners_world):
 
     return T
 
-class SimpleDroneController:
+class PController:
     def __init__(self, max_vel=1.0, max_yaw_rate=0.5, kp_pos=1.0, kp_yaw=2.0):
         """
         Args:
@@ -543,7 +546,7 @@ class SimpleDroneController:
         """Wraps angle to [-pi, pi] to find shortest rotation path."""
         return (angle + np.pi) % (2 * np.pi) - np.pi
 
-    def step(self, current_state, target_state, dt):
+    def step(self, current_state: torch.tensor, target_state: torch.tensor, dt: torch.float32):
         """
         Moves the drone towards target for duration dt.
         
@@ -557,10 +560,10 @@ class SimpleDroneController:
             cmd_vel: The velocity command used [vx, vy, vz, yaw_rate] (for logging)
         """
         # Unpack states (assuming list format [x, y, z, yaw])
-        curr_pos = np.array(current_state[:3])
+        curr_pos = current_state[:3]
         curr_yaw = current_state[3]
         
-        targ_pos = np.array(target_state[:3])
+        targ_pos = target_state[:3]
         targ_yaw = target_state[3]
 
         # --- 1. Position Control ---
@@ -571,32 +574,78 @@ class SimpleDroneController:
         vel_cmd = pos_error * self.kp_pos
         
         # Clip velocity to max speed (maintain direction)
-        speed = np.linalg.norm(vel_cmd)
+        speed = torch.norm(vel_cmd)
         if speed > self.max_vel:
             vel_cmd = (vel_cmd / speed) * self.max_vel
 
         # --- 2. Yaw Control ---
         # Calculate yaw error (shortest path)
-        yaw_error = self.normalize_angle(targ_yaw - curr_yaw)
+        yaw_error = normalize_yaw_t(targ_yaw - curr_yaw)
         
         # Calculate desired yaw rate
         yaw_rate_cmd = yaw_error * self.kp_yaw
         
         # Clip yaw rate
-        yaw_rate_cmd = np.clip(yaw_rate_cmd, -self.max_yaw_rate, self.max_yaw_rate)
+        yaw_rate_cmd = torch.clamp(yaw_rate_cmd, -self.max_yaw_rate, self.max_yaw_rate)
 
         # --- 3. Integration (Simulation Step) ---
         # Update position: x_new = x_old + v * dt
         new_pos = curr_pos + vel_cmd * dt
         
         # Update yaw: yaw_new = yaw_old + rate * dt
-        new_yaw = self.normalize_angle(curr_yaw + yaw_rate_cmd * dt)
+        new_yaw = normalize_yaw_t(curr_yaw + yaw_rate_cmd * dt)
         
         # Pack result
-        new_state = list(new_pos) + [new_yaw]
-        cmd_vel = list(vel_cmd) + [yaw_rate_cmd]
+        new_state = torch.cat((new_pos, new_yaw.unsqueeze(0)))
+        cmd_vel = torch.cat((vel_cmd, yaw_rate_cmd.unsqueeze(0)))
         
         return new_state, cmd_vel
+
+def compute_dtw_distance(target_traj: torch.tensor, actual_traj: torch.tensor):
+    """
+    Computes the Dynamic Time Warping (DTW) distance between two 3D trajectories.
+    
+    Args:
+        target_traj: np.array or tensor of shape (N, 3)
+        actual_traj: np.array or tensor of shape (M, 3)
+        
+    Returns:
+        float: The normalized DTW distance (average distance per point alignment)
+    """
+    # # Ensure inputs are numpy arrays
+    # if hasattr(target_traj, 'cpu'): target_traj = target_traj.cpu().numpy()
+    # if hasattr(actual_traj, 'cpu'): actual_traj = actual_traj.cpu().numpy()
+    
+    # 1. Compute the pairwise distance matrix (Euclidean)
+    # Shape: (N, M)
+    dists = torch.cdist(target_traj, actual_traj, p=2, compute_mode='donot_use_mm_for_euclid_dist')
+    
+    # 2. Initialize the cumulative cost matrix
+    N, M = dists.shape
+    dtw_matrix = torch.zeros((N, M), device=dists.device, dtype=dists.dtype)
+    dtw_matrix[0, 0] = dists[0, 0]
+    
+    # 3. Fill first row and first column
+    for i in range(1, N):
+        dtw_matrix[i, 0] = dtw_matrix[i-1, 0] + dists[i, 0]
+    for j in range(1, M):
+        dtw_matrix[0, j] = dtw_matrix[0, j-1] + dists[0, j]
+        
+    # 4. Fill the rest using the recurrence relation
+    # Cost = current_dist + min(left, up, diagonal)
+    for i in range(1, N):
+        for j in range(1, M):
+            min_prev = torch.min(torch.stack([
+                dtw_matrix[i-1, j],    # insertion
+                dtw_matrix[i, j-1],    # deletion
+                dtw_matrix[i-1, j-1]   # match
+            ]))
+            dtw_matrix[i, j] = dists[i, j] + min_prev
+            
+    # 5. Return normalized distance (optional but recommended for comparison)
+    # The value at dtw_matrix[-1, -1] is the total accumulated cost.
+    # Normalizing by path length (N+M) makes it interpretable as "avg error in meters"
+    return dtw_matrix[-1, -1] / (N + M)
 
 if __name__ == "__main__":
     import argparse
@@ -673,6 +722,11 @@ if __name__ == "__main__":
     elif args.model == 'yolov5':
         initial_patch_size = (150, 320)  # Height, Width
 
+    if patch_mode == 'velo' or patch_mode == 'timeout':
+        controller = PController(max_vel=1.0, max_yaw_rate=0.5, kp_pos=1.0, kp_yaw=2.0)
+        dt = 1/30
+        if patch_mode == 'timeout':
+            dt = timeout
 
     if args.patch_mode == 'fap':
         import yaml
@@ -817,7 +871,38 @@ if __name__ == "__main__":
 
     img_idx = args.img_idx
 
-    for target_idx in trange(1, len(target_trajectory)-1):
+    optim_steps = 0
+
+    target_idx = 1
+    retries = 0
+    max_retries = 10
+    while target_idx < len(target_trajectory) - 1:
+        target = target_trajectory[target_idx]
+        if patch_mode == 'velo' or patch_mode == 'timeout':
+            cur_pos = torch.tensor(all_drone_poses[-1][:3]).to(device)
+            # tgt_pos = torch.from_numpy(target[:3]).to(device)
+            if torch.dist(cur_pos, target[:3], p=2) > 0.1 and retries <= max_retries:
+                print("Current position:", cur_pos)
+                print("Target position:", target[:3])
+                print("Distance to target:", torch.dist(cur_pos, target[:3], p=2).item())
+                # Move drone towards target using P-controller
+                print("Target not reached, repeating target.")
+        #         # do not increment target_idx -> repeat same target
+        #         continue
+                retries += 1
+            else:
+                print("Target reached, moving to next target.")
+                target_idx += 1
+                retries = 0
+        else:
+            target_idx += 1
+
+        # retries = 0
+        print(f"--- Target idx: {target_idx} ---")
+        print(f"--- Optim steps so far: {optim_steps} ---")
+        print("Current pose: ", T_drone_in_world[:3, 3].detach().cpu().numpy(), torch.atan2(T_drone_in_world[1,0], T_drone_in_world[0,0]).item())
+        # process/advance to next target
+        # target_idx += 1
 
         if args.pic_mode == 'random':
             img_idx = np.random.randint(0, len(dataset))
@@ -974,8 +1059,8 @@ if __name__ == "__main__":
                 ordered_combined = conditioning_gt[order].detach().cpu().clone().numpy()
                 # start from the closest single exemplar
                 patch = corpus_patches[order[0]].clone()  # shape (H, W)
-                # print("patch shape before loop: ", patch.shape, patch.min(), patch.max())
-                # print("Patch min/max before loop: ", patch.min(), patch.max(), self.patches.max())
+                # print("patch shape before loop: ", patch.shape)
+                # print("Patch min/max before loop: ", patch.min(), patch.max())
                 for n in range(1, len(order)):
                     result = linprog(
                         bounds=[(0,1)]*n,
@@ -1027,7 +1112,7 @@ if __name__ == "__main__":
 
         if patch_mode == 'optimal' or patch_mode == 'timeout' or patch_mode == 'velo':
 
-            if args.temperature == 'warm' and target_idx > 1:
+            if args.temperature == 'warm' and target_idx > 2:
                 patch = best_patch.clone().detach().requires_grad_(True)
                 # patch = torch.nn.functional.interpolate(patch.clone(), size=patch_size, mode='bilinear', align_corners=False).requires_grad_(True)
 
@@ -1047,7 +1132,7 @@ if __name__ == "__main__":
             time_start_optim_step = time.time()
             losses = []
 
-            while distance > 0.05 and i < 5000:
+            while distance > 0.05 and i < 500:
                 if timeout is not None and (time.time() - time_start_optim_step > timeout):  # 30 Hz
                     break
                 opt.zero_grad()
@@ -1096,7 +1181,8 @@ if __name__ == "__main__":
 
                     # T_pred_in_world = torch.inverse(T_direction_world) @ T_setpoint_world
                     # T_pred_in_drone = torch.inverse(T_drone_in_world) @ T_pred_in_world
-                    # # target_yaw = torch.atan2(T_pred_in_drone[1, 0], T_pred_in_drone[0, 0])
+
+                    # target_yaw = torch.atan2(T_pred_in_drone[1, 0], T_pred_in_drone[0, 0])
 
                     # # whole_output => (B, N, 85) with (x1, y1, w, h, conf, class_probs)
                     # # print(whole_output.shape)
@@ -1153,10 +1239,22 @@ if __name__ == "__main__":
 
                 T_setpoint_world = T_direction_world @ T_pred_in_world
 
+                yaw = torch.atan2(T_setpoint_world[1, 0], T_setpoint_world[0, 0])
+                setpoint_yaw = normalize_yaw_t(yaw)
+
+
+
+
                 # print("Target: ", target)
                 # print("Predicted setpoint in world: ", T_setpoint_world[:3, 3], target_yaw)
 
-                prediction = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device) # prediction values
+                prediction = torch.stack([*T_setpoint_world[:3, 3], setpoint_yaw]).to(device) # prediction values
+                if patch_mode == 'velo' or patch_mode == 'timeout':
+                    current_state = torch.stack([*T_drone_in_world[:3, 3], setpoint_yaw]).to(device)
+                    prediction, vel_cmd = controller.step(current_state=current_state, target_state=prediction, dt=dt)
+                    T_setpoint_world = T_matrix(prediction)
+
+
                 if T[0, 0] < 0.1:
                     best_patch = patch.detach().clone()
                     best_setpoint = prediction.detach().clone()
@@ -1199,9 +1297,9 @@ if __name__ == "__main__":
 
             print("Output dir: ", output_dir)
 
-            np.save(output_dir / f'patch_{target_idx}.npy', best_patch.detach().cpu().numpy())
+            np.save(output_dir / f'patch_{optim_steps}.npy', best_patch.detach().cpu().numpy())
 
-            np.save(output_dir / f'T_{target_idx}.npy', T.detach().cpu().numpy())
+            np.save(output_dir / f'T_{optim_steps}.npy', T.detach().cpu().numpy())
 
 
             with torch.no_grad():
@@ -1216,6 +1314,8 @@ if __name__ == "__main__":
 
             T_drone_in_world = T_matrix(best_setpoint)
             all_drone_poses.append(best_setpoint.detach().cpu().numpy())
+
+            optim_steps += 1
 
         else: # random, black, white
             if patch_mode == 'random':
@@ -1269,9 +1369,17 @@ if __name__ == "__main__":
             # print(T_direction_world)
 
             T_setpoint_world = T_direction_world @ T_pred_in_world
-            
 
-            prediction = torch.stack([*T_setpoint_world[:3, 3], target_yaw]).to(device).unsqueeze(0)  # prediction values
+            yaw = torch.atan2(T_setpoint_world[1, 0], T_setpoint_world[0, 0])
+            setpoint_yaw = normalize_yaw_t(yaw)
+
+            prediction = torch.stack([*T_setpoint_world[:3, 3], setpoint_yaw]).to(device) # prediction values
+            if patch_mode == 'velo' or patch_mode == 'timeout':
+                current_state = torch.stack([*T_drone_in_world[:3, 3], setpoint_yaw]).to(device)
+                prediction, vel_cmd = controller.step(current_state=current_state, target_state=prediction, dt=dt)
+                T_setpoint_world = T_matrix(prediction)
+            
+            
             best_setpoint = prediction[0].detach().clone()
             np.save(output_dir / f'T_{target_idx}.npy', T.detach().cpu().numpy())
 
@@ -1280,7 +1388,7 @@ if __name__ == "__main__":
 
         
         
-        print(all_drone_poses)
+        # print(all_drone_poses)
 
         print("Current drone pose: ", best_setpoint)
         print("Target pose that was to be reached: ", target)
@@ -1309,7 +1417,7 @@ if __name__ == "__main__":
         axs[1].set_ylim(-2, 2)
         plt.tight_layout()
 
-        plt.savefig(output_dir / f'optim_step{target_idx}.png')
+        plt.savefig(output_dir / f'optim_step{optim_steps}.png')
         plt.close()
 
     all_drone_poses = np.array(all_drone_poses)
@@ -1326,8 +1434,14 @@ if __name__ == "__main__":
 
 
     # # euclidean distance between all_drone_poses and target_trajectory
-    distance = np.linalg.norm(all_drone_poses[:, :3] - target_trajectory[1:, :3].detach().cpu().numpy())
-    print("Euclidean distances between drone poses and target trajectory:", distance)
+    # distance = np.linalg.norm(all_drone_poses[:, :3] - target_trajectory[1:, :3].detach().cpu().numpy())
+    # print("Euclidean distances between drone poses and target trajectory:", distance)
+
+    # if all_drone_poses longer than target_trajectory, calc distance with dynamic time warping
+    all_drone_poses_tensor = torch.tensor(all_drone_poses[:, :3], device=device, dtype=torch.float32)
+    target_trajectory_tensor = target_trajectory[:, :3]
+    dtw_distance = compute_dtw_distance(all_drone_poses_tensor, target_trajectory_tensor)
+    print("DTW distance between drone poses and target trajectory:", dtw_distance.item())
 
 
 
