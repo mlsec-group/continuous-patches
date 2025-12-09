@@ -48,10 +48,13 @@ class YOLOBox(nn.Module):
         self.model = torch.hub.load("ultralytics/yolov5", "yolov5n", autoshape=False)
         self.model.eval()
 
+        for param in self.model.parameters():
+            param.requires_grad = False
+
         # camera
         self.cam = Camera(cam_config, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
 
-    def forward(self, imgs, softmax_mult=15., show_imgs=False):
+    def forward(self, imgs, softmax_mult=50., target_anchor=None, search_radius=50., show_imgs=False):
         # imgs = og_imgs / 255.0
 
         # imgs = torch.repeat_interleave(imgs, 3, dim=1)
@@ -62,10 +65,65 @@ class YOLOBox(nn.Module):
 
         # preds[0] is [B, num_preds, 5+nc] for YOLOv5: [x,y,w,h,obj,...]
         logits = output[0] if isinstance(output, (list, tuple)) else output
+
+        # new try: spatial attention masking
+
+        pred_xy = logits[..., :2] 
+        pred_wh = logits[..., 2:4]
+        
+        objectness = logits[..., 4]              # [B, N]
+        class_probs = logits[..., 5]             # [B, N] (assuming class 0 is person)
+        
+        # Raw score for "Person"
+        person_scores = objectness * class_probs # [B, N]
+
+        target = target_anchor.unsqueeze(1)
+
+        # print('target', target.shape) 
+        # print("pred_xy", pred_xy.shape)
+            
+        # Calculate Euclidean distance from every anchor to the target
+        # pred_xy shape: [B, N, 2], target shape: [1, 2]
+        dist = torch.norm(pred_xy - target.unsqueeze(1), dim=-1) # [B, N]
+        
+        # Create a spatial penalty (Gaussian-like or simple linear)
+        # Anchors far away get a huge negative score, effectively zeroing them in Softmax
+        # We use a large multiplier (e.g., 0.5) to kill gradients from far away
+        spatial_penalty = (dist ** 2) / (2 * search_radius ** 2)
+        
+        # Subtract penalty from scores BEFORE softmax
+        # This forces attention to the target region
+        focused_scores = person_scores - spatial_penalty
+
+        attention_weights = torch.softmax(focused_scores * softmax_mult, dim=1) # [B, N]
+
+        pred_box_xy = (attention_weights.unsqueeze(-1) * pred_xy).sum(dim=1)
+        pred_box_wh = (attention_weights.unsqueeze(-1) * pred_wh).sum(dim=1)
+        
+        # 6. Also return the max score in that region (Crucial for loss function!)
+        # We want to Maximize this value in our attack
+        region_score = (attention_weights * person_scores).sum(dim=1)
+
+        # Convert center-wh to xyxy
+        x1 = pred_box_xy[:, 0] - pred_box_wh[:, 0] / 2
+        y1 = pred_box_xy[:, 1] - pred_box_wh[:, 1] / 2
+        x2 = pred_box_xy[:, 0] + pred_box_wh[:, 0] / 2
+        y2 = pred_box_xy[:, 1] + pred_box_wh[:, 1] / 2
+        
+        person_boxes_xyxy = torch.stack((x1, y1, x2, y2), dim=-1)
+
+        return person_boxes_xyxy, region_score
+
+    def detection_single(self, imgs, show_imgs=False):
+        output = self.model(imgs)
+
+        # preds[0] is [B, num_preds, 5+nc] for YOLOv5: [x,y,w,h,obj,...]
+        logits = output[0] if isinstance(output, (list, tuple)) else output
+
         objectness = logits[..., 4]                 # [B, N]
         person_scores = objectness * logits[..., 5]  # [B, N]
 
-        person_softmax = torch.softmax(person_scores * 20., dim=1)  # [B, N]
+        person_softmax = torch.softmax(person_scores * 50., dim=1)  # [B, N]
 
         person_box_xywh = (person_softmax.unsqueeze(-1) * logits[..., :4]).sum(dim=1)  # [B, 4]
         cx, cy, w, h = person_box_xywh.unbind(-1)

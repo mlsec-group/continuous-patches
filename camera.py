@@ -176,7 +176,8 @@ class Camera:
         outs = []
         for i in range(boxes.shape[0]):
             coords = self.tensor_xyz_from_bb(boxes[i])
-            yaw = torch.atan2(coords[1], coords[0])
+            # TODO: fix yaw calculation
+            yaw = torch.tensor(0, device=coords.device, dtype=coords.dtype)#torch.atan2(coords[1], coords[0])
             outs.append(torch.cat((coords, yaw.unsqueeze(0))))
         return torch.stack(outs, dim=0)
 
