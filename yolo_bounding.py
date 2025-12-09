@@ -77,23 +77,26 @@ class YOLOBox(nn.Module):
         # Raw score for "Person"
         person_scores = objectness * class_probs # [B, N]
 
-        target = target_anchor.unsqueeze(1)
+        if target_anchor is not None:
+            target = target_anchor.unsqueeze(1)
 
-        # print('target', target.shape) 
-        # print("pred_xy", pred_xy.shape)
+            # print('target', target.shape) 
+            # print("pred_xy", pred_xy.shape)
+                
+            # Calculate Euclidean distance from every anchor to the target
+            # pred_xy shape: [B, N, 2], target shape: [1, 2]
+            dist = torch.norm(pred_xy - target.unsqueeze(1), dim=-1) # [B, N]
             
-        # Calculate Euclidean distance from every anchor to the target
-        # pred_xy shape: [B, N, 2], target shape: [1, 2]
-        dist = torch.norm(pred_xy - target.unsqueeze(1), dim=-1) # [B, N]
-        
-        # Create a spatial penalty (Gaussian-like or simple linear)
-        # Anchors far away get a huge negative score, effectively zeroing them in Softmax
-        # We use a large multiplier (e.g., 0.5) to kill gradients from far away
-        spatial_penalty = (dist ** 2) / (2 * search_radius ** 2)
-        
-        # Subtract penalty from scores BEFORE softmax
-        # This forces attention to the target region
-        focused_scores = person_scores - spatial_penalty
+            # Create a spatial penalty (Gaussian-like or simple linear)
+            # Anchors far away get a huge negative score, effectively zeroing them in Softmax
+            # We use a large multiplier (e.g., 0.5) to kill gradients from far away
+            spatial_penalty = (dist ** 2) / (2 * search_radius ** 2)
+            
+            # Subtract penalty from scores BEFORE softmax
+            # This forces attention to the target region
+            focused_scores = person_scores - spatial_penalty
+        else:
+            focused_scores = person_scores
 
         attention_weights = torch.softmax(focused_scores * softmax_mult, dim=1) # [B, N]
 

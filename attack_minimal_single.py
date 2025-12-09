@@ -882,7 +882,7 @@ if __name__ == "__main__":
         if patch_mode == 'velo' or patch_mode == 'timeout':
             cur_pos = torch.tensor(all_drone_poses[-1][:3]).to(device)
             # tgt_pos = torch.from_numpy(target[:3]).to(device)
-            if torch.dist(cur_pos, target[:3], p=2) > 0.05 and retries <= max_retries:
+            if torch.dist(cur_pos, target[:3], p=2) > 0.09 and retries <= max_retries:
                 print("Current position:", cur_pos)
                 print("Target position:", target[:3])
                 print("Distance to target:", torch.dist(cur_pos, target[:3], p=2).item())
@@ -1119,9 +1119,9 @@ if __name__ == "__main__":
                 patch = best_patch.clone().detach().requires_grad_(True)
                 # patch = torch.nn.functional.interpolate(patch.clone(), size=patch_size, mode='bilinear', align_corners=False).requires_grad_(True)
 
-            opt = torch.optim.Adam([patch], lr=1e-1)  # was at 3e-2
+            opt = torch.optim.Adam([patch], lr=3e-2)  # was at 3e-2
             # scheduler = torch.optim.lr_scheduler.LinearLR(opt, start_factor=1e-2, end_factor=1., total_iters=1000)
-            scheduler = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=1e-2, total_steps=5000)
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=1e-2, total_steps=1000)
 
             
             distance = torch.inf
@@ -1166,26 +1166,26 @@ if __name__ == "__main__":
                     # scaled_target_box = torch.tensor([target_box], device=device, dtype=torch.float32)  # (1, 4)
 
                     # sanity check if box can be computed back to T_pred_in_drone
-                    recovered_box = scaled_target_box.clone()
-                    recovered_box[:, [0, 2]] *= (160.0 / 640.)  # x coords
-                    recovered_box[:, [1, 3]] *= (96.0 / 320.)   # y coords
-                    recovered_xyzyaw = model.cam.batch_xyz_from_boxes(recovered_box)
+                    # recovered_box = scaled_target_box.clone()
+                    # recovered_box[:, [0, 2]] *= (160.0 / 640.)  # x coords
+                    # recovered_box[:, [1, 3]] *= (96.0 / 320.)   # y coords
+                    # recovered_xyzyaw = model.cam.batch_xyz_from_boxes(recovered_box)
                     # print("Recovered xyzyaw:", recovered_xyzyaw)
                     # print("Original relative position:", T_pred_in_drone[:3, 3].detach().cpu().numpy(), "Original yaw:", target_yaw.item())
                     # print("Distance:", torch.dist(recovered_xyzyaw[0, :3], T_pred_in_drone[:3, 3], p=2).item())
 
-                    T_rec_pred_in_drone = T_matrix(recovered_xyzyaw[0])
-                    T_rec_pred_in_world = T_drone_in_world @ T_rec_pred_in_drone
-                    # print("yaw recovered from box:", recovered_xyzyaw[0, 3].item())
-                    target_yaw = torch.tensor(0, device=device, dtype=torch.float32)#normalize_yaw_t(recovered_xyzyaw[0, 3])
-                    T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
-                    T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
-                    # print("Direction in world within loop:")
-                    # print(T_direction_world)
+                    # T_rec_pred_in_drone = T_matrix(recovered_xyzyaw[0])
+                    # T_rec_pred_in_world = T_drone_in_world @ T_rec_pred_in_drone
+                    # # print("yaw recovered from box:", recovered_xyzyaw[0, 3].item())
+                    # target_yaw = torch.tensor(0, device=device, dtype=torch.float32)#normalize_yaw_t(recovered_xyzyaw[0, 3])
+                    # T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
+                    # T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
+                    # # print("Direction in world within loop:")
+                    # # print(T_direction_world)
 
-                    T_rec_setpoint_world = T_direction_world @ T_rec_pred_in_world
-                    yaw = torch.atan2(T_rec_setpoint_world[1, 0], T_rec_setpoint_world[0, 0])
-                    rec_setpoint_yaw = normalize_yaw_t(yaw)
+                    # T_rec_setpoint_world = T_direction_world @ T_rec_pred_in_world
+                    # yaw = torch.atan2(T_rec_setpoint_world[1, 0], T_rec_setpoint_world[0, 0])
+                    # rec_setpoint_yaw = normalize_yaw_t(yaw)
 
                     # print("Recovered setpoint in world: ", T_rec_setpoint_world[:3, 3], rec_setpoint_yaw.item())
                     # print("Original target: ", target[:3], target[3].item())
@@ -1272,11 +1272,22 @@ if __name__ == "__main__":
                     # print("Predicted scores:", predicted_scores, predicted_scores.shape)
                     # print("Scaled target box:", scaled_target_box)
 
+                    loss_confidence = F.mse_loss(predicted_scores, torch.ones_like(predicted_scores).to(device))
 
-                    # average_box = predicted_boxes.mean(dim=0)
-                    # scaled_box = average_box.clone()
-                    predicted_boxes_old = model.detection_single(manipulated_image_resized).squeeze(1)  # (1, 4)
-                    scaled_box = predicted_boxes_old.clone()
+                    if predicted_boxes.shape[0] > 1:
+                        # choose box with highest confidence
+                        scores = F.softmax(predicted_scores, dim=0)
+                        predicted_boxes = (predicted_boxes * scores.unsqueeze(-1)).sum(dim=0, keepdim=True)
+                        # predicted_scores = scores.sum(dim=0, keepdim=True)
+
+                    
+                    loss_boxes = F.mse_loss(predicted_boxes, scaled_target_box)
+
+                    # # average_box = predicted_boxes.mean(dim=0)
+                    # # scaled_box = average_box.clone()
+                    # predicted_boxes_old = model.detection_single(manipulated_image_resized).squeeze(1)  # (1, 4)
+                    predicted_boxes, _ = model(manipulated_image_resized, target_anchor=None)
+                    scaled_box = predicted_boxes.clone()
                     # scale back to 160x96
                     scaled_box[:, [0, 2]] *= (160.0 / 640.)  # x coords
                     scaled_box[:, [1, 3]] *= (96.0 / 320.)   # y coords
@@ -1284,8 +1295,7 @@ if __name__ == "__main__":
                     # print("Scaled box for 160x96 image: ", scaled_box)
                     # print("Target box for 160x96 image: ", target_box)
 
-                    loss_confidence = F.mse_loss(predicted_scores, torch.ones_like(predicted_scores).to(device))
-                    loss_boxes = F.mse_loss(scaled_box, target_box)
+                    
                     
                     recovered_xyzyaw = model.cam.batch_xyz_from_boxes(scaled_box)
                     T_rec_pred_in_drone = T_matrix(recovered_xyzyaw[0])
@@ -1302,10 +1312,16 @@ if __name__ == "__main__":
 
                     prediction = torch.stack([*T_setpoint_world[:3, 3], setpoint_yaw]).to(device) # prediction values
 
+                    distance = torch.dist(prediction[:3], target[:3], p=2)
+                    angular_loss = 1 - torch.cos(normalize_yaw_t(prediction[3]) - normalize_yaw_t(target[3]))
+
+                    # loss = distance + angular_loss
+
                     if patch_mode == 'velo' or patch_mode == 'timeout':
                         current_state = torch.stack([*T_drone_in_world[:3, 3], setpoint_yaw]).to(device)
                         prediction, vel_cmd = controller.step(current_state=current_state, target_state=prediction, dt=dt)
                         T_setpoint_world = T_matrix(prediction)
+                        prediction = torch.stack([*T_setpoint_world[:3, 3], normalize_yaw_t(torch.atan2(T_setpoint_world[1,0], T_setpoint_world[0,0]))]).to(device)
 
                     # print("Recovered xyzyaw:", recovered_xyzyaw)
                     # print("Original relative position:", T_pred_in_drone[:3, 3].detach().cpu().numpy(), "Original yaw:", target_yaw.item())
@@ -1320,9 +1336,7 @@ if __name__ == "__main__":
                     # prediction = model.cam.batch_xyz_from_boxes(prediction) #  xyzyaw from bounding box
                     # # print("Prediction:", prediction, prediction.shape)
                     # # print("Target:", target, target.shape)
-                    distance = torch.dist(prediction[:3], target[:3], p=2)
-                    angular_loss = 1 - torch.cos(normalize_yaw_t(prediction[3]) - normalize_yaw_t(target[3]))
-
+                    
                     loss = loss_confidence + loss_boxes + distance + angular_loss
                    
                 
