@@ -660,6 +660,7 @@ if __name__ == "__main__":
     parser.add_argument('--corpus_size', type=int, choices=[1000, 2000, 3000], default=1000, help='Number of patches in the corpus (only for corpus/interpolation/diffusion patch mode)')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
     parser.add_argument('--timeout', type=int, default=None, help='Timeout for optimization step in Hz (default: None for no timeout, otherwise int Hz)')
+    parser.add_argument('--ghost_mode', action='store_true', default=False, help='Enable ghost mode (yolov5 only)')
 
     args = parser.parse_args()
 
@@ -667,6 +668,8 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(args.seed)
+
+    start_time = time.time()
 
     # img_idx = args.img_idx
 
@@ -699,6 +702,9 @@ if __name__ == "__main__":
         directory = Path(f'{model_name}/timeout_{args.timeout}Hz')
     else:
         timeout = None
+
+    if model_name == 'yolov5' and args.ghost_mode:
+        directory = f'{directory}_ghost'
 
     if args.patch_mode == 'interpolation' or args.patch_mode == 'corpus' or args.patch_mode == 'diffusion':
         directory = f'{directory}/{args.corpus_size}'
@@ -876,13 +882,27 @@ if __name__ == "__main__":
 
     target_idx = 1
     retries = 0
-    max_retries = 10
+    # max_retries = 10
+    # given dt and target_trajectory, compute max_retries
+    if (patch_mode == 'timeout' or patch_mode == 'velo') and dt is not None:
+        avg_dist_per_step = 0.1  # assume average distance of 0.1m per step
+        total_time = 0.0
+        total_distance = 0.0
+        for i in range(1, len(target_trajectory)):
+            dist = torch.dist(target_trajectory[i-1][:3], target_trajectory[i][:3], p=2).item()
+            total_distance += dist
+        estimated_total_time = total_distance / avg_dist_per_step * dt
+        max_retries = int(estimated_total_time / dt / len(target_trajectory)) * 2  # allow double the estimated time per target
+        print(f"Estimated total time: {estimated_total_time:.2f}s, setting max_retries to {max_retries}")
+    else:
+        max_retries = 10  # default value
+
     while target_idx < len(target_trajectory) - 1:
         target = target_trajectory[target_idx]
         if patch_mode == 'velo' or patch_mode == 'timeout':
             cur_pos = torch.tensor(all_drone_poses[-1][:3]).to(device)
             # tgt_pos = torch.from_numpy(target[:3]).to(device)
-            if torch.dist(cur_pos, target[:3], p=2) > 0.09 and retries <= max_retries:
+            if torch.dist(cur_pos, target[:3], p=2) > 0.05 and retries <= max_retries:
                 print("Current position:", cur_pos)
                 print("Target position:", target[:3])
                 print("Distance to target:", torch.dist(cur_pos, target[:3], p=2).item())
@@ -1120,22 +1140,24 @@ if __name__ == "__main__":
                 # patch = torch.nn.functional.interpolate(patch.clone(), size=patch_size, mode='bilinear', align_corners=False).requires_grad_(True)
 
             opt = torch.optim.Adam([patch], lr=3e-2)  # was at 3e-2
-            # scheduler = torch.optim.lr_scheduler.LinearLR(opt, start_factor=1e-2, end_factor=1., total_iters=1000)
-            scheduler = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=1e-2, total_steps=1000)
+            scheduler = torch.optim.lr_scheduler.LinearLR(opt, start_factor=1e-2, end_factor=1., total_iters=1000)
+            # scheduler = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=1e-2, total_steps=1000)
 
             
             distance = torch.inf
             i = 0
 
             best_loss = torch.inf
+            best_distance = torch.inf
             best_patch = patch.clone()
             
             best_setpoint = None
 
             time_start_optim_step = time.time()
             losses = []
+            skip = False
 
-            if model_name == 'yolov5':
+            if model_name == 'yolov5' and args.ghost_mode:
                 T_setpoint_world = T_matrix(target)
                 setpoint_yaw = torch.atan2(T_setpoint_world[1, 0], T_setpoint_world[0, 0])
                 # Current drone pose in world
@@ -1149,20 +1171,32 @@ if __name__ == "__main__":
                 T_pred_in_drone = torch.inverse(T_drone_in_world) @ T_pred_in_world
                 target_yaw = torch.atan2(T_pred_in_drone[1, 0], T_pred_in_drone[0, 0])
 
-            while distance > 0.05 and i < 1000:
+            while distance > 0.05 and i < 5000:
                 if timeout is not None and (time.time() - time_start_optim_step > timeout):  # 30 Hz
                     break
                 opt.zero_grad()
 
                 if model_name == 'yolov5':
                     img = torch.nn.functional.interpolate(img, size=(320, 640), mode='bilinear', align_corners=False)
-                    target_box = torch.tensor([bb_from_xyz(model.cam.camera_intrinsic, model.cam.camera_extrinsic, T_pred_in_drone[:3, 3].detach().cpu().numpy(), model.cam.radius.detach().cpu().item())], device=device, dtype=torch.float32)
-                    # scale to image of size 320 x 640
-                    scaled_target_box = target_box.clone()
-                    scaled_target_box[0, 0] *= (640.0 / 160.0)  # x coords
-                    scaled_target_box[0, 1] *= (320.0 / 96.0)   # y coords
-                    scaled_target_box[0, 2] *= (640.0 / 160.0)  # x coords
-                    scaled_target_box[0, 3] *= (320.0 / 96.0)   # y coords
+                    if args.ghost_mode:
+                        try:
+                            target_box = torch.tensor([bb_from_xyz(model.cam.camera_intrinsic, model.cam.camera_extrinsic, T_pred_in_drone[:3, 3].detach().cpu().numpy(), model.cam.radius.detach().cpu().item())], device=device, dtype=torch.float32)
+                            # scale to image of size 320 x 640
+                            scaled_target_box = target_box.clone()
+                            scaled_target_box[0, 0] *= (640.0 / 160.0)  # x coords
+                            scaled_target_box[0, 1] *= (320.0 / 96.0)   # y coords
+                            scaled_target_box[0, 2] *= (640.0 / 160.0)  # x coords
+                            scaled_target_box[0, 3] *= (320.0 / 96.0)   # y coords
+                        except TypeError:
+                            print("Bounding box could not be computed, skipping...")
+                            target_idx += 1
+                            retries = 0
+                            # best_setpoint = torch.tensor(all_drone_poses[-1], device=device, dtype=torch.float32) # set current pose as setpoint
+                            best_patch = patch.detach().clone()
+                            target_box = None
+                            scaled_target_box = None
+                            skip = True
+                        
                     # scaled_target_box = torch.tensor([target_box], device=device, dtype=torch.float32)  # (1, 4)
 
                     # sanity check if box can be computed back to T_pred_in_drone
@@ -1197,8 +1231,24 @@ if __name__ == "__main__":
                         T_matrices=T.unsqueeze(0),  # add batch dimension
                         images=img
                     )
+                    
+
                 else:
                     manipulated_image = img.clone()
+                    if not skip:
+                        print("Patch too small, skipping to next target.")
+                        target_idx += 1
+                        retries = 0
+                        best_patch = patch.detach().clone()
+                        skip = True
+                        # best_setpoint = torch.tensor(all_drone_poses[-1], device=device, dtype=torch.float32) # set current pose as setpoint
+                        # break
+                    # target_idx += 1
+                    # retries = 0
+                    # print("Patch too small, skipping to next target.")
+                    # best_setpoint = torch.tensor(all_drone_poses[-1], device=device, dtype=torch.float32) # set current pose as setpoint
+                    # break
+
 
                 # # add noise to manipulated image
                 # noise = torch.randn_like(manipulated_image) * 0.1
@@ -1225,8 +1275,9 @@ if __name__ == "__main__":
 
                     T_setpoint_world = T_direction_world @ T_pred_in_world
 
-                    yaw = torch.atan2(T_setpoint_world[1, 0], T_setpoint_world[0, 0])
-                    setpoint_yaw = normalize_yaw_t(yaw)
+                    # yaw = torch.atan2(T_setpoint_world[1, 0], T_setpoint_world[0, 0])
+                    # setpoint_yaw = normalize_yaw_t(yaw)
+                    setpoint_yaw = target_yaw  # keep yaw predicted by network
 
 
 
@@ -1235,10 +1286,6 @@ if __name__ == "__main__":
                     # print("Predicted setpoint in world: ", T_setpoint_world[:3, 3], target_yaw)
 
                     prediction = torch.stack([*T_setpoint_world[:3, 3], setpoint_yaw]).to(device) # prediction values
-                    if patch_mode == 'velo' or patch_mode == 'timeout':
-                        current_state = torch.stack([*T_drone_in_world[:3, 3], setpoint_yaw]).to(device)
-                        prediction, vel_cmd = controller.step(current_state=current_state, target_state=prediction, dt=dt)
-                        T_setpoint_world = T_matrix(prediction)
 
 
                     if T[0, 0] < 0.1:
@@ -1260,33 +1307,44 @@ if __name__ == "__main__":
                     # x,y,z,yaw loss
                     loss = distance + angular_loss #+ (error_boxes * 0.001)  # try adding small weight to yolo box loss
 
+                    
+                    if patch_mode == 'velo' or patch_mode == 'timeout':
+                        current_state = torch.stack([*T_drone_in_world[:3, 3], setpoint_yaw]).to(device)
+                        prediction, vel_cmd = controller.step(current_state=current_state, target_state=prediction, dt=dt)
+                        T_setpoint_world = T_matrix(prediction)
+
                 elif model_name == 'yolov5':
 
                     manipulated_image_resized = manipulated_image.repeat_interleave(3, dim=1)  # to 3 channels
-                    # center of scaled target box
-                    center_target_box = torch.tensor([(scaled_target_box[0,0] + scaled_target_box[0,2]) / 2,
-                                                    (scaled_target_box[0,1] + scaled_target_box[0,3]) / 2], device=device)
+                    if args.ghost_mode and scaled_target_box is not None:
+                        #center of scaled target box
+                        center_target_box = torch.tensor([(scaled_target_box[0,0] + scaled_target_box[0,2]) / 2,
+                                                        (scaled_target_box[0,1] + scaled_target_box[0,3]) / 2], device=device)
 
-                    predicted_boxes, predicted_scores = model(manipulated_image_resized, target_anchor=center_target_box)  # yolo expects images in range [0, 1], out (B, 4)
-                    # print("Predicted boxes:", predicted_boxes, predicted_boxes.shape)
-                    # print("Predicted scores:", predicted_scores, predicted_scores.shape)
-                    # print("Scaled target box:", scaled_target_box)
+                        predicted_boxes, predicted_scores = model(manipulated_image_resized, target_anchor=center_target_box)  # yolo expects images in range [0, 1], out (B, 4)
+                        # # print("Predicted boxes:", predicted_boxes, predicted_boxes.shape)
+                        # # print("Predicted scores:", predicted_scores, predicted_scores.shape)
+                        # # print("Scaled target box:", scaled_target_box)
 
-                    loss_confidence = F.mse_loss(predicted_scores, torch.ones_like(predicted_scores).to(device))
+                        loss_confidence = F.mse_loss(predicted_scores, torch.ones_like(predicted_scores).to(device))
 
-                    if predicted_boxes.shape[0] > 1:
-                        # choose box with highest confidence
-                        scores = F.softmax(predicted_scores, dim=0)
-                        predicted_boxes = (predicted_boxes * scores.unsqueeze(-1)).sum(dim=0, keepdim=True)
-                        # predicted_scores = scores.sum(dim=0, keepdim=True)
+                        if predicted_boxes.shape[0] > 1:
+                            # choose box with highest confidence
+                            scores = F.softmax(predicted_scores, dim=0)
+                            predicted_boxes = (predicted_boxes * scores.unsqueeze(-1)).sum(dim=0, keepdim=True)
+                            # predicted_scores = scores.sum(dim=0, keepdim=True)
 
-                    
-                    loss_boxes = F.mse_loss(predicted_boxes, scaled_target_box)
+                        
+                        loss_boxes = F.mse_loss(predicted_boxes, scaled_target_box)
 
                     # # average_box = predicted_boxes.mean(dim=0)
                     # # scaled_box = average_box.clone()
                     # predicted_boxes_old = model.detection_single(manipulated_image_resized).squeeze(1)  # (1, 4)
                     predicted_boxes, _ = model(manipulated_image_resized, target_anchor=None)
+                    # if predicted_boxes.grad_fn is None:
+                    #     print("No box detected, skipping iteration")
+                    #     continue
+                    # print(predicted_boxes, predicted_boxes.shape)
                     scaled_box = predicted_boxes.clone()
                     # scale back to 160x96
                     scaled_box[:, [0, 2]] *= (160.0 / 640.)  # x coords
@@ -1315,13 +1373,19 @@ if __name__ == "__main__":
                     distance = torch.dist(prediction[:3], target[:3], p=2)
                     angular_loss = 1 - torch.cos(normalize_yaw_t(prediction[3]) - normalize_yaw_t(target[3]))
 
-                    # loss = distance + angular_loss
+                    loss = distance + angular_loss
 
-                    if patch_mode == 'velo' or patch_mode == 'timeout':
-                        current_state = torch.stack([*T_drone_in_world[:3, 3], setpoint_yaw]).to(device)
-                        prediction, vel_cmd = controller.step(current_state=current_state, target_state=prediction, dt=dt)
-                        T_setpoint_world = T_matrix(prediction)
-                        prediction = torch.stack([*T_setpoint_world[:3, 3], normalize_yaw_t(torch.atan2(T_setpoint_world[1,0], T_setpoint_world[0,0]))]).to(device)
+                    if args.ghost_mode:
+                        loss = loss + loss_confidence + loss_boxes
+
+                    #loss = loss_confidence + loss_boxes + distance + angular_loss
+
+                    with torch.no_grad():
+                        if patch_mode == 'velo' or patch_mode == 'timeout':
+                            current_state = torch.stack([*T_drone_in_world[:3, 3], setpoint_yaw]).to(device)
+                            prediction, vel_cmd = controller.step(current_state=current_state, target_state=prediction, dt=dt)
+                            T_setpoint_world = T_matrix(prediction)
+                            prediction = torch.stack([*T_setpoint_world[:3, 3], normalize_yaw_t(torch.atan2(T_setpoint_world[1,0], T_setpoint_world[0,0]))]).to(device)
 
                     # print("Recovered xyzyaw:", recovered_xyzyaw)
                     # print("Original relative position:", T_pred_in_drone[:3, 3].detach().cpu().numpy(), "Original yaw:", target_yaw.item())
@@ -1337,20 +1401,23 @@ if __name__ == "__main__":
                     # # print("Prediction:", prediction, prediction.shape)
                     # # print("Target:", target, target.shape)
                     
-                    loss = loss_confidence + loss_boxes + distance + angular_loss
+                    # loss = loss_confidence + loss_boxes + distance + angular_loss
                    
                 
                 
-                if loss < best_loss:
-                    best_loss = loss.detach().clone()
+                if distance < best_distance:
+                    best_distance = distance.detach().clone()
                     best_patch = patch.detach().clone()
                     best_setpoint = prediction.detach().clone()
 
-                loss.backward()
-                patch.grad = patch.grad.sign()
-                opt.step()
-                scheduler.step()
-
+                if not skip:
+                    loss.backward()
+                    patch.grad = patch.grad.sign()
+                    opt.step()
+                    scheduler.step()
+                else:
+                    print("No gradients, stopping optimization.")
+                    break
                 losses.append(loss.detach().cpu().item())
                 if i % 100 == 0:
                     print(f"Iter {i}, loss: {loss}, distance: {distance}, angle: {angular_loss}, mean loss last 50 iters: {np.mean(losses[-50:])}")
@@ -1507,5 +1574,15 @@ if __name__ == "__main__":
     dtw_distance = compute_dtw_distance(all_drone_poses_tensor, target_trajectory_tensor)
     print("DTW distance between drone poses and target trajectory:", dtw_distance.item())
 
-
-
+    end_time = time.time()
+    print("Total optimization time (s): ", end_time - start_time)
+    # save elapsed time to a text file
+    with open(output_dir / 'elapsed_time.txt', 'w') as f:
+        f.write("Elapsed time (s): \n")
+        f.write(f"{end_time - start_time}\n")
+        f.write(f"DTW distance: \n")
+        f.write(f"{dtw_distance.item()}\n")
+        f.write(f"Start time: \n")
+        f.write(f"{start_time}\n")
+        f.write(f"End time: \n")
+        f.write(f"{end_time}\n")
