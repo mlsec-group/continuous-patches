@@ -39,22 +39,24 @@ class YOLOBox(nn.Module):
     iou = 0.45  # NMS IoU threshold
     classes = None  # (optional list) filter by class, i.e. = [0, 15, 16] for COCO persons, cats and dogs
     max_det = 1000  # maximum number of detections per image
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     softmax_mult = 15.
 
     def __init__(self, cam_config='camera_calibration.yaml'):
         super().__init__()
 
         # load model
-        self.model = torch.hub.load("ultralytics/yolov5", "yolov5n", autoshape=False)
+        self.model = torch.hub.load("ultralytics/yolov5", "yolov5s", _verbose=False, autoshape=False)
+
         self.model.eval()
 
         for param in self.model.parameters():
             param.requires_grad = False
 
         # camera
-        self.cam = Camera(cam_config, device=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
-
-    def forward(self, imgs, softmax_mult=50., target_anchor=None, search_radius=50., show_imgs=False):
+        self.cam = Camera(cam_config, device=self.device)
+    def forward(self, imgs, softmax_mult=51., target_anchor=None, search_radius=50., show_imgs=False):
         # imgs = og_imgs / 255.0
 
         # imgs = torch.repeat_interleave(imgs, 3, dim=1)
@@ -96,7 +98,7 @@ class YOLOBox(nn.Module):
             # This forces attention to the target region
             focused_scores = person_scores - spatial_penalty
         else:
-            focused_scores = person_scores
+            focused_scores = person_scores.clone()
 
         attention_weights = torch.softmax(focused_scores * softmax_mult, dim=1) # [B, N]
 
@@ -117,26 +119,26 @@ class YOLOBox(nn.Module):
 
         return person_boxes_xyxy, region_score
 
-    def detection_single(self, imgs, show_imgs=False):
-        output = self.model(imgs)
+    # def detection_single(self, imgs, show_imgs=False):
+    #     output = self.model(imgs)
 
-        # preds[0] is [B, num_preds, 5+nc] for YOLOv5: [x,y,w,h,obj,...]
-        logits = output[0] if isinstance(output, (list, tuple)) else output
+    #     # preds[0] is [B, num_preds, 5+nc] for YOLOv5: [x,y,w,h,obj,...]
+    #     logits = output[0] if isinstance(output, (list, tuple)) else output
 
-        objectness = logits[..., 4]                 # [B, N]
-        person_scores = objectness * logits[..., 5]  # [B, N]
+    #     objectness = logits[..., 4]                 # [B, N]
+    #     person_scores = objectness * logits[..., 5]  # [B, N]
 
-        person_softmax = torch.softmax(person_scores * 50., dim=1)  # [B, N]
+    #     person_softmax = torch.softmax(person_scores * 50., dim=1)  # [B, N]
 
-        person_box_xywh = (person_softmax.unsqueeze(-1) * logits[..., :4]).sum(dim=1)  # [B, 4]
-        cx, cy, w, h = person_box_xywh.unbind(-1)
-        x1 = cx - w / 2
-        y1 = cy - h / 2
-        x2 = cx + w / 2
-        y2 = cy + h / 2
-        person_boxes_xyxy = torch.stack((x1, y1, x2, y2), dim=-1)  # [B, 4]
+    #     person_box_xywh = (person_softmax.unsqueeze(-1) * logits[..., :4]).sum(dim=1)  # [B, 4]
+    #     cx, cy, w, h = person_box_xywh.unbind(-1)
+    #     x1 = cx - w / 2
+    #     y1 = cy - h / 2
+    #     x2 = cx + w / 2
+    #     y2 = cy + h / 2
+    #     person_boxes_xyxy = torch.stack((x1, y1, x2, y2), dim=-1)  # [B, 4]
         
-        return person_boxes_xyxy
+    #     return person_boxes_xyxy
         # # printd('selected ', selected_boxes.shape, selected_boxes.grad_fn)
 
         # # debugging
