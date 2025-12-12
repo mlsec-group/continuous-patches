@@ -127,7 +127,8 @@ def batch_xyz_from_boxes(boxes, fx, fy, ox, oy, extrinsic, radius):
     outs = []
     for i in range(boxes.shape[0]):
         coords = tensor_xyz_from_bb(boxes[i], fx, fy, ox, oy, extrinsic, radius)
-        yaw = torch.atan2(coords[1], coords[0])
+        #yaw = torch.atan2(coords[1], coords[0])
+        yaw = torch.zeros_like(coords[0])
         outs.append(torch.cat((coords, yaw.unsqueeze(0))))
     return torch.stack(outs, dim=0)
 
@@ -202,13 +203,15 @@ yolo.model.eval()
 
 frontnet = load_model("pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", device, config="160x32")
 frontnet.eval()
+for param in frontnet.parameters():
+    param.requires_grad = False
 
 
 dataset_path = 'pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle'
 train_dataloader = load_dataset(path=dataset_path, batch_size=64, shuffle=True, drop_last=False, num_workers=0, IMRC=False)
 
 radius = torch.tensor(0.25, device=device, requires_grad=True)
-softmax_mult = torch.tensor(20.0, device=device, requires_grad=True)
+softmax_mult = torch.tensor(50.0, device=device, requires_grad=True)
 
 opt = torch.optim.Adam([radius, fx, fy, ox, oy, roll, pitch, yaw, tx, ty, tz, softmax_mult], lr=1e-3)
 # opt = torch.optim.Adam([radius, roll, pitch, yaw, tx, ty, tz, softmax_mult], lr=1e-2)
@@ -238,20 +241,23 @@ for i in trange(500):
         gt = gt.to(device)
 
         # print(gt)
+        # print("Batch shape: ", batch.shape)
+        # print("GT shape: ", gt.shape)
 
         scaled_images = F.interpolate(batch/255., size=(320, 640), mode='bilinear', align_corners=False)
         scaled_images = scaled_images.repeat_interleave(3, dim=1)
 
+
         scaled_images.clamp_(0.0, 1.0)
 
-        bounding_box = yolo(scaled_images, softmax_mult=softmax_mult).squeeze(1)
-        bounding_box[:, [0, 2]] *= (160.0 / 640.0)  # x coords
-        bounding_box[:, [1, 3]] *= (96.0 / 320.0)   # y coords
+        predicted_boxes, _ = yolo(scaled_images, softmax_mult=softmax_mult)
+        predicted_boxes[:, [0, 2]] *= (160.0 / 640.0)  # x coords
+        predicted_boxes[:, [1, 3]] *= (96.0 / 320.0)   # y coords
 
         # current_intrinsic = create_camera_intrinsic(fx, fy, ox, oy)
         current_extrinsic = create_camera_extrinsic(roll, pitch, yaw, tx, ty, tz)
 
-        prediction_yolo = batch_xyz_from_boxes(bounding_box, fx, fy, ox, oy, current_extrinsic, radius) #  xyzyaw from bounding box
+        prediction_yolo = batch_xyz_from_boxes(predicted_boxes, fx, fy, ox, oy, current_extrinsic, radius) #  xyzyaw from bounding box
         # print("yolo shape: ", prediction_yolo.shape)
 
         fr_x, fr_y, fr_z, fr_yaw = frontnet(batch)
@@ -367,7 +373,7 @@ for i in trange(500):
         fig, axs = plt.subplots(1, 2, figsize=(10, 5))
         img = batch[0].cpu().numpy().transpose(1, 2, 0).astype(np.uint8)
         axs[0].imshow(img)
-        box = bounding_box[0].detach().cpu().numpy()
+        box = predicted_boxes[0].detach().cpu().numpy()
         rect = plt.Rectangle((box[0], box[1]), box[2]-box[0], box[3]-box[1], linewidth=2, edgecolor='r', facecolor='none')
         axs[0].add_patch(rect)
         axs[0].set_title('YOLO Bounding Box')
