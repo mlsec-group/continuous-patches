@@ -30,6 +30,18 @@ TIMEOUT_VALUES=(10 20 30)
 LOG_DIR="logs_local"
 mkdir -p "${LOG_DIR}"
 
+# Resume control:
+# - Set SKIP_TO to a config string to skip until that config is reached.
+#   Format: MODEL:PATCH_MODE:TRAJ:DISPLAY_SIZE:PIC_MODE:IMG_IDX:CORPUS_SIZE:SEED:TIMEOUT:TEMP:SUFFIX
+#   SUFFIX is empty or "_ghost".
+# - SKIP_INCLUSIVE=1 will start at the matched config; default 0 starts after it.
+# - Or set SKIP_COUNT to skip the first N jobs (overrides SKIP_TO if >0).
+SKIP_TO="${SKIP_TO:-}"
+SKIP_INCLUSIVE="${SKIP_INCLUSIVE:-0}"
+SKIP_COUNT="${SKIP_COUNT:-0}"
+
+_skip_reached=0
+
 for MODEL in "${MODELS[@]}"; do
   for PATCH_MODE in "${PATCH_MODES[@]}"; do
     # TIMEOUT values based on PATCH_MODE
@@ -77,6 +89,32 @@ for MODEL in "${MODELS[@]}"; do
                         SUFFIX="_ghost"
                       fi
                       OUT_BASE="${LOG_DIR}/local_${MODEL}_${TRAJ}_${DISPLAY_SIZE}_${PIC_MODE}_seed_${SEED}_img_${IMG_IDX}_temp_${TEMP}${SUFFIX}"
+                      
+                      # Build canonical config string for resume comparisons
+                      CONFIG="${MODEL}:${PATCH_MODE}:${TRAJ}:${DISPLAY_SIZE}:${PIC_MODE}:${IMG_IDX}:${CORPUS_SIZE}:${SEED}:${TIMEOUT}:${TEMP}:${SUFFIX}"
+
+                      # SKIP_COUNT takes precedence: skip first N jobs
+                      if [ "${SKIP_COUNT}" -gt 0 ]; then
+                        SKIP_COUNT=$((SKIP_COUNT - 1))
+                        echo "Skipping (by count). Remaining skip: ${SKIP_COUNT}. Skipped config: ${CONFIG}"
+                        continue
+                      fi
+
+                      # SKIP_TO handling
+                      if [ -n "${SKIP_TO}" ] && [ "${_skip_reached}" -eq 0 ]; then
+                        if [ "${CONFIG}" = "${SKIP_TO}" ]; then
+                          _skip_reached=1
+                          if [ "${SKIP_INCLUSIVE}" -eq 0 ]; then
+                            echo "Matched SKIP_TO (${CONFIG}) — will start after this entry."
+                            continue
+                          else
+                            echo "Matched SKIP_TO (${CONFIG}) — starting from this entry."
+                          fi
+                        else
+                          echo "Skipping until SKIP_TO. Skipped config: ${CONFIG}"
+                          continue
+                        fi
+                      fi
 
                       # Acquire a slot, run job in background, release slot
                       read -u 3
@@ -110,6 +148,32 @@ for MODEL in "${MODELS[@]}"; do
                           SUFFIX="_ghost"
                         fi
                         OUT_BASE="${LOG_DIR}/local_${MODEL}_${TRAJ}_${DISPLAY_SIZE}_${PIC_MODE}_seed_${SEED}_img_${IMG_IDX}_temp_${TEMP}${SUFFIX}"
+
+                        # Build canonical config string for resume comparisons (same format as in random branch)
+                        CONFIG="${MODEL}:${PATCH_MODE}:${TRAJ}:${DISPLAY_SIZE}:${PIC_MODE}:${IMG_IDX}:${CORPUS_SIZE}:${SEED}:${TIMEOUT}:${TEMP}:${SUFFIX}"
+
+                        # SKIP_COUNT takes precedence: skip first N jobs
+                        if [ "${SKIP_COUNT}" -gt 0 ]; then
+                          SKIP_COUNT=$((SKIP_COUNT - 1))
+                          echo "Skipping (by count). Remaining skip: ${SKIP_COUNT}. Skipped config: ${CONFIG}"
+                          continue
+                        fi
+
+                        # SKIP_TO handling
+                        if [ -n "${SKIP_TO}" ] && [ "${_skip_reached}" -eq 0 ]; then
+                          if [ "${CONFIG}" = "${SKIP_TO}" ]; then
+                            _skip_reached=1
+                            if [ "${SKIP_INCLUSIVE}" -eq 0 ]; then
+                              echo "Matched SKIP_TO (${CONFIG}) — will start after this entry."
+                              continue
+                            else
+                              echo "Matched SKIP_TO (${CONFIG}) — starting from this entry."
+                            fi
+                          else
+                            echo "Skipping until SKIP_TO. Skipped config: ${CONFIG}"
+                            continue
+                          fi
+                        fi
 
                         read -u 3
                         {
@@ -145,3 +209,15 @@ done
 wait
 exec 3>&- 3<&-
 echo "All local runs completed. Logs in ${LOG_DIR}."
+
+
+
+```
+
+
+Usage examples:
+- Resume after a specific config (exclusive): SKIP_TO='yolov5:timeout:figure8:50:idx:505:1000:0:0:warm:' ./mini_experiments.sh
+- Resume starting at that config (inclusive): SKIP_TO='...'; SKIP_INCLUSIVE=1 ./mini_experiments.sh
+- Skip first N jobs: SKIP_COUNT=123 ./mini_experiments.sh
+
+The script echoes skipped configs so you can construct the correct SKIP_TO string from its output.
