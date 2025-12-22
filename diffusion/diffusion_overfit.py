@@ -3,212 +3,158 @@ import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+import glob
+from tqdm import tqdm
 
-# --- Imports (assuming you saved the previous class definitions) ---
-# If you haven't split files, paste the UNet/DiffusionModel classes here.
-from diffusion_model import DiffusionModel, construct_T_matrix, project_patch
+# --- Imports ---
+from diffusion_model import DiffusionModel
 
-
-# calc similarity score (psnr)
 def psnr(img1, img2):
     mse = np.mean((img1 - img2) ** 2)
-    if mse == 0:
-        return 100
-    PIXEL_MAX = 2.0  # since we normalized to [-1, 1]
+    if mse == 0: return 100
+    PIXEL_MAX = 2.0  # normalized [-1, 1] range = 2.0
     return 20 * np.log10(PIXEL_MAX / np.sqrt(mse))
 
-def train_single_overfit():
+def train_batch_overfit():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Running on {device}")
 
-    # 1. Load Data
-    path = "temp_pid_364256/sample_4.npz"
-    if not os.path.exists(path):
-        print(f"Error: {path} not found. Please check path.")
+    # ==========================================================================
+    # 1. LOAD DATA
+    # ==========================================================================
+    sample_paths = sorted(glob.glob("temp_pid_*/sample_*.npz"))
+    if not sample_paths:
+        print("Error: no samples found in temp_pid_* folders.")
         return
 
-    data = np.load(path, allow_pickle=True)
-    
-    # Extract raw data
-    raw_patch = data['patch']      # (45, 80)
-    raw_patch_t = torch.tensor(raw_patch, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
-    raw_target = data['target']    # (4,) -> x, y, z, yaw
-    raw_cond = data['condition']   # (3,) -> sf, tx, ty
+    max_samples = 100
+    patches_list, targets_list, conds_list = [], [], []
 
-    # 2nd patch:
-    path2 = 'temp_pid_364256/sample_1.npz'
-    data2 = np.load(path2, allow_pickle=True)
-    raw_patch2 = data2['patch']
-    raw_target2 = data2['target']
-    raw_cond2 = data2['condition']
+    print(f"Loading {min(len(sample_paths), max_samples)} samples...")
+    for p in sample_paths[:max_samples]:
+        try:
+            data = np.load(p, allow_pickle=True)
+            patches_list.append(data['patch'].astype(np.float32))
+            targets_list.append(data['target'].astype(np.float32))
+            conds_list.append(data['condition'].astype(np.float32))
+        except Exception as e:
+            print(f"Warning: failed to load {p}: {e}")
 
-    patches = [raw_patch, raw_patch2]
-    targets = [raw_target, raw_target2]
-    conds = [raw_cond, raw_cond2]
-    
-    # 2. Prepare Tensors (Single Batch)
-    # Normalize patch to [0, 1] if not already
-    patch_tensor = torch.tensor(patches, dtype=torch.float32, device=device).unsqueeze(1) # (B, 1, H, W)
-    # normalize patch to [-1, 1]
-    patch_tensor = patch_tensor * 2 - 1
-    
-    # Construct Conditioning: [sf, tx, ty, x, y, z, yaw]
-    # We explicitly concat them to match the training logic
-    cond_vector = np.concatenate([conds, targets], axis=1) # (2, 7)
-    cond_tensor = torch.tensor(cond_vector, dtype=torch.float32, device=device) # (2, 7)
+    if not patches_list: return
 
-    print(f"Target Patch Range: [{patch_tensor.min():.2f}, {patch_tensor.max():.2f}]")
-    print(f"Conditioning Vector: {cond_vector}")
+    # Stack to Numpy Arrays
+    patches_np = np.stack(patches_list, axis=0)  # (B, H, W)
+    targets_np = np.stack(targets_list, axis=0)  # (B, 4)
+    conds_np = np.stack(conds_list, axis=0)      # (B, 3)
 
-    # 3. Initialize Model
-    # We use a smaller model configuration for this quick test
+    # Save corpus for later reuse
+    np.savez("overfit_data.npz", patches=patches_np, targets=targets_np, conds=conds_np)
+
+    # ==========================================================================
+    # 2. PREPARE TENSORS (BATCH)
+    # ==========================================================================
+    # Normalize patches to [-1, 1] for diffusion
+    patches_t = torch.tensor(patches_np, dtype=torch.float32, device=device).unsqueeze(1) # (B, 1, H, W)
+    patches_t = patches_t * 2.0 - 1.0
+
+    # Create Conditioning Vectors: [sf, tx, ty, x, y, z, yaw]
+    cond_vector = np.concatenate([conds_np, targets_np], axis=1) # (B, 7)
+    cond_t = torch.tensor(cond_vector, dtype=torch.float32, device=device) # (B, 7)
+
+    batch_size = patches_t.shape[0]
+    print(f"Batch Size: {batch_size}")
+    print(f"Conditioning Vector Shape: {cond_t.shape}")
+
+    # ==========================================================================
+    # 3. INITIALIZE MODEL
+    # ==========================================================================
     model_wrapper = DiffusionModel(
         device=device,
         patch_size=(45, 80),
-        prediction_model_name='frontnet' # Not used here, but required by init
+        prediction_model_name='frontnet'
     )
-
-    bg_img = model_wrapper.train_set.dataset.data[0][0] / 255. # (H, W)
-    bg_img_t = bg_img.unsqueeze(0).unsqueeze(0).to(device)  # (1, 1, H, W)
-    # print(f"Background image shape: {bg_img.shape}")
-    # bg_img_t = torch.tensor(bg_img, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
-    
-     # gt sanity check
-    for i, (patch, condition) in enumerate(zip(patch_tensor, cond_tensor)):
-        patch = patch.unsqueeze(0)  # (1, 1, H, W)
-        patch = (patch + 1) / 2  # convert back to [0, 1] for projection
-        condition = condition.unsqueeze(0)  # (1, 7)
-        T = construct_T_matrix(*condition[0, :3])  # (1, 3, 3)
-        manipulated_image = project_patch(patches=patch, T_matrices=T, images=bg_img_t)
-        x, y, z, yaw = model_wrapper.prediction_model(manipulated_image*255.)
-        pred = torch.stack([x, y, z, yaw])
-        pred = pred.squeeze(2).mT
-        print(f"Prediction from frontnet (sanity check): {pred.detach().cpu().numpy()}")
-        gt_pred = condition[0, 3:].detach().cpu().numpy()
-        print(f"Ground Truth target: {gt_pred}")
-        dist = np.linalg.norm(pred.detach().cpu().numpy() - gt_pred)
-        print(f"Prediction error (L2 norm): {dist:.4f}")
-   
-
-        cond_tensor[i, 3:] = pred[0]  # use the prediction as target to see if it can overfit better
-
-
-    print("Updated Conditioning Vector with Frontnet Predictions:")
-    print(cond_tensor.detach().cpu().numpy())
-
-
     optimizer = torch.optim.Adam(model_wrapper.model.parameters(), lr=1e-3)
 
-    # 4. Overfit Loop
-    print("Starting overfit training...")
+    # ==========================================================================
+    # 4. VECTORIZED TRAINING LOOP
+    # ==========================================================================
+    print("Starting vectorized training...")
     model_wrapper.model.train()
     
-    for i in range(2000): # 1000 steps should be plenty for 1 sample
-        for patch, condition in zip(patch_tensor, cond_tensor):
-            patch = patch.unsqueeze(0)  # (1, 1, H, W)
-            condition = condition.unsqueeze(0)  # (1, 7)
-            
-            # Zero Grad
-            optimizer.zero_grad()
-            
-            # A. Sample Random Noise Level (Sigma)
-            rnd_normal = torch.randn([1, 1, 1, 1], device=device)
-            sigma = (rnd_normal * 1.2 - 1.2).exp()
-            
-            # B. Add Noise
-            noise = torch.randn_like(patch)
-            noisy_patch = patch + noise * sigma
-            
-            # C. Predict Clean Patch (Denoising)
-            denoised_guess = model_wrapper.denoised_prediction(noisy_patch, condition, sigma)
-            
-            # D. Loss (Direct Reconstruction)
-            loss = F.mse_loss(denoised_guess, patch)
-            
-            loss.backward()
-            optimizer.step()
+    # 2000 Steps
+    for i in tqdm(range(2000), desc="Training"):
+        optimizer.zero_grad()
         
-        if i % 100 == 0:
-            print(f"Step {i}: Loss {loss.item():.6f}")
+        # A. Sample Random Noise Levels (Batch)
+        # Log-normal distribution for sigmas
+        rnd_normal = torch.randn([batch_size, 1, 1, 1], device=device)
+        sigmas = (rnd_normal * 1.2 - 1.2).exp()
+        
+        # B. Add Noise (Batch)
+        noise = torch.randn_like(patches_t)
+        noisy_patches = patches_t + noise * sigmas
+        
+        # C. Predict Clean Patch (Batch Denoising)
+        # The UNet processes the entire batch (B, 1, 45, 80) in parallel
+        denoised_guess = model_wrapper.denoised_prediction(noisy_patches, cond_t, sigmas)
+        
+        # D. Loss (MSE over entire batch)
+        # Weighting by sigma is standard in EDM but simple MSE works for overfitting
+        loss = F.mse_loss(denoised_guess, patches_t)
+        
+        loss.backward()
+        optimizer.step()
+        
+        if i % 200 == 0:
+            tqdm.write(f"Step {i}: Loss {loss.item():.6f}")
 
-    # 5. Verify / Sample
-    print("Training done. Sampling...")
+    # ==========================================================================
+    # 5. EVALUATION
+    # ==========================================================================
+    print("Training done. Generating samples...")
     model_wrapper.model.eval()
+    os.makedirs("overfit_results", exist_ok=True)
+    torch.save(model_wrapper.model.state_dict(), "overfit_results/diffusion_model.pth")
+
+    all_psnr = []
     
-    # Generate 3 samples using the SAME conditioning
-    # We repeat the condition vector 3 times
-    test_cond = cond_tensor[0].repeat(3, 1)
+    # Generate 3 samples per condition
+    # We can do this in batches too, but for plotting/saving logic, iterating is fine.
+    # To speed up, we can batch the 3 samples per condition.
     
-    samples = model_wrapper.sample(n_samples=3, targets=test_cond, device=device, n_steps=10)
-    samples = samples.detach().cpu().numpy()
+    with torch.no_grad():
+        for idx in tqdm(range(batch_size), desc="Sampling"):
+            # Prepare batch of 3 identical conditions
+            test_cond = cond_t[idx].unsqueeze(0).repeat(3, 1) # (3, 7)
+            
+            # Sample (3, 1, 45, 80)
+            samples = model_wrapper.sample(n_samples=3, targets=test_cond, device=device, n_steps=25)
+            samples_np = samples.detach().cpu().numpy() # [0, 1] range
 
-    # 6. Visualize
-    fig, ax = plt.subplots(1, 4, figsize=(12, 3))
-    
-    # Ground Truth
-    ax[0].imshow(raw_patch, cmap='gray')
-    ax[0].set_title("Ground Truth")
-    
-    # Generated
-    for j in range(3):
-        ax[j+1].imshow(samples[j, 0], cmap='gray')
-        ax[j+1].set_title(f"Gen {j+1}")
-        
-    plt.tight_layout()
-    # plt.show()
-    plt.savefig("overfit_result0.png")
-    plt.close()
+            # Visualize
+            fig, ax = plt.subplots(1, 4, figsize=(12, 3))
+            
+            # GT (Un-normalize from [-1, 1] to [0, 1] for display if needed, 
+            # but patches_np is already [0, 1] if loaded directly)
+            ax[0].imshow(patches_np[idx], cmap='gray')
+            ax[0].set_title("Ground Truth")
+            
+            mean_psnr = 0.0
+            for j in range(3):
+                ax[j+1].imshow(samples_np[j, 0], cmap='gray')
+                ax[j+1].set_title(f"Gen {j+1}")
+                mean_psnr += psnr(samples_np[j, 0], patches_np[idx])
+            
+            mean_psnr /= 3.0
+            all_psnr.append(mean_psnr)
+            
+            plt.tight_layout()
+            plt.savefig(f"overfit_results/result_{idx}.png")
+            plt.close()
 
-    test_cond2 = cond_tensor[1].repeat(3, 1)
-    samples2 = model_wrapper.sample(n_samples=3, targets=test_cond2, device=device, n_steps=25)
-    samples2 = samples2.detach().cpu().numpy()
-
-    fig, ax = plt.subplots(1, 4, figsize=(12, 3))
-    ax[0].imshow(raw_patch2, cmap='gray')
-    ax[0].set_title("Ground Truth 2")
-    for j in range(3):
-        ax[j+1].imshow(samples2[j, 0], cmap='gray')
-        ax[j+1].set_title(f"Gen2 {j+1}")
-    plt.tight_layout()
-    plt.savefig("overfit_result1.png")
-    plt.close()
-    # print("If 'Gen' looks like 'Ground Truth', the pipeline works.")
-
-    for j in range(3):
-        score = psnr(samples[j, 0], raw_patch)
-        print(f"Sample {j+1} PSNR: {score:.2f} dB")
-        score2 = psnr(samples2[j, 0], raw_patch2)
-        print(f"Sample2 {j+1} PSNR: {score2:.2f} dB")
-
-    # prediction frontnet model test
-   
-    samples_t = torch.tensor(samples[0], dtype=torch.float32, device=device).unsqueeze(0)  # (1, 1, H, W)
-    print(test_cond)
-    T = construct_T_matrix(*test_cond[0, :3])  # (1, 3, 3)
-    
-    print(f"T matrix shape: {T.shape}, {T}")
-    manipulated_image = project_patch(patches=samples_t, T_matrices=T, images=bg_img_t)
-    manipulated_image_gt = project_patch(patches=raw_patch_t, T_matrices=T, images=bg_img_t)
-    fig, ax = plt.subplots(1, 3, figsize=(8, 4))
-    ax[0].imshow(bg_img, cmap='gray')
-    ax[0].set_title("Background Image")
-    ax[1].imshow(manipulated_image[0, 0].detach().cpu().numpy(), cmap='gray')
-    ax[1].set_title("Manipulated Image with Generated Patch")
-    ax[2].imshow(manipulated_image_gt[0, 0].detach().cpu().numpy(), cmap='gray')
-    ax[2].set_title("Manipulated Image with GT Patch")
-    plt.tight_layout()
-    plt.savefig("manipulated_image.png")
-    plt.close()
-    x, y, z, yaw = model_wrapper.prediction_model(manipulated_image*255.)
-    pred = torch.stack([x, y, z, yaw])
-    pred = pred.squeeze(2).mT
-    print(f"Prediction from frontnet: {pred.detach().cpu().numpy()}")
-    gt_pred = test_cond[0, 3:].detach().cpu().numpy()
-    print(f"Ground Truth target: {gt_pred}")
-    dist = np.linalg.norm(pred.detach().cpu().numpy() - gt_pred)
-    print(f"Prediction error (L2 norm): {dist:.4f}")
-
-   
+    all_psnr = np.array(all_psnr)
+    print(f"Overall Mean PSNR: {all_psnr.mean():.2f} dB")
+    np.save("overfit_results/psnr_scores.npy", all_psnr)
 
 if __name__ == "__main__":
-    train_single_overfit()
+    train_batch_overfit()
