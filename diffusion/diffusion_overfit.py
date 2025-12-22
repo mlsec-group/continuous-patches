@@ -6,7 +6,7 @@ import os
 
 # --- Imports (assuming you saved the previous class definitions) ---
 # If you haven't split files, paste the UNet/DiffusionModel classes here.
-from diffusion_model import DiffusionModel, construct_T_matrix
+from diffusion_model import DiffusionModel, construct_T_matrix, project_patch
 
 
 # calc similarity score (psnr)
@@ -31,6 +31,7 @@ def train_single_overfit():
     
     # Extract raw data
     raw_patch = data['patch']      # (45, 80)
+    raw_patch_t = torch.tensor(raw_patch, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
     raw_target = data['target']    # (4,) -> x, y, z, yaw
     raw_cond = data['condition']   # (3,) -> sf, tx, ty
 
@@ -66,14 +67,43 @@ def train_single_overfit():
         patch_size=(45, 80),
         prediction_model_name='frontnet' # Not used here, but required by init
     )
+
+    bg_img = model_wrapper.train_set.dataset.data[0][0] / 255. # (H, W)
+    bg_img_t = bg_img.unsqueeze(0).unsqueeze(0).to(device)  # (1, 1, H, W)
+    # print(f"Background image shape: {bg_img.shape}")
+    # bg_img_t = torch.tensor(bg_img, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)
     
+     # gt sanity check
+    for i, (patch, condition) in enumerate(zip(patch_tensor, cond_tensor)):
+        patch = patch.unsqueeze(0)  # (1, 1, H, W)
+        patch = (patch + 1) / 2  # convert back to [0, 1] for projection
+        condition = condition.unsqueeze(0)  # (1, 7)
+        T = construct_T_matrix(*condition[0, :3])  # (1, 3, 3)
+        manipulated_image = project_patch(patches=patch, T_matrices=T, images=bg_img_t)
+        x, y, z, yaw = model_wrapper.prediction_model(manipulated_image*255.)
+        pred = torch.stack([x, y, z, yaw])
+        pred = pred.squeeze(2).mT
+        print(f"Prediction from frontnet (sanity check): {pred.detach().cpu().numpy()}")
+        gt_pred = condition[0, 3:].detach().cpu().numpy()
+        print(f"Ground Truth target: {gt_pred}")
+        dist = np.linalg.norm(pred.detach().cpu().numpy() - gt_pred)
+        print(f"Prediction error (L2 norm): {dist:.4f}")
+   
+
+        cond_tensor[i, 3:] = pred[0]  # use the prediction as target to see if it can overfit better
+
+
+    print("Updated Conditioning Vector with Frontnet Predictions:")
+    print(cond_tensor.detach().cpu().numpy())
+
+
     optimizer = torch.optim.Adam(model_wrapper.model.parameters(), lr=1e-3)
 
     # 4. Overfit Loop
     print("Starting overfit training...")
     model_wrapper.model.train()
     
-    for i in range(1000): # 1000 steps should be plenty for 1 sample
+    for i in range(2000): # 1000 steps should be plenty for 1 sample
         for patch, condition in zip(patch_tensor, cond_tensor):
             patch = patch.unsqueeze(0)  # (1, 1, H, W)
             condition = condition.unsqueeze(0)  # (1, 7)
@@ -130,7 +160,7 @@ def train_single_overfit():
     plt.close()
 
     test_cond2 = cond_tensor[1].repeat(3, 1)
-    samples2 = model_wrapper.sample(n_samples=3, targets=test_cond2, device=device, n_steps=10)
+    samples2 = model_wrapper.sample(n_samples=3, targets=test_cond2, device=device, n_steps=25)
     samples2 = samples2.detach().cpu().numpy()
 
     fig, ax = plt.subplots(1, 4, figsize=(12, 3))
@@ -145,10 +175,40 @@ def train_single_overfit():
     # print("If 'Gen' looks like 'Ground Truth', the pipeline works.")
 
     for j in range(3):
-        score = psnr(samples[j, 0], raw_patch * 2 - 1)
+        score = psnr(samples[j, 0], raw_patch)
         print(f"Sample {j+1} PSNR: {score:.2f} dB")
-        score2 = psnr(samples2[j, 0], raw_patch2 * 2 - 1)
+        score2 = psnr(samples2[j, 0], raw_patch2)
         print(f"Sample2 {j+1} PSNR: {score2:.2f} dB")
+
+    # prediction frontnet model test
+   
+    samples_t = torch.tensor(samples[0], dtype=torch.float32, device=device).unsqueeze(0)  # (1, 1, H, W)
+    print(test_cond)
+    T = construct_T_matrix(*test_cond[0, :3])  # (1, 3, 3)
+    
+    print(f"T matrix shape: {T.shape}, {T}")
+    manipulated_image = project_patch(patches=samples_t, T_matrices=T, images=bg_img_t)
+    manipulated_image_gt = project_patch(patches=raw_patch_t, T_matrices=T, images=bg_img_t)
+    fig, ax = plt.subplots(1, 3, figsize=(8, 4))
+    ax[0].imshow(bg_img, cmap='gray')
+    ax[0].set_title("Background Image")
+    ax[1].imshow(manipulated_image[0, 0].detach().cpu().numpy(), cmap='gray')
+    ax[1].set_title("Manipulated Image with Generated Patch")
+    ax[2].imshow(manipulated_image_gt[0, 0].detach().cpu().numpy(), cmap='gray')
+    ax[2].set_title("Manipulated Image with GT Patch")
+    plt.tight_layout()
+    plt.savefig("manipulated_image.png")
+    plt.close()
+    x, y, z, yaw = model_wrapper.prediction_model(manipulated_image*255.)
+    pred = torch.stack([x, y, z, yaw])
+    pred = pred.squeeze(2).mT
+    print(f"Prediction from frontnet: {pred.detach().cpu().numpy()}")
+    gt_pred = test_cond[0, 3:].detach().cpu().numpy()
+    print(f"Ground Truth target: {gt_pred}")
+    dist = np.linalg.norm(pred.detach().cpu().numpy() - gt_pred)
+    print(f"Prediction error (L2 norm): {dist:.4f}")
+
+   
 
 if __name__ == "__main__":
     train_single_overfit()
