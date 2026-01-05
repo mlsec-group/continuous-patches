@@ -673,6 +673,8 @@ if __name__ == "__main__":
 
     # img_idx = args.img_idx
 
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '.'))
+
     model_name = args.model
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -680,7 +682,7 @@ if __name__ == "__main__":
     if model_name == 'frontnet':
         print('Loading Frontnet model...')
         from util import load_model
-        model = load_model("pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", device, config="160x32")
+        model = load_model(f"{project_root}/pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", device, config="160x32")
         model.eval()
     elif model_name == 'yolov5':
         print('Loading YOLOv5 model...')
@@ -688,7 +690,7 @@ if __name__ == "__main__":
         model = YOLOBox()
 
 
-    dataset = load_dataset("pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle", batch_size = 1, shuffle = False, drop_last = True, num_workers = 1, train=True, train_set_size=0.9, IMRC=True)
+    dataset = load_dataset(f"{project_root}/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle", batch_size = 1, shuffle = False, drop_last = True, num_workers = 1, train=True, train_set_size=0.9, IMRC=True)
 
     print(len(dataset))
 

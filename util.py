@@ -282,7 +282,7 @@ def load_dataset(path, batch_size = 32, shuffle = False, drop_last = True, num_w
         dataset = Dataset(images[indices[split_idx:]], labels[split_idx:])
 
     # for quick and convinient access, create a torch DataLoader with the given parameters
-    data_params = {'batch_size': batch_size, 'shuffle': shuffle, 'drop_last':drop_last, 'num_workers': num_workers}
+    data_params = {'batch_size': batch_size, 'shuffle': shuffle, 'drop_last':drop_last, 'num_workers': 0, 'pin_memory': False}
     data_loader = data.DataLoader(dataset, **data_params)
     
     return data_loader
