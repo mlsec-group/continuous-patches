@@ -347,160 +347,157 @@ def calc_monitor_corners(drone_pose, projector_world, camera_extrinsic, camera_i
 
 
 def gen_target_trajectory(trajectory):
-    if trajectory == 'square':
+    # Standard height and yaw for all trajectories
+    z_val = 1.0
+    yaw_val = 0.0
+    
+    waypoints = None
 
-    # # Square corners (x, y) without z and yaw for now
+    if trajectory == 'square':
+        # Adjusted to fit x[-0.6, 0.6], y[-1, 1]
         corners = np.array([
-        [0., 1.],
-        [-1., 1.],
-        [-1., -1.],
-        [0., -1.],
-        [0., 1.] # End at the starting point
+            [0., 0.8],    # Start top-center-ish
+            [-0.6, 0.8],  # Top-Left
+            [-0.6, -0.8], # Bottom-Left
+            [0.6, -0.8],  # Bottom-Right
+            [0.6, 0.8],   # Top-Right
+            [0., 0.8]     # Close loop
         ])
 
-        edges = list(zip(corners[:-1], corners[1:]))
-        n_edges = len(edges)
-    
-        # Reserve 1 point per corner, distribute the rest
-        extra_points = 20 - n_edges  
-        base = extra_points // n_edges
-        remainder = extra_points % n_edges
+        # Distribute points based on segment length
+        full_traj = []
+        steps_per_segment = 20 # Higher density
         
-        points = []
-        for i, (start, end) in enumerate(edges):
-            # Number of points on this edge (including the corner at 'end')
-            num_on_edge = base + (1 if i < remainder else 0) + 1
+        for i in range(len(corners) - 1):
+            start = corners[i]
+            end = corners[i+1]
+            # Linspace for this segment
+            # endpoint=False to avoid duplicate points at corners
+            seg_x = np.linspace(start[0], end[0], steps_per_segment, endpoint=False)
+            seg_y = np.linspace(start[1], end[1], steps_per_segment, endpoint=False)
+            full_traj.append(np.column_stack([seg_x, seg_y]))
             
-            # Interpolate along the edge
-            xs = np.linspace(start[0], end[0], num_on_edge, endpoint=False)
-            ys = np.linspace(start[1], end[1], num_on_edge, endpoint=False)
-            edge_points = np.column_stack([xs, ys])
-            
-            points.extend(edge_points)
+        # Add the final point explicitly
+        full_traj.append(corners[-1].reshape(1, 2))
+        
+        points = np.vstack(full_traj)
+        
+        z = np.ones((points.shape[0],)) * z_val
+        yaw = np.zeros((points.shape[0],)) * yaw_val
+        waypoints = np.hstack((points, z[:, None], yaw[:, None]))
 
-        points = np.array(points)
-
-        z = np.ones((points.shape[0],))  # Create z with shape (20,)
-        yaw = np.zeros((points.shape[0],))  # Create yaw with shape (20,)
-        waypoints = np.hstack((points, z[:, None], yaw[:, None]))  # Stack points, z, and yaw to get shape (20, 4)
-        # print(waypoints.shape)
-
-        return torch.tensor(waypoints, dtype=torch.float32)
-
-
-    if trajectory == 'circle':
-        t = np.linspace(0, 2 * np.pi, 20)
+    elif trajectory == 'circle':
+        # Fits well in bounds: x[-0.5, 0.5], y[-0.5, 0.5]
+        # Increased steps to 60 for smoothness
+        t = np.linspace(0, 2 * np.pi, 60)
         x = 0.5 * np.cos(t)
         y = 0.5 * np.sin(t)
-        z = np.ones_like(t)  # Constant height at 1
-        yaw = np.zeros_like(t)  # Constant yaw
-        target_trajectory = np.column_stack((x, y, z, yaw))
-        return torch.tensor(target_trajectory, dtype=torch.float32)
+        z = np.ones_like(t) * z_val
+        yaw = np.zeros_like(t) * yaw_val
+        waypoints = np.column_stack((x, y, z, yaw))
 
-    if trajectory == 'line_x':
-        points = np.array([0., 0.5, 0., -1., 0.])
-
-        # Compute cumulative distances along the path
+    elif trajectory == 'line_x':
+        # Rescaled to fit x[-0.6, 0.6]
+        # Pattern: Center -> Right -> Center -> Left -> Center
+        points = np.array([0., 0.6, 0., -0.6, 0.])
+        
+        # Interpolation logic
+        total_points = 60
         distances = np.cumsum(np.abs(np.diff(points)))
-        distances = np.insert(distances, 0, 0)  # start at 0
+        distances = np.insert(distances, 0, 0)
+        even_distances = np.linspace(0, distances[-1], total_points)
 
-        # Generate 20 evenly spaced distances
-        even_distances = np.linspace(0, distances[-1], 20)
-
-        # Interpolate to get evenly spaced points
         x = np.interp(even_distances, distances, points)
-        y = np.zeros_like(x)
-        z = np.ones_like(x)  # Constant height at 1
-        yaw = np.zeros_like(x)  # Constant yaw
-        target_trajectory = np.column_stack((x, y, z, yaw))
-        return torch.tensor(target_trajectory, dtype=torch.float32)
+        y = np.zeros_like(x) # y=0
+        z = np.ones_like(x) * z_val
+        yaw = np.zeros_like(x) * yaw_val
+        waypoints = np.column_stack((x, y, z, yaw))
 
-    if trajectory == 'line_y':
+    elif trajectory == 'line_y':
+        # Fits x[-0.6, 0.6], y[-1, 1]
+        # Pattern: Center -> Up -> Center -> Down -> Center
         points = np.array([0., 1.0, 0., -1.0, 0.])
 
-        # Compute cumulative distances along the path
+        total_points = 60
         distances = np.cumsum(np.abs(np.diff(points)))
-        distances = np.insert(distances, 0, 0)  # start at 0
+        distances = np.insert(distances, 0, 0)
+        even_distances = np.linspace(0, distances[-1], total_points)
 
-        # Generate 20 evenly spaced distances
-        even_distances = np.linspace(0, distances[-1], 20)
-
-        # Interpolate to get evenly spaced points
         y = np.interp(even_distances, distances, points)
-        x = np.zeros_like(y)
-        z = np.ones_like(y)  # Constant height at 1
-        yaw = np.zeros_like(y)  # Constant yaw
-        target_trajectory = np.column_stack((x, y, z, yaw))
-        return torch.tensor(target_trajectory, dtype=torch.float32)
+        x = np.zeros_like(y) 
+        z = np.ones_like(y) * z_val
+        yaw = np.zeros_like(y) * yaw_val
+        waypoints = np.column_stack((x, y, z, yaw))
 
+    elif trajectory == 'figure8':
+        # Fits x[-0.2, 0.2], y[-0.6, 0.6]
+        t = np.linspace(0, 2 * np.pi, 60)
+        x = 0.2 * np.sin(2 * t) 
+        y = 0.6 * np.sin(t) 
+        z = np.ones_like(t) * z_val
+        yaw = np.zeros_like(t) * yaw_val
+        waypoints = np.column_stack((x, y, z, yaw))
 
-    if trajectory == 'figure8':
-        t = np.linspace(0, 2 * np.pi, 20)
-        x = 0.2 * np.sin(2 * t)  # Horizontal figure 8
-        y = 0.6 * np.sin(t)  # Vertical figure 8
-        z = np.ones_like(t)  # Constant height at 1
-        yaw = np.zeros_like(t)  # Constant yaw
-        target_trajectory = np.column_stack((x, y, z, yaw))
-        return torch.tensor(target_trajectory, dtype=torch.float32)
-
-    if trajectory == 'diagonal_line':
+    elif trajectory == 'diagonal_line':
+        # Fits x[-0.6, 0.6], y[-0.6, 0.6]
         points_x = np.array([0., 0.6, 0., -0.6, 0.])
         points_y = np.array([0., 0.6, 0., -0.6, 0.])
 
-        # Compute cumulative distances along the path
-        distances = np.cumsum(np.sqrt(np.diff(points_x)**2 + np.diff(points_y)**2))
-        distances = np.insert(distances, 0, 0)  # start at 0
+        total_points = 60
+        dist_segments = np.sqrt(np.diff(points_x)**2 + np.diff(points_y)**2)
+        distances = np.cumsum(dist_segments)
+        distances = np.insert(distances, 0, 0)
+        
+        even_distances = np.linspace(0, distances[-1], total_points)
 
-        # Generate 20 evenly spaced distances
-        even_distances = np.linspace(0, distances[-1], 20)
-
-        # Interpolate to get evenly spaced points
         x = np.interp(even_distances, distances, points_x)
         y = np.interp(even_distances, distances, points_y)
-        z = np.ones_like(x)  # Constant height at 1
-        yaw = np.zeros_like(x)  # Constant yaw
-        target_trajectory = np.column_stack((x, y, z, yaw))
-        return torch.tensor(target_trajectory, dtype=torch.float32)
-    if trajectory == 'triangle':
+        z = np.ones_like(x) * z_val
+        yaw = np.zeros_like(x) * yaw_val
+        waypoints = np.column_stack((x, y, z, yaw))
+
+    elif trajectory == 'triangle':
+        # Adjusted to fit bounds
         corners = np.array([
-            [0.6, 0.],
-            [0., 0.5],
-            [0., -0.5],
-            [0.6, 0.] 
+            [0.6, 0.],    # Right
+            [0., 0.8],    # Top
+            [-0.6, 0.],   # Left
+            [0.6, 0.]     # Close loop
         ])
 
-        edges = list(zip(corners[:-1], corners[1:]))
-        n_edges = len(edges)
+        full_traj = []
+        steps_per_segment = 20
+        
+        for i in range(len(corners) - 1):
+            start = corners[i]
+            end = corners[i+1]
+            seg_x = np.linspace(start[0], end[0], steps_per_segment, endpoint=False)
+            seg_y = np.linspace(start[1], end[1], steps_per_segment, endpoint=False)
+            full_traj.append(np.column_stack([seg_x, seg_y]))
+            
+        full_traj.append(corners[-1].reshape(1, 2))
+        points = np.vstack(full_traj)
 
-        # Reserve 1 point per corner, distribute the rest
-        extra_points = 18 - n_edges  
-        base = extra_points // n_edges
-        remainder = extra_points % n_edges
-
-        points = []
-        for i, (start, end) in enumerate(edges):
-            # Number of points on this edge (including the corner at 'end')
-            num_on_edge = base + (1 if i < remainder else 0) + 1
-
-            # Interpolate along the edge
-            xs = np.linspace(start[0], end[0], num_on_edge, endpoint=False)
-            ys = np.linspace(start[1], end[1], num_on_edge, endpoint=False)
-            edge_points = np.column_stack([xs, ys])
-
-            points.extend(edge_points)
-
-        points = np.array(points)
-
-        z = np.ones((points.shape[0],))  # Create z with shape (20,)
-        yaw = np.zeros((points.shape[0],))  # Create yaw with shape (20,)
-        waypoints = np.hstack((points, z[:, None], yaw[:, None]))  # Stack points, z, and yaw to get shape (20, 4)
-        # add initial and final point to complete the triangle
+        z = np.ones((points.shape[0],)) * z_val
+        yaw = np.zeros((points.shape[0],)) * yaw_val
+        
+        # Add initial hover at center to safe start
         init_pose = np.array([[0., 0., 1., 0.]])
-        waypoints = np.vstack((init_pose, waypoints, init_pose))
+        waypoints = np.hstack((points, z[:, None], yaw[:, None]))
+        waypoints = np.vstack((init_pose, waypoints))
 
-        return torch.tensor(waypoints, dtype=torch.float32)
     else:
         raise ValueError("Unknown trajectory type")
+
+    # --- SAFETY PADDING ---
+    # Because your loop runs until `len - 1`, we append the final point 5 times.
+    # This ensures the drone stays at the final goal for a few frames 
+    # instead of cutting off early.
+    last_point = waypoints[-1]
+    padding = np.tile(last_point, (5, 1))
+    waypoints = np.vstack((waypoints, padding))
+
+    return torch.tensor(waypoints, dtype=torch.float32)
     
 
 def get_patch_T(monitor_corners_world):
@@ -884,20 +881,7 @@ if __name__ == "__main__":
 
     target_idx = 1
     retries = 0
-    # max_retries = 10
-    # given dt and target_trajectory, compute max_retries
-    if (patch_mode == 'timeout' or patch_mode == 'velo') and dt is not None:
-        avg_dist_per_step = 0.1  # assume average distance of 0.1m per step
-        total_time = 0.0
-        total_distance = 0.0
-        for i in range(1, len(target_trajectory)):
-            dist = torch.dist(target_trajectory[i-1][:3], target_trajectory[i][:3], p=2).item()
-            total_distance += dist
-        estimated_total_time = total_distance / avg_dist_per_step * dt
-        max_retries = int(estimated_total_time / dt / len(target_trajectory)) * 2  # allow double the estimated time per target
-        print(f"Estimated total time: {estimated_total_time:.2f}s, setting max_retries to {max_retries}")
-    else:
-        max_retries = 10  # default value
+    max_retries = 10
 
     while target_idx < len(target_trajectory) - 1:
         target = target_trajectory[target_idx]
