@@ -346,148 +346,148 @@ def calc_monitor_corners(drone_pose, projector_world, camera_extrinsic, camera_i
                         projector_image_ll, projector_image_lr], dim=0)
 
 
-def gen_target_trajectory(trajectory):
-    # Standard height and yaw for all trajectories
+def gen_target_trajectory(trajectory, num_steps=25):
+    """
+    Generates a trajectory with EXACTLY num_steps points.
+    Bounds: x in [-0.6, 0.6], y in [-1.0, 1.0].
+    """
     z_val = 1.0
     yaw_val = 0.0
     
-    waypoints = None
+    # Helper to interpolate exactly N points evenly along a path of corners
+    def interpolate_path(corners, n_points):
+        # Calculate lengths of each segment
+        dists = np.sqrt(np.sum(np.diff(corners, axis=0)**2, axis=1))
+        # Cumulative distance (0, d1, d1+d2, ...)
+        cumulative_dist = np.insert(np.cumsum(dists), 0, 0)
+        total_dist = cumulative_dist[-1]
+        
+        # We want n_points distributed evenly from 0 to total_dist
+        even_dists = np.linspace(0, total_dist, n_points)
+        
+        # Interpolate X and Y based on distance
+        x = np.interp(even_dists, cumulative_dist, corners[:, 0])
+        y = np.interp(even_dists, cumulative_dist, corners[:, 1])
+        
+        return np.column_stack([x, y])
+
+    xy_points = None
 
     if trajectory == 'square':
-        # Adjusted to fit x[-0.6, 0.6], y[-1, 1]
+        # Define the corners of the path
         corners = np.array([
-            [0., 0.8],    # Start top-center-ish
-            [-0.6, 0.8],  # Top-Left
-            [-0.6, -0.8], # Bottom-Left
-            [0.6, -0.8],  # Bottom-Right
-            [0.6, 0.8],   # Top-Right
-            [0., 0.8]     # Close loop
-        ])
-
-        # Distribute points based on segment length
-        full_traj = []
-        steps_per_segment = 20 # Higher density
-        
-        for i in range(len(corners) - 1):
-            start = corners[i]
-            end = corners[i+1]
-            # Linspace for this segment
-            # endpoint=False to avoid duplicate points at corners
-            seg_x = np.linspace(start[0], end[0], steps_per_segment, endpoint=False)
-            seg_y = np.linspace(start[1], end[1], steps_per_segment, endpoint=False)
-            full_traj.append(np.column_stack([seg_x, seg_y]))
+            [0.6, 0.5],     # Top-Right
+            [-0.6, 0.5],    # Top-Left
+            [-0.6, -0.5],   # Bottom-Left
+            [0.6, -0.5],    # Bottom-Right
+            [0.6, 0.5],     # Top-Right
             
-        # Add the final point explicitly
-        full_traj.append(corners[-1].reshape(1, 2))
-        
-        points = np.vstack(full_traj)
-        
-        z = np.ones((points.shape[0],)) * z_val
-        yaw = np.zeros((points.shape[0],)) * yaw_val
-        waypoints = np.hstack((points, z[:, None], yaw[:, None]))
+        ])
+        xy_points = interpolate_path(corners, num_steps)
 
     elif trajectory == 'circle':
-        # Fits well in bounds: x[-0.5, 0.5], y[-0.5, 0.5]
-        # Increased steps to 60 for smoothness
-        t = np.linspace(0, 2 * np.pi, 60)
-        x = 0.5 * np.cos(t)
+        # Parametric generation naturally supports exact counts
+        t = np.linspace(0, 2 * np.pi, num_steps)
+        x = 0.5 * np.cos(t) # Radius 0.5 fits in [-0.6, 0.6]
         y = 0.5 * np.sin(t)
-        z = np.ones_like(t) * z_val
-        yaw = np.zeros_like(t) * yaw_val
-        waypoints = np.column_stack((x, y, z, yaw))
+        xy_points = np.column_stack([x, y])
 
     elif trajectory == 'line_x':
-        # Rescaled to fit x[-0.6, 0.6]
-        # Pattern: Center -> Right -> Center -> Left -> Center
-        points = np.array([0., 0.6, 0., -0.6, 0.])
-        
-        # Interpolation logic
-        total_points = 60
-        distances = np.cumsum(np.abs(np.diff(points)))
-        distances = np.insert(distances, 0, 0)
-        even_distances = np.linspace(0, distances[-1], total_points)
-
-        x = np.interp(even_distances, distances, points)
-        y = np.zeros_like(x) # y=0
-        z = np.ones_like(x) * z_val
-        yaw = np.zeros_like(x) * yaw_val
-        waypoints = np.column_stack((x, y, z, yaw))
+        # Center -> Right -> Left -> Center
+        corners = np.array([
+            [0., 0.],
+            [0.6, 0.],
+            [-0.6, 0.],
+            [0., 0.]
+        ])
+        xy_points = interpolate_path(corners, num_steps)
 
     elif trajectory == 'line_y':
-        # Fits x[-0.6, 0.6], y[-1, 1]
-        # Pattern: Center -> Up -> Center -> Down -> Center
-        points = np.array([0., 1.0, 0., -1.0, 0.])
-
-        total_points = 60
-        distances = np.cumsum(np.abs(np.diff(points)))
-        distances = np.insert(distances, 0, 0)
-        even_distances = np.linspace(0, distances[-1], total_points)
-
-        y = np.interp(even_distances, distances, points)
-        x = np.zeros_like(y) 
-        z = np.ones_like(y) * z_val
-        yaw = np.zeros_like(y) * yaw_val
-        waypoints = np.column_stack((x, y, z, yaw))
+        # Center -> Up -> Down -> Center
+        corners = np.array([
+            [0., 0.],
+            [0., 1.0],
+            [0., -1.0],
+            [0., 0.]
+        ])
+        xy_points = interpolate_path(corners, num_steps)
 
     elif trajectory == 'figure8':
-        # Fits x[-0.2, 0.2], y[-0.6, 0.6]
-        t = np.linspace(0, 2 * np.pi, 60)
-        x = 0.2 * np.sin(2 * t) 
-        y = 0.6 * np.sin(t) 
-        z = np.ones_like(t) * z_val
-        yaw = np.zeros_like(t) * yaw_val
-        waypoints = np.column_stack((x, y, z, yaw))
+        t = np.linspace(0, 2 * np.pi, num_steps)
+        x = 0.5 * np.sin(2 * t) # Width 1.0 (fits -0.6 to 0.6)
+        y = 0.9 * np.sin(t)     # Height 1.8 (fits -1.0 to 1.0)
+        xy_points = np.column_stack([x, y])
 
     elif trajectory == 'diagonal_line':
-        # Fits x[-0.6, 0.6], y[-0.6, 0.6]
-        points_x = np.array([0., 0.6, 0., -0.6, 0.])
-        points_y = np.array([0., 0.6, 0., -0.6, 0.])
-
-        total_points = 60
-        dist_segments = np.sqrt(np.diff(points_x)**2 + np.diff(points_y)**2)
-        distances = np.cumsum(dist_segments)
-        distances = np.insert(distances, 0, 0)
-        
-        even_distances = np.linspace(0, distances[-1], total_points)
-
-        x = np.interp(even_distances, distances, points_x)
-        y = np.interp(even_distances, distances, points_y)
-        z = np.ones_like(x) * z_val
-        yaw = np.zeros_like(x) * yaw_val
-        waypoints = np.column_stack((x, y, z, yaw))
+        # Top-Right -> Bottom-Left -> Center
+        corners = np.array([
+            [0., 0.],
+            [0.6, 0.8],
+            [-0.6, -0.8],
+            [0., 0.]
+        ])
+        xy_points = interpolate_path(corners, num_steps)
 
     elif trajectory == 'triangle':
-        # Adjusted to fit bounds
+        # Triangle shape adjusted to fit bounds
         corners = np.array([
-            [0.6, 0.],    # Right
-            [0., 0.8],    # Top
-            [-0.6, 0.],   # Left
-            [0.6, 0.]     # Close loop
+            [0.6, 0.],    # Start Right
+            [-0.2, 0.8],    # top
+            [-0.2, -0.8],   # bottom
+            [0.6, 0.0]     # Close loop
         ])
-
-        full_traj = []
-        steps_per_segment = 20
         
-        for i in range(len(corners) - 1):
-            start = corners[i]
-            end = corners[i+1]
-            seg_x = np.linspace(start[0], end[0], steps_per_segment, endpoint=False)
-            seg_y = np.linspace(start[1], end[1], steps_per_segment, endpoint=False)
-            full_traj.append(np.column_stack([seg_x, seg_y]))
-            
-        full_traj.append(corners[-1].reshape(1, 2))
-        points = np.vstack(full_traj)
+        # Add initial hover at center to match previous logic safely
+        # Note: This adds distance from center to start point
+        # full_path = np.vstack([
+        #     np.array([0., 0.]), # Start at center (0,0)
+        #     corners
+        # ])
+        xy_points = interpolate_path(corners, num_steps)
 
-        z = np.ones((points.shape[0],)) * z_val
-        yaw = np.zeros((points.shape[0],)) * yaw_val
+    elif trajectory == 's':
+        # Scaling parameters
+        rx = 0.6  # Horizontal radius
+        ry = 0.5  # Vertical radius for each half
+
+        # Top arc: Center (0, 0.5)
+        t1 = np.linspace(0.1 * np.pi, 1.5 * np.pi, num_steps // 2)
+        x1 = rx * np.cos(t1)
+        y1 = ry * np.sin(t1) + 0.5
+
+        # Bottom arc: Center (0, -0.5)
+        t2 = np.linspace(0.5 * np.pi, -0.9 * np.pi, num_steps // 2 + num_steps % 2)
+        x2 = rx * np.cos(t2)
+        y2 = ry * np.sin(t2) - 0.5
+
+        # Combine
+        x = np.concatenate([x1, x2])
+        y = np.concatenate([y1, y2])
+        xy_points = np.column_stack([x, y])
+
+
+    elif trajectory == 'c':
+        # Elliptical Arc opening to the Right
+        # t goes from 45 degrees to 315 degrees
+        t = np.linspace(np.pi/4, 7*np.pi/4, num_steps)
+        x = 0.5 * np.cos(t) # x > 0 at start/end, x < 0 in middle (Back of C)
+        y = 0.8 * np.sin(t) # Stretched vertically to fill y bounds
         
-        # Add initial hover at center to safe start
-        init_pose = np.array([[0., 0., 1., 0.]])
-        waypoints = np.hstack((points, z[:, None], yaw[:, None]))
-        waypoints = np.vstack((init_pose, waypoints))
+        # Current logic creates a C opening to the LEFT (x is neg in middle). 
+        # Flip x to open RIGHT:
+        x = x + 0.2 # Shift slightly right so it centers better
+        
+        xy_points = np.column_stack([x, y])
 
     else:
-        raise ValueError("Unknown trajectory type")
+        raise ValueError(f"Unknown trajectory type: {trajectory}")
+
+    # Combine with Z and Yaw
+    z = np.ones((num_steps, 1)) * z_val
+    yaw = np.zeros((num_steps, 1)) * yaw_val
+    
+    # Result shape: (num_steps, 4)
+    waypoints = np.hstack([xy_points, z, yaw])
 
     # --- SAFETY PADDING ---
     # Because your loop runs until `len - 1`, we append the final point 5 times.
@@ -648,7 +648,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('-m', '--model', type=str, choices=['frontnet', 'yolov5'], default='frontnet', help='Model to use for prediction')
-    parser.add_argument('-t', '--trajectory', type=str, choices=['figure8', 'square', 'circle', 'line_x', 'line_y', 'diagonal_line', 'triangle'], default='figure8', help='Target Trajectory')
+    parser.add_argument('-t', '--trajectory', type=str, choices=['figure8', 'square', 'circle', 'line_x', 'line_y', 'diagonal_line', 'triangle', 'c', 's'], default='figure8', help='Target Trajectory')
     parser.add_argument('--display_size', type=int, default=60, help='Size of the display in pixels (default: 60")')
     parser.add_argument('--patch_mode', type=str, choices=['optimal', 'velo', 'timeout', 'black', 'white', 'random', 'fap', 'diffusion', 'interpolation', 'corpus'], default='optimal', help='Mode to initialize the patch: optimal, timeout, black, white, random')
     parser.add_argument('--temperature', type=str, choices=['warm', 'cold', 'none'], default='cold', help='Either restart from random patch (cold) or from the last patch (warm)')
