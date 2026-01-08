@@ -33,6 +33,16 @@ import glob
 
 DEBUG_GRAD = False
 
+def normalize_yaw_t(yaw):
+    return torch.atan2(torch.sin(yaw), torch.cos(yaw))
+
+def normalize_yaw(yaw):
+    return np.atan2(np.sin(yaw), np.cos(yaw))
+
+def dist(c1, c2):
+    elementwise = torch.square(c1 - c2)
+    # elementwise * torch.tensor([1, 1, 2, 2/.4, 2, 2])
+    return torch.sqrt(torch.sum(elementwise, axis=-1))
 
 
 def bb2camera(bbox, intrinsic, dist_coeffs):
