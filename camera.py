@@ -17,6 +17,8 @@ IM_HEIGHT = 96
 IM_WIDTH = 160
 person_width = 10
 
+def normalize_yaw_t(yaw):
+    return torch.atan2(torch.sin(yaw), torch.cos(yaw))
 
 """
 Epoch 180, Loss YOLO: 0.3891800872066565, Radius: 0.23440499603748322, Softmax Mult: 51.06891632080078
@@ -44,44 +46,44 @@ Extrinsic: tensor([[ 0.04509, -0.99894,  0.00873, -0.00555],
 class Camera:
     def __init__(self, path, device='cpu'):
         self.device = device
-        self.fx = torch.tensor(87.25207, device=self.device, dtype=torch.float32)
-        self.fy = torch.tensor(64.76044, device=self.device, dtype=torch.float32)
-        self.ox = torch.tensor(73.16930, device=self.device, dtype=torch.float32)
-        self.oy = torch.tensor(50.20697, device=self.device, dtype=torch.float32)
+        # self.fx = torch.tensor(87.25207, device=self.device, dtype=torch.float32)
+        # self.fy = torch.tensor(64.76044, device=self.device, dtype=torch.float32)
+        # self.ox = torch.tensor(73.16930, device=self.device, dtype=torch.float32)
+        # self.oy = torch.tensor(50.20697, device=self.device, dtype=torch.float32)
         self.radius = torch.tensor(0.23440499603748322, device=self.device, dtype=torch.float32)  # meters
-        self.camera_intrinsic = np.array([[self.fx.item(), 0, self.ox.item()],
-                                            [0, self.fy.item(), self.oy.item()],
-                                            [0, 0, 1]], dtype=np.float32)
-        self.camera_intrinsic_tens = torch.tensor(self.camera_intrinsic, dtype=torch.float32, device=device)
-
-
-        self.camera_extrinsic = np.array([[ 0.04509, -0.99894,  0.00873, -0.00555],
-                                            [ 0.08284, -0.00497, -0.99655,  0.36382],
-                                            [ 0.99554,  0.04566,  0.08253, -0.33016],
-                                            [ 0.00000,  0.00000,  0.00000,  1.00000]], dtype=np.float32)
-        self.camera_extrinsic_tens = torch.tensor(self.camera_extrinsic, dtype=torch.float32, device=self.device)
-
-
-
-
-        # with open(path) as f:
-        #     camera_config = yaml.load(f, Loader=yaml.FullLoader)
-
-        # self.camera_intrinsic = np.array(camera_config['camera_matrix'])
-        # # self.distortion_coeffs = np.array(camera_config['distortion_coeffs'])
+        # self.camera_intrinsic = np.array([[self.fx.item(), 0, self.ox.item()],
+        #                                     [0, self.fy.item(), self.oy.item()],
+        #                                     [0, 0, 1]], dtype=np.float32)
         # self.camera_intrinsic_tens = torch.tensor(self.camera_intrinsic, dtype=torch.float32, device=device)
+
+
+        # self.camera_extrinsic = np.array([[ 0.04509, -0.99894,  0.00873, -0.00555],
+        #                                     [ 0.08284, -0.00497, -0.99655,  0.36382],
+        #                                     [ 0.99554,  0.04566,  0.08253, -0.33016],
+        #                                     [ 0.00000,  0.00000,  0.00000,  1.00000]], dtype=np.float32)
+        # self.camera_extrinsic_tens = torch.tensor(self.camera_extrinsic, dtype=torch.float32, device=self.device)
+
+
+
+
+        with open(path) as f:
+            camera_config = yaml.load(f, Loader=yaml.FullLoader)
+
+        self.camera_intrinsic = np.array(camera_config['camera_matrix'])
+        # self.distortion_coeffs = np.array(camera_config['distortion_coeffs'])
+        self.camera_intrinsic_tens = torch.tensor(self.camera_intrinsic, dtype=torch.float32, device=device)
         
         # self.device = device
-        # # print("Camera device:", self.device)
+        # print("Camera device:", self.device)
         
-        # rvec = np.array(camera_config['rvec'])
-        # tvec = camera_config['tvec']
-        # self.make_extrinsic(rvec, tvec)
+        rvec = np.array(camera_config['rvec'])
+        tvec = camera_config['tvec']
+        self.make_extrinsic(rvec, tvec)
 
-        # self.fx = torch.tensor(self.camera_intrinsic[0][0], device=self.device, dtype=torch.float32)
-        # self.fy = torch.tensor(self.camera_intrinsic[1][1], device=self.device, dtype=torch.float32)
-        # self.ox = torch.tensor(self.camera_intrinsic[0][2], device=self.device, dtype=torch.float32)
-        # self.oy = torch.tensor(self.camera_intrinsic[1][2], device=self.device, dtype=torch.float32)
+        self.fx = torch.tensor(self.camera_intrinsic[0][0], device=self.device, dtype=torch.float32)
+        self.fy = torch.tensor(self.camera_intrinsic[1][1], device=self.device, dtype=torch.float32)
+        self.ox = torch.tensor(self.camera_intrinsic[0][2], device=self.device, dtype=torch.float32)
+        self.oy = torch.tensor(self.camera_intrinsic[1][2], device=self.device, dtype=torch.float32)
 
         
 
@@ -179,12 +181,25 @@ class Camera:
     
     def batch_xyz_from_boxes(self, boxes):
         # build per-sample outputs and stack to preserve graph
+        drone_pose_reference = torch.tensor([0., 0., 0., 0.], device=boxes.device, dtype=boxes.dtype)
         outs = []
         for i in range(boxes.shape[0]):
             coords = self.tensor_xyz_from_bb(boxes[i])
-            # TODO: fix yaw calculation
-            yaw = torch.tensor(0, device=coords.device, dtype=coords.dtype)#torch.atan2(coords[1], coords[0])
-            outs.append(torch.cat((coords, yaw.unsqueeze(0))))
+            delta = coords - drone_pose_reference[:3]
+            # print('delta', delta)
+            yaw = torch.atan2(delta[1], delta[0])
+            # print('yaw', yaw)
+            d_x = torch.sin(yaw)
+            d_y = torch.cos(yaw)
+            # print('d_x', d_x, 'd_y', d_y)
+
+            d_yaw = d_y - d_x
+            # print('d_yaw', d_yaw)
+            d_yaw = normalize_yaw_t(d_yaw)
+            # print('normalized d_yaw', d_yaw)
+            out = torch.stack((coords[0], coords[1], coords[2], normalize_yaw_t(yaw)))
+            # out = torch.stack((coords[0], coords[1], coords[2], torch.tensor(0., device=boxes.device, dtype=boxes.dtype)))
+            outs.append(out)
         return torch.stack(outs, dim=0)
 
     def point_from_xyz(self, coords):

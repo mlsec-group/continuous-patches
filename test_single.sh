@@ -2,12 +2,12 @@
 set -euo pipefail
 
 #MODELS=("frontnet" "yolov5")
-MODELS=("yolov5")
+MODELS=("frontnet")
 # PATCH_MODES=("optimal" "timeout" "random" "black" "white" "fap" "diffusion" "interpolation" "corpus")
-PATCH_MODES=("optimal")
-TEMPERATURES=("warm")
-TRAJECTORIES=("figure8" "square" "circle" "line_x" "line_y")
-DISPLAY_SIZES=(30 40 50 60 70 80 90 100 110 120)
+PATCH_MODES=("velo")
+TEMPERATURES=("cold")
+TRAJECTORIES=("figure8" "square" "triangle" "c" "s")
+DISPLAY_SIZES=(60 70 80 90 100)
 CORPUS_SIZES=(1000 2000 3000 4000 5000)
 PIC_MODES=("idx" "random")
 LOG_DIR="logs"
@@ -16,7 +16,12 @@ TIMEOUT_VALUES=(10 20 30)
 mkdir -p "${LOG_DIR}"
 
 PARAMS_FILE="${LOG_DIR}/params.tsv"
-: > "${PARAMS_FILE}"
+# Do not overwrite existing params file. Create only if missing.
+if [ ! -f "${PARAMS_FILE}" ]; then
+  : > "${PARAMS_FILE}"
+else
+  echo "Using existing ${PARAMS_FILE}; not regenerating to avoid overwrite."
+fi
 
 # Build params list (one line per job)
 for MODEL in "${MODELS[@]}"; do
@@ -50,12 +55,12 @@ for MODEL in "${MODELS[@]}"; do
               for TEMP in "${TEMP_LIST[@]}"; do
                 if [ "${PIC_MODE}" = "random" ]; then
                   IMG_IDX=0
-                  for SEED in $(seq 0 9); do
+                  for SEED in $(seq 0 3); do
                     echo "${MODEL} ${PATCH_MODE} ${TRAJ} ${DISPLAY_SIZE} ${PIC_MODE} ${IMG_IDX} ${CORPUS_SIZE} ${SEED} ${TIMEOUT} ${TEMP}" >> "${PARAMS_FILE}"
                   done
                 else
-                  for IMG_IDX in 505 4847 3059 1860 3205 4861 2613 2309 5431 2847; do
-                    for SEED in $(seq 0 9); do
+                  for IMG_IDX in 1860 4861 5431; do
+                    for SEED in $(seq 0 3); do
                       echo "${MODEL} ${PATCH_MODE} ${TRAJ} ${DISPLAY_SIZE} ${PIC_MODE} ${IMG_IDX} ${CORPUS_SIZE} ${SEED} ${TIMEOUT} ${TEMP}" >> "${PARAMS_FILE}"
                     done
                   done
@@ -84,10 +89,11 @@ SUBMIT_DIR="$(pwd)"
 # Submit a single job array (limit concurrency with %50)
 sbatch <<EOF
 #!/bin/bash
-#SBATCH --job-name=patch-array
-#SBATCH --partition=gpu-2h
+#SBATCH --job-name=resubmit
+#SBATCH --partition=gpu-5h
 #SBATCH --gpus-per-node=1
-#SBATCH --array=0-$((TOTAL_JOBS-1))%10
+#SBATCH --exclude=head074
+#SBATCH --array=0-$((TOTAL_JOBS-1))%15
 #SBATCH --output=${ABS_LOG_DIR}/slurm_%A_%a.out
 #SBATCH --error=${ABS_LOG_DIR}/slurm_%A_%a.err
 #SBATCH --chdir=${SUBMIT_DIR}
@@ -114,6 +120,20 @@ echo "Starting task \${SLURM_ARRAY_JOB_ID}_\${SLURM_ARRAY_TASK_ID}"
 echo "Params: \${LINE}"
 
 apptainer run --nv /home/piha/container.sif \
+  bash -c "python attack_minimal_single.py \
+    -m "\${MODEL}" \
+    -t "\${TRAJ}" \
+    --patch_mode "\${PATCH_MODE}" \
+    --display_size "\${DISPLAY_SIZE}" \
+    --seed "\${SEED}" \
+    --corpus_size "\${CORPUS_SIZE}" \
+    --pic_mode "\${PIC_MODE}" \
+    --img_idx "\${IMG_IDX}" \
+    --timeout "\${TIMEOUT}" \
+    --temperature "\${TEMP}" \
+    
+  &&
+
   python attack_minimal_single.py \
     -m "\${MODEL}" \
     -t "\${TRAJ}" \
@@ -124,7 +144,8 @@ apptainer run --nv /home/piha/container.sif \
     --pic_mode "\${PIC_MODE}" \
     --img_idx "\${IMG_IDX}" \
     --timeout "\${TIMEOUT}" \
-    --temperature "\${TEMP}"
+    --temperature "\${TEMP}" \
+  "
 
 echo "Done."
 EOF
