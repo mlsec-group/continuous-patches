@@ -40,7 +40,7 @@ def train_batch_overfit():
     # ==========================================================================
     # 1. LOAD DATA
     # ==========================================================================
-    sample_paths = sorted(glob.glob("temp_pid_*/sample_*.npz"))
+    sample_paths = sorted(glob.glob("frontnet/temp_pid_*/sample_*.npz"))
     if not sample_paths:
         print("Error: no samples found in temp_pid_* folders.")
         return
@@ -159,7 +159,7 @@ def train_batch_overfit():
             
         avg_epoch_loss = epoch_loss / len(dataloader)
         if epoch % 10 == 0:
-                tqdm.write(f"Step {step_count}, Avg Loss: {avg_epoch_loss:.6f}")
+                tqdm.write(f"Step {epoch}, Avg Loss: {avg_epoch_loss:.6f}")
         
         # print(f"Epoch {epoch+1} completed. Average Loss: {avg_epoch_loss:.6f}")
     
