@@ -56,6 +56,9 @@ def run_experiment(args):
     target_idx = 1
     dt = 1.0 / args.timeout if args.timeout else 1/30.0
 
+    patch_size = (150, 320) if args.model == 'yolov5' else (45, 80)
+    img_size = (320, 640) if args.model == 'yolov5' else (96, 160)
+
     # 2. Main Loop
     with tqdm(total=len(target_traj)) as pbar:
         while target_idx < len(target_traj) - 1:
@@ -74,9 +77,7 @@ def run_experiment(args):
             base_img = dataset.dataset[img_idx][0].to(device).unsqueeze(0) / 255.0
             
             # C. Check Geometry
-            patch_size = (150, 320) if args.model == 'yolov5' else (45, 80)
-            img_size = (320, 640) if args.model == 'yolov5' else (96, 160)
-            T, _, is_visible = sim.get_view_geometry(patch_size, img_size)
+            T, monitor_corners, is_visible = sim.get_view_geometry(patch_size, img_size)
             
             # D. Generate & Apply Attack
             patch = None
@@ -117,9 +118,38 @@ def run_experiment(args):
             sim.update_physics(vel_cmd, dt=dt)
             
             # G. Log
-            history_pose.append(sim.pose.cpu().numpy())
             step_end = time.time()
+            current_pose = sim.pose.cpu().numpy()
+            history_pose.append(current_pose)
             time_per_step.append(step_end - step_start)
+
+            # Plot Intermediate Results
+            fig, axs = plt.subplots(1, 2)
+            axs[0].imshow(manipulated_img[0, 0].detach().cpu().numpy(), cmap='gray')
+            # plt.plot(monitor_corners[:, 0], monitor_corners[:, 1], 'r--', label='Monitor corners')
+            
+            # monitor_corners are in format (ul_x, ul_y), (ur_x, ur_y), (ll_x, ll_y), (lr_x, lr_y)
+            monitor_corners = monitor_corners.detach().cpu().numpy()
+            axs[0].plot([monitor_corners[0, 0], monitor_corners[1, 0]], [monitor_corners[0, 1], monitor_corners[1, 1]], 'r--')  # top edge
+            axs[0].plot([monitor_corners[0, 0], monitor_corners[2, 0]], [monitor_corners[0, 1], monitor_corners[2, 1]], 'r--')  # left edge
+            axs[0].plot([monitor_corners[1, 0], monitor_corners[3, 0]], [monitor_corners[1, 1], monitor_corners[3, 1]], 'r--')  # right edge
+            axs[0].plot([monitor_corners[2, 0], monitor_corners[3, 0]], [monitor_corners[2, 1], monitor_corners[3, 1]], 'r--')  # bottom edge    
+
+            axs[1].plot(target_trajectory[:, 0].detach().cpu().numpy(), target_trajectory[:, 1].detach().cpu().numpy(), 'r--')
+            axs[1].plot(np.array(all_drone_poses)[:, 0], np.array(all_drone_poses)[:, 1])
+            axs[1].scatter(sim.monitor_world[:, 0].detach().cpu().numpy(), sim.monitor_world[:, 1].detach().cpu().numpy(), c='b', label='Projector corners')
+            axs[1].scatter(current_pose[0], current_pose[1], color='black')
+            axs[1].arrow(current_pose[0], current_pose[1],
+                            0.3 * np.cos(current_pose[3]), 0.3 * np.sin(current_pose[3]),
+                            head_width=0.1, head_length=0.1, fc='black', ec='black')
+            
+            
+            axs[1].set_xlim(-2, 2)
+            axs[1].set_ylim(-2, 2)
+            plt.tight_layout()
+
+            plt.savefig(output_dir / f'optim_step{optim_steps}.png')
+            plt.close()
             
             if len(history_pose) % 50 == 0:
                 np.save(output_dir / "all_drone_poses.npy", np.array(history_pose))

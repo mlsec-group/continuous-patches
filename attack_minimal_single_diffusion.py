@@ -1005,6 +1005,7 @@ if __name__ == "__main__":
         print("Patch transformation T:")
         print(T)
         T = torch.tensor(T, dtype=torch.float32, device=device)
+        
 
         if T[0,0].item() < 0 or T[0,2].item() < -10. or T[1,2].item() < -10. or T[0,2].item() > img_size[1] + 10. or T[1,2].item() > img_size[0] + 10.:
             print("Invalid patch transformation detected, skipping to next target.")
@@ -1061,22 +1062,61 @@ if __name__ == "__main__":
         elif patch_mode == 'diffusion' or patch_mode == 'interpolation' or patch_mode == 'corpus':
             # target_yaw = normalize_yaw_t(target[3])
             # Desired setpoint in world coordinates (the target pose)
-            T_setpoint_world = T_matrix(target)
-            setpoint_yaw = torch.atan2(T_setpoint_world[1, 0], T_setpoint_world[0, 0])
-            # Current drone pose in world
             T_drone_in_world = T_matrix(torch.tensor(all_drone_poses[-1], device=device, dtype=torch.float32))
-            
+            T_target_in_world = T_matrix(target)
+            # delta = T_target_in_world[:3, 3] - T_drone_in_world[:3, 3]
+            # yaw = torch.atan2(delta[1], delta[0])
+            print("T_target_in_world:", T_target_in_world)
             T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
-            T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(setpoint_yaw - torch.pi)).to(device)
+            # print("Calc with 0. yaw")
+            T_direction_world[:3, 3] = calc_heading_vec(1., torch.tensor(0.).to(device)).to(device)
+            # print("T_direction_world:", T_direction_world)
 
-
-            T_pred_in_world = torch.inverse(T_direction_world) @ T_setpoint_world
+            T_pred_in_world = T_direction_world @ T_target_in_world
+            print("T_pred_in_world:", T_pred_in_world)
+            delta = T_pred_in_world[:3, 3] - T_drone_in_world[:3, 3]
+            desired_yaw = torch.atan2(delta[1], delta[0]) * -1.
             T_pred_in_drone = torch.inverse(T_drone_in_world) @ T_pred_in_world
-            target_yaw = torch.atan2(T_pred_in_drone[1, 0], T_pred_in_drone[0, 0])
+            print("T_pred_in_drone:", T_pred_in_drone, "Desired yaw:", desired_yaw.item())
 
-            # T_pred_in_drone[2, 3] = T_pred_in_drone[2, 3] - 1.
+            # print("sanity check:")
+            # mock_prediction = torch.tensor([*T_pred_in_drone[:3, 3], desired_yaw], dtype=torch.float32, device=device)
+            # T_pred_in_drone_check = T_matrix(mock_prediction)
+            # T_pred_in_world_check = T_drone_in_world @ T_pred_in_drone_check
+            # print("Mock T_pred_in_world:", T_pred_in_world_check)
+            # T_direction_world_check = torch.eye(4, device=device, dtype=torch.float32)
+            # T_direction_world_check[:3, 3] = calc_heading_vec(1., normalize_yaw_t(desired_yaw - torch.pi)).to(device)
+            # T_setpoint_world_check = T_direction_world_check @ T_pred_in_world_check
+            # print("Mock T_setpoint_world:", T_setpoint_world_check)
+            # print("Real target world:", T_target_in_world)
+            # print("Drone in world frame:", T_drone_in_world[:3, 3].detach().cpu().numpy())
+            # print("Target in world frame:", target[:3].detach().cpu().numpy(), "Target yaw:", target[3].item())
+            # print("Setpoint in world frame:", T_setpoint_world[:3, 3].detach().cpu().numpy(), "Setpoint yaw:", setpoint_yaw.item())
+            # print("Prediction in world frame:", T_pred_world[:3, 3].detach().cpu().numpy())
+            # print("Prediction in drone frame (0 yaw):", T_pred_in_drone[:3, 3].detach().cpu().numpy(), "Pred yaw:", setpoint_yaw.item())
 
-            sf = T[0, 0]
+
+            # print("")
+            # print("Calc with 'true' yaw")
+            # delta = T_target_in_world[:3, 3] - T_drone_in_world[:3, 3]
+            # yaw = torch.atan2(delta[1], delta[0])
+            # T_direction_world[:3, 3] = calc_heading_vec(1., yaw).to(device)
+
+            # T_setpoint_world = T_direction_world @ T_target_in_world
+            # delta_vector = T_setpoint_world[:3, 3] - T_drone_in_world[:3, 3]
+            # setpoint_yaw = torch.atan2(delta_vector[1], delta_vector[0]) * -1.
+
+            # T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
+            # T_direction_world[:3, 3] = calc_heading_vec(1., setpoint_yaw).to(device)
+
+            # T_pred_world = torch.inverse(T_direction_world) @ T_setpoint_world
+            # T_pred_in_drone = torch.inverse(T_drone_in_world) @ T_pred_world
+
+            #sf = T[0, 0]
+            # calc sf given monitor corners and patch size
+            sf_x = torch.norm(monitor_corners[1] - monitor_corners[0]) / initial_patch_size[1]
+            sf_y = torch.norm(monitor_corners[2] - monitor_corners[0]) / initial_patch_size[0]
+            sf = (sf_x + sf_y) / 2.0  # average scaling
             tx = T[0, 2]
             ty = T[1, 2]
 
@@ -1086,12 +1126,38 @@ if __name__ == "__main__":
             #     tx = 5e-2
             # if tx > (1 - 5e-2):
             #     tx = 1 - 5e-2
+            # print("Drone in world frame:", T_drone_in_world[:3, 3].detach().cpu().numpy())
+            # print("Target in world frame:", target[:3].detach().cpu().numpy(), "Target yaw:", target[3].item())
+            # print("Setpoint in world frame:", T_setpoint_world[:3, 3].detach().cpu().numpy(), "Setpoint yaw:", setpoint_yaw.item())
+            # print("Prediction in world frame:", T_pred_world[:3, 3].detach().cpu().numpy())
+            # print("Prediction in drone frame:", T_pred_in_drone[:3, 3].detach().cpu().numpy(), "Pred yaw:", setpoint_yaw.item())
+            # print("Patch position params: sf:", sf, "tx:", tx, "ty:", ty)
+            conditioning = torch.tensor([sf, tx, ty, *T_pred_in_drone[:3, 3], desired_yaw], dtype=torch.float32, device=device)
 
-            print("Target in world frame:", target[:3].detach().cpu().numpy(), "Target yaw:", target[3].item())
-            print("Target in drone frame:", T_pred_in_drone[:3, 3].detach().cpu().numpy(), "Target yaw:", target_yaw.item())
-            print("Patch position params: sf:", sf, "tx:", tx, "ty:", ty)
 
-            conditioning = torch.tensor([sf, tx, ty, *T_pred_in_drone[:3, 3], target_yaw], dtype=torch.float32, device=device)
+            # sanity check for conditioning values
+            # mock_prediction = conditioning[3:7]
+            # print("Mock prediction from conditioning:", mock_prediction.detach().cpu().numpy())
+            # T_pred_in_drone = T_matrix(mock_prediction)
+            # print("Mock T_pred_in_drone:", T_pred_in_drone)
+            # print("T_drone_in_world:", T_drone_in_world)
+            # T_pred_in_world = T_drone_in_world @ T_pred_in_drone
+            # print("Mock T_pred_in_world:", T_pred_in_world)
+            # # print(T_pred_in_world)
+
+            # target_yaw = normalize_yaw_t(setpoint_yaw)
+            # # print("Target yaw within loop:", target_yaw.item())
+            # T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
+            # T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
+            # print("Mock Direction in world:", T_direction_world)
+            # # print(T_direction_world)
+
+            # m_T_setpoint_world = T_direction_world @ T_pred_in_world
+            # print("Mock T_setpoint_world:", m_T_setpoint_world)
+            # print("Real setpoint world:", T_setpoint_world[:3, 3].detach().cpu().numpy(), "Setpoint yaw:", target_yaw.item())
+            # yaw = torch.atan2(T_setpoint_world[1, 0], T_setpoint_world[0, 0])
+            # setpoint_yaw = normalize_yaw_t(yaw)
+            # setpoint_yaw = target_yaw  # keep yaw predicted by network
             
             if patch_mode == 'interpolation':
                 # print("Debugging Interpolation Mode")
@@ -1280,6 +1346,7 @@ if __name__ == "__main__":
                     # print("x, y, z, yaw:", x, y, z, yaw)
                     prediction = torch.stack([x, y, z, yaw])
                     prediction = prediction.squeeze(2).mT
+                    # print("Conditioning within loop:", conditioning)
                     # print("Prediction within loop:", prediction)
 
                     T_pred_in_drone = T_matrix(prediction[0])
@@ -1298,6 +1365,7 @@ if __name__ == "__main__":
 
                     T_setpoint_world = T_direction_world @ T_pred_in_world
                     # print("T_setpoint_world within loop:", T_setpoint_world)
+                    # print("Real target world:", T_target_in_world)
                     # yaw = torch.atan2(T_setpoint_world[1, 0], T_setpoint_world[0, 0])
                     # setpoint_yaw = normalize_yaw_t(yaw)
                     setpoint_yaw = target_yaw  # keep yaw predicted by network
@@ -1545,10 +1613,13 @@ if __name__ == "__main__":
 
 
             if model_name == 'frontnet':
+                print("Debugging FrontNet inference")
+                print("Conditioning:", conditioning)
                 x, y, z, yaw = model(manipulated_image*255.)
                 # print("x, y, z, yaw:", x, y, z, yaw)
                 prediction = torch.stack([x, y, z, yaw])
                 prediction = prediction.squeeze(2).mT
+                print("Prediction from model:", prediction)
 
             elif model_name == 'yolov5':
                     # resize to 640x320
@@ -1626,23 +1697,25 @@ if __name__ == "__main__":
                     #         T_setpoint_world = T_matrix(prediction)
                     #         prediction = torch.stack([*T_setpoint_world[:3, 3], normalize_yaw_t(torch.atan2(T_setpoint_world[1,0], T_setpoint_world[0,0]))]).to(device)
 
-            print("Prediction from model:", prediction)
+            # print("Prediction from model:", prediction)
 
             # prediction values
             T_pred_in_drone = T_matrix(prediction[0])
             T_pred_in_world = T_drone_in_world @ T_pred_in_drone
-            # print("T_pred_in_world within loop:")
+            print("T_pred_in_world within loop:", T_pred_in_world)
             # print(T_pred_in_world)
 
             target_yaw = normalize_yaw_t(prediction[0, 3])
+            print("Target yaw within loop:", target_yaw.item())
             T_direction_world = torch.eye(4, device=device, dtype=torch.float32)
             T_direction_world[:3, 3] = calc_heading_vec(1., normalize_yaw_t(target_yaw - torch.pi)).to(device)
-            # print("Direction in world within loop:")
+            print("Direction in world within loop:", T_direction_world)
             # print(T_direction_world)
 
             T_setpoint_world = T_direction_world @ T_pred_in_world
 
             print("Predicted setpoint in world before control: ", T_setpoint_world[:3, 3], target_yaw.item())
+            print("Real target world:", target[:3], target[3].item())
 
             # yaw = torch.atan2(T_setpoint_world[1, 0], T_setpoint_world[0, 0])
             setpoint_yaw = target_yaw # keep yaw predicted by network
