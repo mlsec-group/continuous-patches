@@ -28,6 +28,10 @@ BATCH_SIZE = 1
 IMSIZE = (96, 160)
 SOFTMAX_MULT = 15.
 
+import os
+
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '.'))
+
 # get random coordinates for where patch should be
 def gen_patch_coords(n, size):
     points = np.random.randint([0, 0], [IMSIZE[0] - size[0], IMSIZE[1]-size[1]], size=(n, 2))
@@ -43,7 +47,7 @@ class YOLOBox(nn.Module):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     softmax_mult = 15.
 
-    def __init__(self, cam_config='camera_calibration.yaml'):
+    def __init__(self, cam_config=f'{project_root}/camera_calibration.yaml'):
         super().__init__()
 
         # load model

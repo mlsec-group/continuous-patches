@@ -140,12 +140,12 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Running on {device}")
 
-    if os.path.exists(f"{model_name}/corpus_{model_name}.npz"):
+    if os.path.exists(f"{project_root}/{model_name}/corpus_{model_name}.npz"):
         # ==========================================================================
         # 1. LOAD PRE-SAVED CORPUS
         # ==========================================================================
         print(f"Loading pre-saved corpus for {model_name}...")
-        data = np.load(f"{model_name}/corpus_{model_name}.npz")
+        data = np.load(f"{project_root}/{model_name}/corpus_{model_name}.npz")
         patches_np = data['patches'].astype(np.float32)[:corpus_size]
         targets_np = data['targets'].astype(np.float32)[:corpus_size]
         conds_np = data['conds'].astype(np.float32)[:corpus_size]
@@ -157,7 +157,7 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
         # ==========================================================================
         # 1. LOAD DATA
         # ==========================================================================
-        sample_paths = sorted(glob.glob(f"{model_name}/temp_pid_*/sample_*.npz"))
+        sample_paths = sorted(glob.glob(f"{project_root}/{model_name}/temp_pid_*/sample_*.npz"))
         if not sample_paths:
             print("Error: no samples found in temp_pid_* folders.")
             return
@@ -186,7 +186,7 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
         print(f"Loaded dataset: {patches_np.shape[0]} samples of size ({patch_h}, {patch_w})")
 
         # Save corpus for later reuse
-        np.savez(f"{model_name}/corpus_{model_name}.npz", patches=patches_np, targets=targets_np, conds=conds_np)
+        np.savez(f"{project_root}/{model_name}/corpus_{model_name}.npz", patches=patches_np, targets=targets_np, conds=conds_np)
 
         max_samples = 1000
         patches_np = patches_np[:max_samples]
@@ -207,7 +207,7 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
         plt.hist(sf_tx_ty[:,2], bins=20)
         plt.title("Translation Y Histogram")
         plt.tight_layout()
-        plt.savefig(f"overfit_results/{model_name}__{corpus_size}_overfit_data_histograms.png")
+        plt.savefig(f"{project_root}/overfit_results/{model_name}__{corpus_size}_overfit_data_histograms.png")
         plt.close()
 
         # create 3d scatter plot for target positions
@@ -219,7 +219,7 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
         ax.set_ylabel('Y')
         ax.set_zlabel('Z')
         ax.set_title('Target Position Scatter Plot')
-        plt.savefig(f"overfit_results/{model_name}__{corpus_size}_overfit_data_scatter.png")
+        plt.savefig(f"{project_root}/overfit_results/{model_name}__{corpus_size}_overfit_data_scatter.png")
         plt.close()
 
     # ==========================================================================
@@ -232,12 +232,19 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
     print(f"Number of batches per epoch: {len(dataloader)}")
 
     # B. Frontnet (The Critic/Victim)
-    frontnet_path = os.path.join(project_root, "pulp-frontnet/PyTorch/Models/Frontnet160x32.pt")
-    frontnet = load_model(frontnet_path, device, config="160x32")
-    frontnet.eval()
-    # Freeze Frontnet completely (we only want gradients to flow through it to the patch)
-    for p in frontnet.parameters():
-        p.requires_grad = False
+    if model_name == 'frontnet':
+        frontnet_path = os.path.join(project_root, "pulp-frontnet/PyTorch/Models/Frontnet160x32.pt")
+        frontnet = load_model(frontnet_path, device, config="160x32")
+        frontnet.eval()
+        # Freeze Frontnet completely (we only want gradients to flow through it to the patch)
+        for p in frontnet.parameters():
+            p.requires_grad = False
+    if model_name == 'yolov5':
+        from yolo_bounding import YOLOBox
+        yolo = YOLOBox()
+        yolo.model.eval()
+        for p in yolo.model.parameters():
+            p.requires_grad = False
 
     # C. Background Images (For Projection)
     # data_path = os.path.join(project_root, "pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle")
@@ -321,6 +328,9 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
                     [0., sf, ty],
                     [0., 0., 1.]
                 ], dtype=torch.float32, device=device)
+
+                if model_name == 'yolov5':
+                    img = torch.nn.functional.interpolate(img, size=(320, 640), mode='bilinear', align_corners=False)
                 
                 # Project patch onto image
                 manipulated_img = project_patch(patch_normalized, T.unsqueeze(0), img.unsqueeze(0))  # (1, C, H, W)
@@ -329,29 +339,39 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
             
             manipulated_images = torch.stack(manipulated_images, dim=0)  # (B, C, 1, H, W)
             manipulated_images = manipulated_images.squeeze(2)  # (B, C, H, W)
+            if model_name == 'yolov5':
+                manipulated_images = manipulated_images.repeat_interleave(3, dim=1)  # (B, 3, H, W)
             manipulated_images = torch.clamp(manipulated_images, 0., 1.)
             # add gaussian noise to manipulated images
             manipulated_images = manipulated_images + torch.randn_like(manipulated_images) * 0.01
             # print("Manipulated images min/max:", manipulated_images.min().item(), manipulated_images.max().item(), manipulated_images.shape) # (B, C, H, W)
-            # E. Frontnet Prediction on Manipulated Images
-            x, y, z, yaw = frontnet(manipulated_images*255.)
-            # print("x, y, z, yaw:", x, y, z, yaw)
-            prediction = torch.stack([x, y, z, yaw])
-            prediction = prediction.squeeze(2).mT
-            # print("Prediction from model:", prediction)
+            
 
-            # F. Control Loss (MSE between prediction and target)
             target_positions = batch_conds[:, 3:7]  # (B, 4)
-            # print("Target positions:", target_positions)
-            # control_loss = F.mse_loss(prediction[:, :3], target_positions[:, :3])
-            # print("Control loss:", control_loss.item())
-            x_loss = F.mse_loss(prediction[:, 0], target_positions[:, 0])
-            y_loss = F.mse_loss(prediction[:, 1], target_positions[:, 1])
-            z_loss = F.mse_loss(prediction[:, 2], target_positions[:, 2])
+            # E. Frontnet Prediction on Manipulated Images
+            if model_name == 'frontnet':
+                x, y, z, yaw = frontnet(manipulated_images*255.)
+                # print("x, y, z, yaw:", x, y, z, yaw)
+                prediction = torch.stack([x, y, z, yaw])
+                prediction = prediction.squeeze(2).mT
+                x_loss = F.mse_loss(prediction[:, 0], target_positions[:, 0])
+                y_loss = F.mse_loss(prediction[:, 1], target_positions[:, 1])
+                z_loss = F.mse_loss(prediction[:, 2], target_positions[:, 2])
 
-            dist_loss = x_loss + y_loss + (10.0 * z_loss)
-            ang_loss = (1 - torch.cos(normalize_yaw_t(prediction[:, 3]) - normalize_yaw_t(target_positions[:, 3]))).mean()
-            control_loss = dist_loss + ang_loss
+                dist_loss = x_loss + y_loss + (10.0 * z_loss)
+                ang_loss = (1 - torch.cos(normalize_yaw_t(prediction[:, 3]) - normalize_yaw_t(target_positions[:, 3]))).mean()
+                control_loss = dist_loss + ang_loss
+
+            if model_name == 'yolov5':
+                predicted_boxes, _ = yolo(manipulated_images, target_anchor=None)
+                scaled_box = predicted_boxes.clone()
+                # scale back to 160x96
+                scaled_box[:, [0, 2]] *= (160.0 / 640.)  # x coords
+                scaled_box[:, [1, 3]] *= (96.0 / 320.)   # y coords
+
+                prediction = yolo.cam.batch_xyz_from_boxes(scaled_box)
+                control_loss = F.mse_loss(prediction[:, :3], target_positions[:, :3])
+           
 
             all_control_losses.append(control_loss.item())
             all_recon_losses.append(reconstruction_loss.item())
@@ -388,10 +408,10 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
     plt.ylabel('Loss')
     plt.legend()
     plt.tight_layout()
-    plt.savefig(f"overfit_results/loss_curves_{model_name}_{corpus_size}.png")
+    plt.savefig(f"{project_root}/overfit_results/loss_curves_{model_name}_{corpus_size}.png")
     plt.close()
 
-    np.savez(f"overfit_results/loss_values_{model_name}_{corpus_size}.npz",
+    np.savez(f"{project_root}/overfit_results/loss_values_{model_name}_{corpus_size}.npz",
              total_loss=np.array(all_losses),
              recon_loss=np.array(all_recon_losses),
              control_loss=np.array(all_control_losses),
@@ -404,8 +424,8 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
     # ==========================================================================
     print("Training done. Generating samples...")
     model_wrapper.model.eval()
-    os.makedirs("overfit_results", exist_ok=True)
-    torch.save(model_wrapper.model.state_dict(), f"overfit_results/diffusion_model_{model_name}_{corpus_size}.pth")
+    os.makedirs(f"{project_root}/overfit_results", exist_ok=True)
+    torch.save(model_wrapper.model.state_dict(), f"{project_root}/overfit_results/diffusion_model_{model_name}_{corpus_size}.pth")
 
     all_psnr = []
     
@@ -421,10 +441,10 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
             # Sample (n_samples, 1, 45, 80)
             samples = model_wrapper.sample(n_samples=n_samples, targets=test_cond, device=device, n_steps=25)
             samples_np = samples.detach().cpu().numpy() # [0, 1] range
-            print(samples_np.shape, samples_np.min(), samples_np.max())
+            # print(samples_np.shape, samples_np.min(), samples_np.max())
 
             # Visualize
-            fig, ax = plt.subplots(1, n_samples + 1, figsize=(12, 3))
+            fig, ax = plt.subplots(1, n_samples + 1, figsize=(12, 4))
             
             # GT (denormalize from [-1, 1] to [0, 1] for display)
             gt_patch = (dataset.patches[idx, 0].cpu().numpy() + 1.0) / 2.0
@@ -441,12 +461,12 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
             all_psnr.append(mean_psnr)
             
             plt.tight_layout()
-            plt.savefig(f"overfit_results/result_{model_name}_{corpus_size}_{idx}.png")
+            plt.savefig(f"{project_root}/overfit_results/result_{model_name}_{corpus_size}_{idx}.png")
             plt.close()
 
     all_psnr = np.array(all_psnr)
     print(f"Overall Mean PSNR: {all_psnr.mean():.2f} dB")
-    np.save(f"overfit_results/psnr_scores_{model_name}_{corpus_size}.npy", all_psnr)
+    np.save(f"{project_root}/overfit_results/psnr_scores_{model_name}_{corpus_size}.npy", all_psnr)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
