@@ -486,22 +486,22 @@ class DiffusionModel():
         self.patch_size = patch_size
         self.model = UNet(in_size=self.in_size, out_size=self.out_size, num_layers=3, patch_size=self.patch_size, device=self.device).to(device)
 
-        self.prediction_model_name = prediction_model_name
-        if self.prediction_model_name == 'yolov5':
-            from yolo_bounding import YOLOBox
-            self.prediction_model = YOLOBox()
-            self.batch_size = 8
+        # self.prediction_model_name = prediction_model_name
+        # if self.prediction_model_name == 'yolov5':
+        #     from yolo_bounding import YOLOBox
+        #     self.prediction_model = YOLOBox()
+        #     self.batch_size = 8
         
-        elif self.prediction_model_name == 'frontnet':
-            self.prediction_model = load_model(f"{project_root}/pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", device, config="160x32")
-            self.prediction_model.eval()
-            self.batch_size = 128
+        # elif self.prediction_model_name == 'frontnet':
+        #     self.prediction_model = load_model(f"{project_root}/pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", device, config="160x32")
+        #     self.prediction_model.eval()
+        #     self.batch_size = 128
 
-        for param in self.prediction_model.parameters():
-            param.requires_grad = False
+        # for param in self.prediction_model.parameters():
+        #     param.requires_grad = False
 
-        self.train_set = load_dataset(f"{project_root}/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle", batch_size = self.batch_size, shuffle = True, drop_last = True, num_workers = 1, train=True, train_set_size=0.9, IMRC=True)
-        self.test_set = load_dataset(f"{project_root}/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle", batch_size = self.batch_size, shuffle = True, drop_last = True, num_workers = 1, train=False, train_set_size=0.9, IMRC=True)
+        # self.train_set = load_dataset(f"{project_root}/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle", batch_size = self.batch_size, shuffle = True, drop_last = True, num_workers = 1, train=True, train_set_size=0.9, IMRC=True)
+        # self.test_set = load_dataset(f"{project_root}/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle", batch_size = self.batch_size, shuffle = True, drop_last = True, num_workers = 1, train=False, train_set_size=0.9, IMRC=True)
 
     def denoised_prediction(self, x, conditioning, sigma):
         c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
