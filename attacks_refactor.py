@@ -27,12 +27,14 @@ def _perspective_grid(coeffs, w, h, ow, oh, dtype, device):
     return output_grid1.div_(output_grid2).sub_(1.0).view(batch_size, oh, ow, 2)
 
 def project_patch(patches, T_matrices, images):
+    """Differentiable projection of patches onto images."""
     device = patches.device
     batch_size, _, p_height, p_width = patches.shape
     i_height, i_width = images.shape[-2:]
     
     inv_T = torch.inverse(T_matrices)
     coeffs = inv_T.reshape(batch_size, -1)
+    
     grids = _perspective_grid(coeffs, p_width, p_height, i_width, i_height, torch.float32, device)
     
     transformed_patches = F.grid_sample(patches, grids, align_corners=False, padding_mode='zeros')
@@ -41,11 +43,11 @@ def project_patch(patches, T_matrices, images):
     
     return images * (1 - transformed_masks) + transformed_patches
 
-# --- SHARED POSE CALCULATION ---
+# --- Pose Calculation Helper (Shared) ---
 def get_pose_from_prediction(model_wrapper, image, current_drone_pose, cam_params):
     """
     Standardized logic to go from (Image) -> (Model Output) -> (World Pose).
-    Used by BOTH the Optimizer and the Simulation Loop.
+    Used by BOTH the Optimizer (for loss) and the Simulation Loop (for control).
     """
     device = current_drone_pose.device
     
@@ -58,8 +60,7 @@ def get_pose_from_prediction(model_wrapper, image, current_drone_pose, cam_param
         T_pred_drone = T_matrix(pred_raw[0])
         T_pred_world = T_drone @ T_pred_drone
         
-        # Yaw logic: Frontnet predicts absolute yaw relative to start, 
-        # so we calculate the heading vector based on prediction.
+        # Yaw logic: Frontnet predicts relative yaw, calculate heading vector
         target_yaw = normalize_yaw(pred_raw[0, 3])
         T_dir = torch.eye(4, device=device)
         T_dir[:3, 3] = calc_heading_vec(1.0, normalize_yaw(target_yaw - torch.pi), device).squeeze()
@@ -67,7 +68,7 @@ def get_pose_from_prediction(model_wrapper, image, current_drone_pose, cam_param
         T_setpoint = T_dir @ T_pred_world
         final_yaw = target_yaw
         
-    # 2. YOLO Logic (The Fix)
+    # 2. YOLO Logic
     elif model_wrapper.name == 'yolov5':
         # Output: Boxes
         boxes, _ = model_wrapper.predict(image)
@@ -76,7 +77,7 @@ def get_pose_from_prediction(model_wrapper, image, current_drone_pose, cam_param
             # Fallback if detection lost (stay in place)
             return current_drone_pose 
 
-        # Scale 640 -> 160 metric
+        # Scale 640 -> 160 metric (Intrinsics match 160x96)
         scaled_boxes = boxes.clone()
         scaled_boxes[:, [0, 2]] *= (160.0 / 640.0)
         scaled_boxes[:, [1, 3]] *= (96.0 / 320.0)
@@ -114,10 +115,12 @@ class Attacker:
         self.patch_size = (150, 320) if args.model == 'yolov5' else (45, 80)
         self.last_patch = None
         
+        # Load Diffusion/Corpus models
         if self.mode == 'diffusion':
             from diffusion.diffusion_model import DiffusionModel
             self.diff_model = DiffusionModel(device=device, patch_size=self.patch_size, prediction_model_name=args.model)
-            self.diff_model.load(f"overfit_results/diffusion_model_{args.model}_1000.pth")
+            weight_path = f"overfit_results/diffusion_model_{args.model}_1000.pth"
+            self.diff_model.load(weight_path)
             self.diff_model.model.eval()
             
         if self.mode in ['corpus', 'interpolation']:
@@ -128,18 +131,21 @@ class Attacker:
             self.corpus_patches = (self.corpus_patches - self.corpus_patches.min()) / (self.corpus_patches.max() - self.corpus_patches.min())
 
     def generate(self, base_img, T, drone_pose, target_pose):
-        """Generates patch. If optimal, runs the optimization loop."""
-        
-        # 1. Optimization Loop
-        if self.mode in ['optimal', 'velo', 'timeout']:
+        """
+        Generates and returns the patch.
+        If mode is 'optimal', runs the optimization loop here.
+        """
+        # 1. No Patch Mode (Clean)
+        if self.mode == 'none':
+            return None
+
+        # 2. Optimization Loop
+        if self.mode in ['velo', 'timeout']:
             return self._optimize(base_img, T, drone_pose, target_pose)
 
-        # 2. Generative / Baseline
+        # 3. Generative / Baseline (Single Step)
         patch = self._get_static_patch(T, target_pose)
-        
-        # 3. Project
-        manipulated = project_patch(patch, T.unsqueeze(0), base_img)
-        return manipulated.clamp(0., 1.), patch
+        return patch
 
     def _get_static_patch(self, T, target_pose):
         if self.mode == 'black': return torch.zeros((1, 1, *self.patch_size), device=self.device)
@@ -148,50 +154,56 @@ class Attacker:
 
         if self.mode in ['diffusion', 'corpus', 'interpolation']:
             sf, tx, ty = T[0,0], T[0,2], T[1,2]
-            # Construct cond: [sf, tx, ty, x, y, z, yaw] (Relative to drone)
-            # Simplified: assuming target_pose passed is the relative one, or calculate here
-            # For now, just using random to prevent crash if logic not perfectly matched
             cond = torch.tensor([[sf, tx, ty, *target_pose]], device=self.device) 
             
             if self.mode == 'diffusion':
-                with torch.no_grad(): return self.diff_model.sample(1, cond, self.device, n_steps=50)
+                with torch.no_grad(): 
+                    return self.diff_model.sample(1, cond, self.device, n_steps=50)
             if self.mode == 'corpus':
                 dists = torch.norm(self.corpus_conds - cond, dim=1)
                 return self.corpus_patches[torch.argmin(dists)].unsqueeze(0).unsqueeze(0)
 
         return torch.rand((1, 1, *self.patch_size), device=self.device)
 
-    def _optimize(self, base_img, T, drone_pose, target_pose):
-        """The Optimization Loop."""
-        
-        # Initialize
+    def _optimize(self, base_img, T, drone_pose, target_pose, max_iters=3000):
+        """
+        The Optimization Loop. 
+        Minimizes distance between (Drone's Perceived Pose) and (Target Pose).
+        """
+        # Initialize patch
         if self.args.temperature == 'warm' and self.last_patch is not None:
             patch = self.last_patch.clone().detach().requires_grad_(True)
         else:
             patch = torch.rand((1, 1, *self.patch_size), device=self.device, requires_grad=True)
             
         opt = torch.optim.Adam([patch], lr=0.03)
-        scheduler = torch.optim.lr_scheduler.LinearLR(opt, start_factor=1e-2, end_factor=1., total_iters=300)
+        scheduler = torch.optim.lr_scheduler.LinearLR(opt, start_factor=1e-2, end_factor=1., total_iters=max_iters//10)
+
         
-        timeout = 1.0 / self.args.timeout if self.args.timeout else 10.0
+        timeout = 1.0 / self.args.timeout if self.args.timeout else 30.0
         start_t = time.time()
         
         best_patch = patch.detach().clone()
         best_dist = float('inf')
 
-        for _ in range(100): # Max iters
+        # Optimization Loop
+        for _ in range(max_iters): 
             if time.time() - start_t > timeout: break
             opt.zero_grad()
             
-            # Project
+            # 1. Project
             manipulated = project_patch(patch, T.unsqueeze(0), base_img).clamp(0, 1)
             
-            # Predict (Using shared logic)
-            # This returns the World Pose the drone WOULD see
+            # 2. Predict (Get World Pose)
+            # We use the SHARED logic so the optimizer minimizes the EXACT metric used for control
             pred_pose = get_pose_from_prediction(self.model, manipulated, drone_pose, self.cam_params)
             
-            # Loss: Distance between (Perceived Pose) and (Target Pose)
-            # We want the drone to think it is at 'target_pose'
+            # 3. Loss (Targeting)
+            # We want the drone to think it is at 'target_pose' (Kidnapping)
+            # or we want it to think it is somewhere else? 
+            # In 'optimal' mode as requested: "current point of target_trajectory is predicted"
+            # This implies Loss = Dist(Predicted, Target)
+            
             dist = torch.dist(pred_pose[:3], target_pose[:3])
             ang_loss = 1 - torch.cos(normalize_yaw(pred_pose[3]) - normalize_yaw(target_pose[3]))
             
@@ -208,7 +220,4 @@ class Attacker:
             scheduler.step()
             
         self.last_patch = best_patch
-        
-        # Return final projected image and best patch
-        final_proj = project_patch(best_patch, T.unsqueeze(0), base_img).clamp(0, 1)
-        return final_proj, best_patch
+        return best_patch

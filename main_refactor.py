@@ -3,12 +3,13 @@ import torch.nn.functional as F
 import numpy as np
 import argparse
 import os
+import time
 from pathlib import Path
 from tqdm import tqdm
 
 # Local Imports
 from simulation import DroneSimulation
-from attacks import Attacker, get_pose_from_prediction
+from attacks import Attacker, project_patch, get_pose_from_prediction
 from util import load_dataset, load_model, gen_target_trajectory 
 from yolo_bounding import YOLOBox 
 
@@ -31,7 +32,7 @@ class ModelWrapper:
         elif self.name == 'yolov5':
             img_resize = F.interpolate(image, size=(320, 640), mode='bilinear', align_corners=False)
             img_resize = img_resize.repeat_interleave(3, dim=1)
-            return self.model(img_resize, target_anchor=None) # No ghost anchor needed
+            return self.model(img_resize, target_anchor=None) 
 
 def run_experiment(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -39,7 +40,6 @@ def run_experiment(args):
     # 1. Setup
     sim = DroneSimulation(device, display_size_inch=args.display_size)
     model = ModelWrapper(args.model, device)
-    # Pass cam params (sim.cam) to attacker for the shared pose logic
     attacker = Attacker(args, model, device, sim.cam) 
     
     dataset = load_dataset(f"{project_root}/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle", batch_size=1, shuffle=False, train=True, IMRC=True)
@@ -47,96 +47,86 @@ def run_experiment(args):
     
     if args.pic_mode == 'image':
         output_dir = Path(f'{project_root}/paper_results/{args.model}/{args.patch_mode}/{args.trajectory}/{args.display_size}/image_{args.img_idx}/{args.seed}')
-    if args.pic_mode == 'random':
+    else: # random
         output_dir = Path(f'{project_root}/paper_results/{args.model}/{args.patch_mode}/{args.trajectory}/{args.display_size}/random/{args.seed}')
     output_dir.mkdir(parents=True, exist_ok=True)
     
     history_pose = []
+    time_per_step = []
     target_idx = 1
+    dt = 1.0 / args.timeout if args.timeout else 1/30.0
 
-    dt = 1 / args.timeout  # Simulation timestep
-
-    time_per_steps = []
-    
     # 2. Main Loop
     with tqdm(total=len(target_traj)) as pbar:
         while target_idx < len(target_traj) - 1:
-            start_time = time.time()
+            step_start = time.time()
             target_pose = target_traj[target_idx]
             
             # A. Check Target Status
             dist = torch.dist(sim.pose[:3], target_pose[:3])
             if dist < 0.05:
-                # print("Target reached.")
                 target_idx += 1; pbar.update(1); continue
             if dist > 1.5:
-                # print("Target too far, skipping.")
                 target_idx += 1; pbar.update(1); continue
                 
-            # B. Get Image & Geometry
+            # B. Get Background Image
             img_idx = np.random.randint(len(dataset)) if args.pic_mode == 'random' else args.img_idx
             base_img = dataset.dataset[img_idx][0].to(device).unsqueeze(0) / 255.0
             
+            # C. Check Geometry
             patch_size = (150, 320) if args.model == 'yolov5' else (45, 80)
             img_size = (320, 640) if args.model == 'yolov5' else (96, 160)
-            
             T, _, is_visible = sim.get_view_geometry(patch_size, img_size)
             
-            if not is_visible:
-                # Monitor not visible, just fly normally towards target
-                # (Use un-attacked image logic or skip?)
-                # Monolith skipped. Let's skip to keep behavior.
-                target_idx += 1
-                continue
+            # D. Generate & Apply Attack
+            patch = None
+            manipulated_img = base_img
+            
+            # 'none' mode: skip all generation logic, just use base image
+            if args.patch_mode == 'none' or args.patch_mode == 'optimal':
+                pass
+            # standard modes: check visibility first
+            elif not is_visible:
+                # Monitor not visible, cannot attack -> fly on clean image
+                pass 
+            else:
+                # Generate Patch (Optimization or Diffusion happens inside here)
+                patch = attacker.generate(base_img, T, sim.pose, target_pose)
+                if patch is not None:
+                    manipulated_img = project_patch(patch, T.unsqueeze(0), base_img).clamp(0, 1)
 
-            # C. Generate Attack
-            # Returns manipulated image and patch
-            # Note: The optimization loop is now fully inside generate()
-            attacked_img, patch = attacker.generate(base_img, T, sim.pose, target_pose)
+            # E. Perception (What does the drone see?)
+            # Use the SHARED logic from attacks.py to get consistent World Pose
+            if args.patch_mode == 'optimal':
+                # Simulating attacker 'predicts' the optimal == target pose
+                perceived_pose = target_pose
+            else:
+                perceived_pose = get_pose_from_prediction(model, manipulated_img, sim.pose, sim.cam)
             
-            # D. Perception (What does the drone see?)
-            # Uses the exact same logic as the optimizer to calculate world pose
-            perceived_pose = get_pose_from_prediction(model, attacked_img, sim.pose, sim.cam)
+            # F. Control (Fly based on Perceived Pose vs Target Pose)
+            # The drone *thinks* it is at 'perceived_pose'. It wants to go to 'target_pose'.
+            # Note: For 'optimal' attack, perceived_pose should be close to target_pose, so velocity -> 0.
             
-            # E. Control (Fly based on Perception)
-            # The drone thinks it is at 'perceived_pose'. It wants to go to 'target_pose'.
-            # wait, monolith logic: controller.step(current=sim.pose, target=prediction)
-            # Frontnet predicts the RELATIVE target. 
-            # If perceived_pose is the "Target World Pose predicted by Frontnet", 
-            # then we want to fly to perceived_pose.
+            # Construct state vector for controller (XYZ + Yaw)
+            current_state_for_control = torch.cat([sim.pose[:3], perceived_pose[3].unsqueeze(0)])
             
-            # Let's align with monolith: "best_setpoint = prediction"
-            # "prediction = controller.step(current, target=prediction)"
+            # Step Controller
+            _, vel_cmd = sim.controller.step(current_state_for_control, perceived_pose, dt=dt)
             
-            # Logic:
-            # 1. Neural Net predicts where I should be (Setpoint).
-            # 2. I am at sim.pose.
-            # 3. Error = Setpoint - Me.
-            
-            # Current State for controller needs yaw too
-            current_state_full = torch.cat([sim.pose[:3], perceived_pose[3].unsqueeze(0)])
-            
-            # Step controller
-            _, vel_cmd = sim.controller.step(current_state_full, perceived_pose, dt=dt)
-            
-            # Apply to Physics
+            # Update Real Physics
             sim.update_physics(vel_cmd, dt=dt)
             
-            # F. Log
+            # G. Log
             history_pose.append(sim.pose.cpu().numpy())
+            step_end = time.time()
+            time_per_step.append(step_end - step_start)
             
-            # Save periodic debug
             if len(history_pose) % 50 == 0:
                 np.save(output_dir / "all_drone_poses.npy", np.array(history_pose))
 
-            end_time = time.time()
-            print(f"Total Simulation Time: {end_time - start_time:.2f} seconds")
-            time_per_steps.append((end_time - start_time))
-
     np.save(output_dir / "all_drone_poses.npy", np.array(history_pose))
-    # print(f"Average Time per Step: {np.mean(time_per_steps):.2f} seconds")
-    np.save(output_dir / "time_per_step.npy", np.array(time_per_steps))
-    print("Experiment Complete.")
+    np.save(output_dir / "time_per_step.npy", np.array(time_per_step))
+    print(f"Done. Mean time per step: {np.mean(time_per_step):.4f}s")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
