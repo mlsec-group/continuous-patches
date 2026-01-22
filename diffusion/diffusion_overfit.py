@@ -371,6 +371,7 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
 
                 prediction = yolo.cam.batch_xyz_from_boxes(scaled_box)
                 control_loss = F.mse_loss(prediction[:, :3], target_positions[:, :3])
+                control_loss = control_loss * 20.
            
 
             all_control_losses.append(control_loss.item())
