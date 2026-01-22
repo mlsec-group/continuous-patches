@@ -6,10 +6,11 @@ import os
 import time
 from pathlib import Path
 from tqdm import tqdm
+from matplotlib import pyplot as plt
 
 # Local Imports
-from simulation import DroneSimulation
-from attacks import Attacker, project_patch, get_pose_from_prediction
+from simulation_refactor import DroneSimulation
+from attacks_refactor import Attacker, project_patch, get_pose_from_prediction
 from util import load_dataset, load_model, gen_target_trajectory 
 from yolo_bounding import YOLOBox 
 
@@ -28,10 +29,10 @@ class ModelWrapper:
     def predict(self, image):
         if self.name == 'frontnet':
             x, y, z, yaw = self.model(image * 255.)
-            return torch.stack([x, y, z, yaw], dim=1).squeeze(2).mT
+            return torch.stack([x, y, z, yaw]).squeeze(2).mT
         elif self.name == 'yolov5':
-            img_resize = F.interpolate(image, size=(320, 640), mode='bilinear', align_corners=False)
-            img_resize = img_resize.repeat_interleave(3, dim=1)
+            #img_resize = F.interpolate(image, size=(320, 640), mode='bilinear', align_corners=False)
+            img_resize = image.repeat_interleave(3, dim=1)
             return self.model(img_resize, target_anchor=None) 
 
 def run_experiment(args):
@@ -44,8 +45,10 @@ def run_experiment(args):
     
     dataset = load_dataset(f"{project_root}/pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle", batch_size=1, shuffle=False, train=True, IMRC=True)
     target_traj = gen_target_trajectory(args.trajectory).to(device)
+
+    sim.pose = target_traj[0].clone().detach()
     
-    if args.pic_mode == 'image':
+    if args.pic_mode == 'idx':
         output_dir = Path(f'{project_root}/paper_results/{args.model}/{args.patch_mode}/{args.trajectory}/{args.display_size}/image_{args.img_idx}/{args.seed}')
     else: # random
         output_dir = Path(f'{project_root}/paper_results/{args.model}/{args.patch_mode}/{args.trajectory}/{args.display_size}/random/{args.seed}')
@@ -54,10 +57,13 @@ def run_experiment(args):
     history_pose = []
     time_per_step = []
     target_idx = 1
-    dt = 1.0 / args.timeout if args.timeout else 1/30.0
+    dt = 1.0 / args.timeout if args.timeout else 1/10.0
+    print(f"Using dt={dt:.4f}s based on timeout={args.timeout}")
 
     patch_size = (150, 320) if args.model == 'yolov5' else (45, 80)
     img_size = (320, 640) if args.model == 'yolov5' else (96, 160)
+
+    optim_step = 0
 
     # 2. Main Loop
     with tqdm(total=len(target_traj)) as pbar:
@@ -67,10 +73,17 @@ def run_experiment(args):
             
             # A. Check Target Status
             dist = torch.dist(sim.pose[:3], target_pose[:3])
+            # print(f"Step {optim_step}: Target idx {target_idx}, Distance to target: {dist:.4f}m")
+            # print("Current Pose: ", sim.pose.cpu().numpy())
+            # print("Target Pose: ", target_pose.cpu().numpy())
             if dist < 0.05:
-                target_idx += 1; pbar.update(1); continue
+                target_idx += 1 
+                pbar.update(1)
+                continue
             if dist > 1.5:
-                target_idx += 1; pbar.update(1); continue
+                target_idx += 1
+                pbar.update(1)
+                continue
                 
             # B. Get Background Image
             img_idx = np.random.randint(len(dataset)) if args.pic_mode == 'random' else args.img_idx
@@ -93,6 +106,9 @@ def run_experiment(args):
             else:
                 # Generate Patch (Optimization or Diffusion happens inside here)
                 patch = attacker.generate(base_img, T, sim.pose, target_pose)
+                if args.model == 'yolov5':
+                    base_img = F.interpolate(base_img, size=(320, 640), mode='bilinear', align_corners=False)
+                    manipulated_img = base_img.clone()
                 if patch is not None:
                     manipulated_img = project_patch(patch, T.unsqueeze(0), base_img).clamp(0, 1)
 
@@ -105,9 +121,6 @@ def run_experiment(args):
                 perceived_pose = get_pose_from_prediction(model, manipulated_img, sim.pose, sim.cam)
             
             # F. Control (Fly based on Perceived Pose vs Target Pose)
-            # The drone *thinks* it is at 'perceived_pose'. It wants to go to 'target_pose'.
-            # Note: For 'optimal' attack, perceived_pose should be close to target_pose, so velocity -> 0.
-            
             # Construct state vector for controller (XYZ + Yaw)
             current_state_for_control = torch.cat([sim.pose[:3], perceived_pose[3].unsqueeze(0)])
             
@@ -122,12 +135,11 @@ def run_experiment(args):
             current_pose = sim.pose.cpu().numpy()
             history_pose.append(current_pose)
             time_per_step.append(step_end - step_start)
+            optim_step += 1
 
             # Plot Intermediate Results
             fig, axs = plt.subplots(1, 2)
-            axs[0].imshow(manipulated_img[0, 0].detach().cpu().numpy(), cmap='gray')
-            # plt.plot(monitor_corners[:, 0], monitor_corners[:, 1], 'r--', label='Monitor corners')
-            
+            axs[0].imshow(manipulated_img[0, 0].detach().cpu().numpy(), cmap='gray')            
             # monitor_corners are in format (ul_x, ul_y), (ur_x, ur_y), (ll_x, ll_y), (lr_x, lr_y)
             monitor_corners = monitor_corners.detach().cpu().numpy()
             axs[0].plot([monitor_corners[0, 0], monitor_corners[1, 0]], [monitor_corners[0, 1], monitor_corners[1, 1]], 'r--')  # top edge
@@ -135,8 +147,8 @@ def run_experiment(args):
             axs[0].plot([monitor_corners[1, 0], monitor_corners[3, 0]], [monitor_corners[1, 1], monitor_corners[3, 1]], 'r--')  # right edge
             axs[0].plot([monitor_corners[2, 0], monitor_corners[3, 0]], [monitor_corners[2, 1], monitor_corners[3, 1]], 'r--')  # bottom edge    
 
-            axs[1].plot(target_trajectory[:, 0].detach().cpu().numpy(), target_trajectory[:, 1].detach().cpu().numpy(), 'r--')
-            axs[1].plot(np.array(all_drone_poses)[:, 0], np.array(all_drone_poses)[:, 1])
+            axs[1].plot(target_traj[:, 0].detach().cpu().numpy(), target_traj[:, 1].detach().cpu().numpy(), 'r--')
+            axs[1].plot(np.array(history_pose)[:, 0], np.array(history_pose)[:, 1])
             axs[1].scatter(sim.monitor_world[:, 0].detach().cpu().numpy(), sim.monitor_world[:, 1].detach().cpu().numpy(), c='b', label='Projector corners')
             axs[1].scatter(current_pose[0], current_pose[1], color='black')
             axs[1].arrow(current_pose[0], current_pose[1],
@@ -148,7 +160,7 @@ def run_experiment(args):
             axs[1].set_ylim(-2, 2)
             plt.tight_layout()
 
-            plt.savefig(output_dir / f'optim_step{optim_steps}.png')
+            plt.savefig(output_dir / f'optim_step{optim_step}.png')
             plt.close()
             
             if len(history_pose) % 50 == 0:
@@ -160,16 +172,16 @@ def run_experiment(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('-m', '--model', default='frontnet')
-    parser.add_argument('-t', '--trajectory', default='figure8')
-    parser.add_argument('--display_size', type=int, default=60)
-    parser.add_argument('--patch_mode', default='optimal')
-    parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--pic_mode', default='random')
-    parser.add_argument('--img_idx', type=int, default=0)
-    parser.add_argument('--temperature', default='warm')
-    parser.add_argument('--corpus_size', type=int, default=1000)
-    parser.add_argument('--timeout', type=int, default=30)
+    parser.add_argument('-m', '--model', type=str, choices=['frontnet', 'yolov5'], default='frontnet', help='Model to use for prediction')
+    parser.add_argument('-t', '--trajectory', type=str, choices=['figure8', 'square', 'circle', 'line_x', 'line_y', 'diagonal_line', 'triangle', 'c', 's'], default='figure8', help='Target Trajectory')
+    parser.add_argument('--display_size', type=int, default=60, help='Size of the display in pixels (default: 60")')
+    parser.add_argument('--patch_mode', type=str, choices=['none', 'optimal', 'velo', 'timeout', 'black', 'white', 'random', 'fap', 'diffusion', 'interpolation', 'corpus'], default='none', help='Mode to initialize the patch: optimal, timeout, black, white, random')
+    parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
+    parser.add_argument('--pic_mode', type=str, choices=['random', 'idx'], default='idx', help='Mode to select image: random or specific index')
+    parser.add_argument('--img_idx', type=int, default=0, help='Index of the image to use from the dataset')
+    parser.add_argument('--temperature', type=str, choices=['warm', 'cold', 'none'], default='cold', help='Either restart from random patch (cold) or from the last patch (warm)')
+    parser.add_argument('--corpus_size', type=int, choices=[1000, 2000, 3000], default=1000, help='Number of patches in the corpus (only for corpus/interpolation/diffusion patch mode)')
+    parser.add_argument('--timeout', type=int, default=None)
     
     args = parser.parse_args()
     run_experiment(args)

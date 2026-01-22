@@ -3,7 +3,10 @@ import torch.nn.functional as F
 import numpy as np
 import time
 import pickle
-from simulation import T_matrix, normalize_yaw, calc_heading_vec
+from simulation_refactor import T_matrix, normalize_yaw, calc_heading_vec
+import os
+
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '.'))
 
 # --- Differentiable Grid Sample ---
 def _perspective_grid(coeffs, w, h, ow, oh, dtype, device):
@@ -54,7 +57,7 @@ def get_pose_from_prediction(model_wrapper, image, current_drone_pose, cam_param
     # 1. Frontnet Logic
     if model_wrapper.name == 'frontnet':
         # Output: (B, 4) -> x, y, z, yaw
-        pred_raw = model_wrapper.predict(image) 
+        pred_raw = model_wrapper.predict(image)
         
         T_drone = T_matrix(current_drone_pose)
         T_pred_drone = T_matrix(pred_raw[0])
@@ -119,12 +122,12 @@ class Attacker:
         if self.mode == 'diffusion':
             from diffusion.diffusion_model import DiffusionModel
             self.diff_model = DiffusionModel(device=device, patch_size=self.patch_size, prediction_model_name=args.model)
-            weight_path = f"overfit_results/diffusion_model_{args.model}_1000.pth"
+            weight_path = f"{project_root}/overfit_results/diffusion_model_{args.model}_1000.pth"
             self.diff_model.load(weight_path)
             self.diff_model.model.eval()
             
         if self.mode in ['corpus', 'interpolation']:
-            with open(f"diffusion/{args.model}{args.corpus_size//1000}k.pickle", "rb") as f:
+            with open(f"{project_root}/diffusion/{args.model}{args.corpus_size//1000}k.pickle", "rb") as f:
                 data = pickle.load(f)
             self.corpus_patches = torch.tensor([d[0] for d in data], device=device, dtype=torch.float32)
             self.corpus_conds = torch.tensor([np.concatenate([d[2], d[1]]) for d in data], device=device, dtype=torch.float32)
@@ -180,7 +183,8 @@ class Attacker:
         scheduler = torch.optim.lr_scheduler.LinearLR(opt, start_factor=1e-2, end_factor=1., total_iters=max_iters//10)
 
         
-        timeout = 1.0 / self.args.timeout if self.args.timeout else 30.0
+        timeout = 1.0 / self.args.timeout if self.args.timeout else 1e10
+        # print("Time limit for optimization (s):", timeout)
         start_t = time.time()
         
         best_patch = patch.detach().clone()
@@ -190,14 +194,23 @@ class Attacker:
         for _ in range(max_iters): 
             if time.time() - start_t > timeout: break
             opt.zero_grad()
+
+            if self.model.name == 'yolov5':
+                base_img = torch.nn.functional.interpolate(base_img, size=(320, 640), mode='bilinear', align_corners=False)
             
+            # print("base_img shape: ", base_img.shape, base_img.min(), base_img.max())
+            # print("patch shape: ", patch.shape, patch.min(), patch.max())
+            # print("T shape: ", T)
+
+
             # 1. Project
             manipulated = project_patch(patch, T.unsqueeze(0), base_img).clamp(0, 1)
             
             # 2. Predict (Get World Pose)
             # We use the SHARED logic so the optimizer minimizes the EXACT metric used for control
             pred_pose = get_pose_from_prediction(self.model, manipulated, drone_pose, self.cam_params)
-            
+            # print("pred_pose: ", pred_pose)
+
             # 3. Loss (Targeting)
             # We want the drone to think it is at 'target_pose' (Kidnapping)
             # or we want it to think it is somewhere else? 
@@ -212,12 +225,19 @@ class Attacker:
             if dist < best_dist:
                 best_dist = dist.item()
                 best_patch = patch.detach().clone()
+
+            if dist < 0.01:
+                best_dist = dist.item()
+                best_patch = patch.detach().clone()
+                break
                 
             loss.backward()
             patch.grad = patch.grad.sign()
             opt.step()
             patch.data.clamp_(0., 1.)
             scheduler.step()
+
+            print(f"Optimization Step: Loss={loss.item():.4f}, Pos Error={dist.item():.4f}, Ang Error={ang_loss.item():.4f}", end='\r')
             
         self.last_patch = best_patch
         return best_patch

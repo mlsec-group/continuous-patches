@@ -21,18 +21,18 @@ def calc_heading_vec(radius, angle, device):
 
 def T_matrix(pose):
     """Converts [x, y, z, yaw] to 4x4 Transformation Matrix."""
-    device = pose.device
-    T = torch.eye(4, dtype=torch.float32, device=device)
-    
-    yaw = normalize_yaw(pose[3])
-    c, s = torch.cos(yaw), torch.sin(yaw)
-    
-    R = torch.tensor([
-        [c, -s, 0],
-        [s,  c, 0],
-        [0,  0, 1]
-    ], device=device)
-    
+    T = torch.eye(4, dtype=torch.float32).to(pose.device)
+    normalized_yaw = normalize_yaw(pose[3])
+
+    sin_yaw = torch.sin(normalized_yaw).to(torch.float32)
+    cos_yaw = torch.cos(normalized_yaw).to(torch.float32)
+    zero = torch.zeros_like(sin_yaw, device=pose.device, dtype=torch.float32)
+
+    rotation_matrix_row1 = torch.stack([cos_yaw, -sin_yaw, zero], dim=-1)
+    rotation_matrix_row2 = torch.stack([sin_yaw, cos_yaw, zero], dim=-1)
+    rotation_matrix_row3 = torch.tensor([0., 0., 1.], device=pose.device, dtype=torch.float32)
+    R = torch.stack((rotation_matrix_row1, rotation_matrix_row2, rotation_matrix_row3), dim=0)
+
     T[:3, :3] = R
     T[:3, 3] = pose[:3]
     return T
@@ -141,7 +141,15 @@ class DroneSimulation:
 
         pts_img = pts_img_h[:2, :] / pts_img_h[2, :]
         monitor_corners = pts_img.T # (4, 2)
-        
+
+        # print("monitor_corners: ", monitor_corners)
+
+        if img_size_px[0] > 96. or img_size_px[1] > 160:
+            monitor_corners[:, 0] *= (640.0 / 160.0)  # x coords
+            monitor_corners[:, 1] *= (320.0 / 96.0)   # y coords
+
+        # print("Adjusted monitor_corners: ", monitor_corners)
+
         # Homography
         src_pts = np.array([
             [0., 0.], [patch_size_px[1], 0.], 
@@ -163,6 +171,7 @@ class DroneSimulation:
         return T, monitor_corners, is_valid
 
     def update_physics(self, vel_cmd, dt):
-        self.pose[:3] += vel_cmd[0, :3] * dt
-        self.pose[3] += vel_cmd[0, 3] * dt
+        # print(vel_cmd, dt)
+        self.pose[:3] += vel_cmd[:3].clone().detach() * dt
+        self.pose[3] += vel_cmd[3].clone().detach() * dt
         self.pose[3] = normalize_yaw(self.pose[3])
