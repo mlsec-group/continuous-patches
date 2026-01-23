@@ -235,15 +235,20 @@ def gen_target_trajectory(trajectory, num_steps=25):
         xy_points = np.column_stack([x, y])
 
     elif trajectory == 'slingshot_left':
+        start = np.array([0., 0.])
         point = np.array([0., 3.0])
         xy_points = point.reshape(1, 2).repeat(num_steps, axis=0)
+        xy_points[0] = start
     elif trajectory == 'slingshot_right':
+        start = np.array([0., 0.])
         point = np.array([0., -3.0])
         xy_points = point.reshape(1, 2).repeat(num_steps, axis=0)
+        xy_points[0] = start
     elif trajectory == 'slingshot_forward':
+        start = np.array([0., 0.])
         point = np.array([3.0, 0.])
         xy_points = point.reshape(1, 2).repeat(num_steps, axis=0)
-
+        xy_points[0] = start
 
     else:
         raise ValueError(f"Unknown trajectory type: {trajectory}")

@@ -4,14 +4,14 @@ set -euo pipefail
 #MODELS=("frontnet" "yolov5")
 MODELS=("frontnet")
 # PATCH_MODES=("optimal" "timeout" "random" "black" "white" "fap" "diffusion" "interpolation" "corpus")
-PATCH_MODES=("velo")
-TEMPERATURES=("cold")
-TRAJECTORIES=("figure8" "square" "triangle" "c" "s")
-DISPLAY_SIZES=(60 70 80 90 100)
-CORPUS_SIZES=(1000 2000 3000 4000 5000)
+PATCH_MODES=("none" "black" "random" "diffusion" "timeout" "optimal" "velo")
+TEMPERATURES=("warm" "cold")
+TRAJECTORIES=("figure8" "triangle" "u" "s" "slingshot_left")
+DISPLAY_SIZES=(40 50 60 70 80 90 100 110 120)
+CORPUS_SIZES=(1000)
 PIC_MODES=("idx" "random")
-LOG_DIR="logs"
-TIMEOUT_VALUES=(10 20 30)
+LOG_DIR="logs_frontnet"
+TIMEOUT_VALUES=(10)
 
 mkdir -p "${LOG_DIR}"
 
@@ -30,14 +30,14 @@ for MODEL in "${MODELS[@]}"; do
     if [ "${PATCH_MODE}" = "timeout" ]; then
       TIMEOUT_LIST=("${TIMEOUT_VALUES[@]}")
     else
-      TIMEOUT_LIST=("0")
+      TIMEOUT_LIST=("10")
     fi
 
     # TEMPERATURES based on PATCH_MODE
-    if [ "${PATCH_MODE}" = "optimal" ] || [ "${PATCH_MODE}" = "timeout" ]; then
+    if [ "${PATCH_MODE}" = "velo" ] || [ "${PATCH_MODE}" = "timeout" ]; then
       TEMP_LIST=("${TEMPERATURES[@]}")
     else
-      TEMP_LIST=("cold")
+      TEMP_LIST=("none")
     fi
 
     # CORPUS_SIZE based on PATCH_MODE
@@ -55,12 +55,12 @@ for MODEL in "${MODELS[@]}"; do
               for TEMP in "${TEMP_LIST[@]}"; do
                 if [ "${PIC_MODE}" = "random" ]; then
                   IMG_IDX=0
-                  for SEED in $(seq 0 3); do
+                  for SEED in $(seq 0 2); do
                     echo "${MODEL} ${PATCH_MODE} ${TRAJ} ${DISPLAY_SIZE} ${PIC_MODE} ${IMG_IDX} ${CORPUS_SIZE} ${SEED} ${TIMEOUT} ${TEMP}" >> "${PARAMS_FILE}"
                   done
                 else
                   for IMG_IDX in 1860 4861 5431; do
-                    for SEED in $(seq 0 3); do
+                    for SEED in $(seq 0 2); do
                       echo "${MODEL} ${PATCH_MODE} ${TRAJ} ${DISPLAY_SIZE} ${PIC_MODE} ${IMG_IDX} ${CORPUS_SIZE} ${SEED} ${TIMEOUT} ${TEMP}" >> "${PARAMS_FILE}"
                     done
                   done
@@ -90,9 +90,9 @@ SUBMIT_DIR="$(pwd)"
 sbatch <<EOF
 #!/bin/bash
 #SBATCH --job-name=resubmit
-#SBATCH --partition=gpu-5h
+#SBATCH --partition=gpu-2h
 #SBATCH --gpus-per-node=1
-#SBATCH --exclude=head074
+#SBATCH --constraint="80gb"
 #SBATCH --array=0-$((TOTAL_JOBS-1))%15
 #SBATCH --output=${ABS_LOG_DIR}/slurm_%A_%a.out
 #SBATCH --error=${ABS_LOG_DIR}/slurm_%A_%a.err

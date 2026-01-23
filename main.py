@@ -47,6 +47,7 @@ def run_experiment(args):
     target_traj = gen_target_trajectory(args.trajectory).to(device)
 
     sim.pose = target_traj[0].clone().detach()
+    # print(f"Starting pose: {sim.pose.cpu().numpy()}")
     
     if args.pic_mode == 'idx':
         if args.temperature != 'none':
@@ -62,6 +63,7 @@ def run_experiment(args):
     
     history_pose = []
     time_per_step = []
+    history_vel_cmd = []
     target_idx = 1
     dt = 1.0 / args.timeout if args.timeout else 1/10.0
     print(f"Using dt={dt:.4f}s based on timeout={args.timeout}")
@@ -93,11 +95,19 @@ def run_experiment(args):
             if dist < 0.05:
                 target_idx += 1 
                 pbar.update(1)
+                sim.update_physics(vel_cmd, dt=dt)
                 continue
-            if dist > 1.5:
+            if dist > 1.5 and args.trajectory not in ['slingshot_left', 'slingshot_right', 'slingshot_forward']:
                 target_idx += 1
                 pbar.update(1)
+                sim.update_physics(vel_cmd, dt=dt)
                 continue
+
+            if sim.pose[0] < -2. or sim.pose[0] > 2. or sim.pose[1] < -2. or sim.pose[1] > 2. or sim.pose[2] < 0.1 or sim.pose[2] > 2.:
+                # Out of bounds
+                print("Drone crashed")
+                break
+
                 
             # B. Get Background Image
             img_idx = np.random.randint(len(dataset)) if args.pic_mode == 'random' else args.img_idx
@@ -149,18 +159,21 @@ def run_experiment(args):
             current_pose = sim.pose.cpu().numpy()
             history_pose.append(current_pose)
             time_per_step.append(step_end - step_start)
+            history_vel_cmd.append(vel_cmd.detach().clone().cpu().numpy())
             optim_step += 1
 
             # Plot Intermediate Results
             fig, axs = plt.subplots(1, 2)
             axs[0].imshow(manipulated_img[0, 0].detach().cpu().numpy(), cmap='gray')            
             # monitor_corners are in format (ul_x, ul_y), (ur_x, ur_y), (ll_x, ll_y), (lr_x, lr_y)
-            monitor_corners = monitor_corners.detach().cpu().numpy()
-            axs[0].plot([monitor_corners[0, 0], monitor_corners[1, 0]], [monitor_corners[0, 1], monitor_corners[1, 1]], 'r--')  # top edge
-            axs[0].plot([monitor_corners[0, 0], monitor_corners[2, 0]], [monitor_corners[0, 1], monitor_corners[2, 1]], 'r--')  # left edge
-            axs[0].plot([monitor_corners[1, 0], monitor_corners[3, 0]], [monitor_corners[1, 1], monitor_corners[3, 1]], 'r--')  # right edge
-            axs[0].plot([monitor_corners[2, 0], monitor_corners[3, 0]], [monitor_corners[2, 1], monitor_corners[3, 1]], 'r--')  # bottom edge    
-
+            try:
+                monitor_corners = monitor_corners.detach().cpu().numpy()
+                axs[0].plot([monitor_corners[0, 0], monitor_corners[1, 0]], [monitor_corners[0, 1], monitor_corners[1, 1]], 'r--')  # top edge
+                axs[0].plot([monitor_corners[0, 0], monitor_corners[2, 0]], [monitor_corners[0, 1], monitor_corners[2, 1]], 'r--')  # left edge
+                axs[0].plot([monitor_corners[1, 0], monitor_corners[3, 0]], [monitor_corners[1, 1], monitor_corners[3, 1]], 'r--')  # right edge
+                axs[0].plot([monitor_corners[2, 0], monitor_corners[3, 0]], [monitor_corners[2, 1], monitor_corners[3, 1]], 'r--')  # bottom edge    
+            except:
+                pass
             axs[1].plot(target_traj[:, 0].detach().cpu().numpy(), target_traj[:, 1].detach().cpu().numpy(), 'r--')
             axs[1].plot(np.array(history_pose)[:, 0], np.array(history_pose)[:, 1])
             axs[1].scatter(sim.monitor_world[:, 0].detach().cpu().numpy(), sim.monitor_world[:, 1].detach().cpu().numpy(), c='b', label='Projector corners')
@@ -179,15 +192,18 @@ def run_experiment(args):
             
             if len(history_pose) % 50 == 0:
                 np.save(output_dir / "all_drone_poses.npy", np.array(history_pose))
+                np.save(output_dir / "time_per_step.npy", np.array(time_per_step))
+                np.save(output_dir / "all_velocity_commands.npy", np.array(history_vel_cmd))
 
     np.save(output_dir / "all_drone_poses.npy", np.array(history_pose))
     np.save(output_dir / "time_per_step.npy", np.array(time_per_step))
+    np.save(output_dir / "all_velocity_commands.npy", np.array(history_vel_cmd))
     print(f"Done. Mean time per step: {np.mean(time_per_step):.4f}s")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-m', '--model', type=str, choices=['frontnet', 'yolov5'], default='frontnet', help='Model to use for prediction')
-    parser.add_argument('-t', '--trajectory', type=str, choices=['figure8', 'square', 'circle', 'line_x', 'line_y', 'diagonal_line', 'triangle', 'c', 's'], default='figure8', help='Target Trajectory')
+    parser.add_argument('-t', '--trajectory', type=str, choices=['figure8', 'square', 'circle', 'line_x', 'line_y', 'diagonal_line', 'triangle', 'c', 's', 'u', 'slingshot_left', 'slingshot_right', 'slingshot_forward'], default='figure8', help='Target Trajectory')
     parser.add_argument('--display_size', type=int, default=60, help='Size of the display in pixels (default: 60")')
     parser.add_argument('--patch_mode', type=str, choices=['none', 'optimal', 'velo', 'timeout', 'black', 'white', 'random', 'fap', 'diffusion', 'interpolation', 'corpus'], default='none', help='Mode to initialize the patch: optimal, timeout, black, white, random')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
