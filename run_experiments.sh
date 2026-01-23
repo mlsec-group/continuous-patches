@@ -89,8 +89,8 @@ SUBMIT_DIR="$(pwd)"
 # Submit a single job array (limit concurrency with %50)
 sbatch <<EOF
 #!/bin/bash
-#SBATCH --job-name=resubmit
-#SBATCH --partition=gpu-2h
+#SBATCH --job-name=usenix_frontnet
+#SBATCH --partition=gpu-9m
 #SBATCH --gpus-per-node=1
 #SBATCH --constraint="80gb"
 #SBATCH --array=0-$((TOTAL_JOBS-1))%15
@@ -120,7 +120,7 @@ echo "Starting task \${SLURM_ARRAY_JOB_ID}_\${SLURM_ARRAY_TASK_ID}"
 echo "Params: \${LINE}"
 
 apptainer run --nv /home/piha/container.sif \
-  bash -c "python attack_minimal_single.py \
+  bash -c "python main.py \
     -m "\${MODEL}" \
     -t "\${TRAJ}" \
     --patch_mode "\${PATCH_MODE}" \
@@ -130,21 +130,7 @@ apptainer run --nv /home/piha/container.sif \
     --pic_mode "\${PIC_MODE}" \
     --img_idx "\${IMG_IDX}" \
     --timeout "\${TIMEOUT}" \
-    --temperature "\${TEMP}" \
-    
-  &&
-
-  python attack_minimal_single.py \
-    -m "\${MODEL}" \
-    -t "\${TRAJ}" \
-    --patch_mode "\${PATCH_MODE}" \
-    --display_size "\${DISPLAY_SIZE}" \
-    --seed "\${SEED}" \
-    --corpus_size "\${CORPUS_SIZE}" \
-    --pic_mode "\${PIC_MODE}" \
-    --img_idx "\${IMG_IDX}" \
-    --timeout "\${TIMEOUT}" \
-    --temperature "\${TEMP}" \
+    --temperature "\${TEMP}"
   "
 
 echo "Done."
