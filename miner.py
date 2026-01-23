@@ -16,7 +16,8 @@ if project_root not in sys.path:
 
 # --- Local Imports ---
 from util import load_model, load_dataset
-from attack_minimal_single import project_patch, normalize_yaw_t
+from attacks import project_patch
+from simulation import normalize_yaw
 
 # ==============================================================================
 # 1. HELPER FUNCTIONS
@@ -200,7 +201,7 @@ def worker_mine_batch(args_dict):
                     z_loss = F.mse_loss(preds[:, 2], targets_batch[:, 2])
 
                     dist_loss = x_loss + y_loss + (5.0 * z_loss)
-                    ang_loss = (1 - torch.cos(normalize_yaw_t(preds[:, 3]) - normalize_yaw_t(targets_batch[:, 3]))).mean()
+                    ang_loss = (1 - torch.cos(normalize_yaw(preds[:, 3]) - normalize_yaw(targets_batch[:, 3]))).mean()
                     total_loss = dist_loss + ang_loss
                     threshold_loss = (x_loss + y_loss + z_loss).detach()
                     is_success = (x_loss < 0.05) and (y_loss < 0.05) and (z_loss < 0.05) #and (ang_loss < 0.1)
@@ -237,7 +238,7 @@ def worker_mine_batch(args_dict):
                             preds = recovered.to(device)
                             targets_batch = target_vec.unsqueeze(0).expand(preds.shape[0], -1).to(device)
                             dist_loss = F.mse_loss(preds[:, :3], targets_batch[:, :3])
-                            ang_loss = (1 - torch.cos(normalize_yaw_t(preds[:, 3]) - normalize_yaw_t(targets_batch[:, 3]))).mean()
+                            ang_loss = (1 - torch.cos(normalize_yaw(preds[:, 3]) - normalize_yaw(targets_batch[:, 3]))).mean()
                             total_loss = dist_loss + ang_loss
                 
                 # If loss is a tensor, get scalar safely
@@ -445,7 +446,7 @@ if __name__ == "__main__":
 # # --- Local Imports ---
 # # Assuming these exist in your project structure based on previous messages
 # from util import load_model, load_dataset
-# from attack_minimal_single import project_patch, normalize_yaw_t
+# from attack_minimal_single import project_patch, normalize_yaw
 
 # # ==============================================================================
 # # 1. HELPER FUNCTIONS

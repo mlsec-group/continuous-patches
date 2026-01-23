@@ -6,7 +6,7 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), 'diffusion'))
 from diffusion_model import DiffusionModel, construct_T_matrix
-from attack_minimal_single import project_patch
+from attacks import project_patch
 from util import load_model, normalize_yaw_t, load_dataset
 
 import argparse

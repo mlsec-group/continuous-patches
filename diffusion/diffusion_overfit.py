@@ -15,7 +15,7 @@ import argparse
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
 from util import load_model, load_dataset, normalize_yaw_t
-from simulation_refactor import T_matrix
+from simulation import T_matrix
 
 def _perspective_grid(
 coeffs: list[float], 
