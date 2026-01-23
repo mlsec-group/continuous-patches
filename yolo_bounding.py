@@ -28,9 +28,13 @@ BATCH_SIZE = 1
 IMSIZE = (96, 160)
 SOFTMAX_MULT = 15.
 
+import os
+
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '.'))
+
 # get random coordinates for where patch should be
 def gen_patch_coords(n, size):
-    points = np.random.randint([0, 0], [IMSIZE[0] - size[0], IMSIZE[1]-size[1]], size=(1, 2))
+    points = np.random.randint([0, 0], [IMSIZE[0] - size[0], IMSIZE[1]-size[1]], size=(n, 2))
     return torch.tensor([([y, x, y+size[0], x+size[1]]) for (y, x) in points])
 
 
@@ -39,63 +43,135 @@ class YOLOBox(nn.Module):
     iou = 0.45  # NMS IoU threshold
     classes = None  # (optional list) filter by class, i.e. = [0, 15, 16] for COCO persons, cats and dogs
     max_det = 1000  # maximum number of detections per image
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     softmax_mult = 15.
 
-    def __init__(self, cam_config='camera_calibration.yaml'):
+    def __init__(self, cam_config=f'{project_root}/camera_calibration.yaml'):
         super().__init__()
 
         # load model
-        self.model = torch.hub.load("ultralytics/yolov5", "yolov5n", autoshape=False)
+        self.model = torch.hub.load("ultralytics/yolov5", "yolov5s", _verbose=False, autoshape=False)
+
         self.model.eval()
 
+        for param in self.model.parameters():
+            param.requires_grad = False
+
         # camera
-        self.cam = Camera(cam_config)
+        self.cam = Camera(cam_config, device=self.device)
+    def forward(self, imgs, softmax_mult=51., target_anchor=None, search_radius=50., show_imgs=False):
+        # imgs = og_imgs / 255.0
 
-    def forward(self, og_imgs, show_imgs=False):
-        imgs = og_imgs / 255.0
+        # imgs = torch.repeat_interleave(imgs, 3, dim=1)
 
-        imgs = torch.repeat_interleave(imgs, 3, dim=1)
+        # # yolo wants size (320, 640)
+        # resized_inputs = torch.nn.functional.interpolate(imgs, size=(TENSOR_DEFAULT_WIDTH//2, TENSOR_DEFAULT_WIDTH), mode="bilinear")
+        output = self.model(imgs)
 
-        # yolo wants size (320, 640)
-        resized_inputs = torch.nn.functional.interpolate(imgs, size=(TENSOR_DEFAULT_WIDTH//2, TENSOR_DEFAULT_WIDTH), mode="bilinear")
-        output = self.model(resized_inputs)
+        # preds[0] is [B, num_preds, 5+nc] for YOLOv5: [x,y,w,h,obj,...]
+        logits = output[0] if isinstance(output, (list, tuple)) else output
 
-        scale_factor = imgs.size()[3] / TENSOR_DEFAULT_WIDTH
-        boxes, scores = self.extract_boxes_and_scores(output[0])
+        # new try: spatial attention masking
 
-        # take a weighted average of the boxes
-        soft_scores = F.softmax(scores * SOFTMAX_MULT, dim=1)
-        soft_scores = soft_scores.unsqueeze(1)
-        selected_boxes = torch.bmm(soft_scores, boxes) * scale_factor
+        pred_xy = logits[..., :2] 
+        pred_wh = logits[..., 2:4]
+        
+        objectness = logits[..., 4]              # [B, N]
+        class_probs = logits[..., 5]             # [B, N] (assuming class 0 is person)
+        
+        # Raw score for "Person"
+        person_scores = objectness * class_probs # [B, N]
 
-        # printd('selected ', selected_boxes.shape, selected_boxes.grad_fn)
+        if target_anchor is not None:
+            target = target_anchor.unsqueeze(1)
 
-        # debugging
-        if show_imgs:
-            # true best boxes
-            highest_score_idxs = torch.argmax(scores, 1)
+            # print('target', target.shape) 
+            # print("pred_xy", pred_xy.shape)
+                
+            # Calculate Euclidean distance from every anchor to the target
+            # pred_xy shape: [B, N, 2], target shape: [1, 2]
+            dist = torch.norm(pred_xy - target.unsqueeze(1), dim=-1) # [B, N]
+            
+            # Create a spatial penalty (Gaussian-like or simple linear)
+            # Anchors far away get a huge negative score, effectively zeroing them in Softmax
+            # We use a large multiplier (e.g., 0.5) to kill gradients from far away
+            spatial_penalty = (dist ** 2) / (2 * search_radius ** 2)
+            
+            # Subtract penalty from scores BEFORE softmax
+            # This forces attention to the target region
+            focused_scores = person_scores - spatial_penalty
+        else:
+            focused_scores = person_scores.clone()
 
-            for i in range(min(len(og_imgs), 10)):
-                # print(og_imgs.shape)
-                og_img = og_imgs[i].clone().detach().cpu().numpy()
-                og_img = np.moveaxis(og_img, 0, -1)
-                og_img = cv2.cvtColor(og_img,cv2.COLOR_GRAY2RGB)
+        attention_weights = torch.softmax(focused_scores * softmax_mult, dim=1) # [B, N]
 
-                true_best_box = boxes[i, highest_score_idxs[i]] * scale_factor
+        pred_box_xy = (attention_weights.unsqueeze(-1) * pred_xy).sum(dim=1)
+        pred_box_wh = (attention_weights.unsqueeze(-1) * pred_wh).sum(dim=1)
+        
+        # 6. Also return the max score in that region (Crucial for loss function!)
+        # We want to Maximize this value in our attack
+        region_score = (attention_weights * person_scores).sum(dim=1)
 
-                xmin, ymin, xmax, ymax = true_best_box.detach().cpu().numpy().astype(int)
-                cv2.rectangle(og_img, (xmin, ymin), (xmax, ymax), (255, 0, 0.), 1)
+        # Convert center-wh to xyxy
+        x1 = pred_box_xy[:, 0] - pred_box_wh[:, 0] / 2
+        y1 = pred_box_xy[:, 1] - pred_box_wh[:, 1] / 2
+        x2 = pred_box_xy[:, 0] + pred_box_wh[:, 0] / 2
+        y2 = pred_box_xy[:, 1] + pred_box_wh[:, 1] / 2
+        
+        person_boxes_xyxy = torch.stack((x1, y1, x2, y2), dim=-1)
 
-                selected_box = selected_boxes[i][0]
+        return person_boxes_xyxy, region_score
+
+    # def detection_single(self, imgs, show_imgs=False):
+    #     output = self.model(imgs)
+
+    #     # preds[0] is [B, num_preds, 5+nc] for YOLOv5: [x,y,w,h,obj,...]
+    #     logits = output[0] if isinstance(output, (list, tuple)) else output
+
+    #     objectness = logits[..., 4]                 # [B, N]
+    #     person_scores = objectness * logits[..., 5]  # [B, N]
+
+    #     person_softmax = torch.softmax(person_scores * 50., dim=1)  # [B, N]
+
+    #     person_box_xywh = (person_softmax.unsqueeze(-1) * logits[..., :4]).sum(dim=1)  # [B, 4]
+    #     cx, cy, w, h = person_box_xywh.unbind(-1)
+    #     x1 = cx - w / 2
+    #     y1 = cy - h / 2
+    #     x2 = cx + w / 2
+    #     y2 = cy + h / 2
+    #     person_boxes_xyxy = torch.stack((x1, y1, x2, y2), dim=-1)  # [B, 4]
+        
+    #     return person_boxes_xyxy
+        # # printd('selected ', selected_boxes.shape, selected_boxes.grad_fn)
+
+        # # debugging
+        # if show_imgs:
+        #     # true best boxes
+        #     highest_score_idxs = torch.argmax(scores, 1)
+
+        #     for i in range(min(len(imgs), 10)):
+        #         # print(og_imgs.shape)
+        #         og_img = imgs[i].clone().detach().cpu().numpy() # shape (3, H, W)
+        #         og_img = (np.moveaxis(og_img, 0, -1) * 255).astype(np.uint8)
+        #         print(og_img.shape, np.max(og_img), np.min(og_img))
+        #         og_img = cv2.cvtColor(og_img,cv2.COLOR_RGB2BGR)
+
+        #         true_best_box = boxes[i, highest_score_idxs[i]] * scale_factor
+
+        #         xmin, ymin, xmax, ymax = true_best_box.detach().cpu().numpy().astype(int)
+        #         cv2.rectangle(og_img, (xmin, ymin), (xmax, ymax), (255, 0, 0.), 1)
+
+        #         selected_box = selected_boxes[i][0]
  
-                xmin, ymin, xmax, ymax = int(selected_box[0]), int(selected_box[1]), int(selected_box[2]), int(selected_box[3])
-                cv2.rectangle(og_img, (xmin, ymin), (xmax, ymax), (255, 0, 255.), 1)
+        #         xmin, ymin, xmax, ymax = int(selected_box[0]), int(selected_box[1]), int(selected_box[2]), int(selected_box[3])
+        #         cv2.rectangle(og_img, (xmin, ymin), (xmax, ymax), (255, 0, 255.), 1)
 
-                cv2.imwrite(f'person_new_{i}.png', og_img)
+        #         cv2.imwrite(f'person_new_{i}.png', og_img)
 
-        # print('selected boxes shape', selected_boxes.shape)
-        xyzs = self.cam.batch_xyz_from_boxes(selected_boxes.squeeze(1))  # only using squeeze() here will cause all dimensions to be deleted if there's only one input image
-        return xyzs
+        # # print('selected boxes shape', selected_boxes.shape)
+        # xyzs = self.cam.batch_xyz_from_boxes(selected_boxes.squeeze(1))  # only using squeeze() here will cause all dimensions to be deleted if there's only one input image
+        # return xyzs
     
     def extract_boxes_and_scores(self, yolo_output):
         # Extract bounding boxes and scores from YOLO output

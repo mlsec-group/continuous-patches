@@ -179,7 +179,7 @@ results/
 *.png
 optimal/
 timeout*
-logs/
+logs*
 random/
 black/
 white/
@@ -187,3 +187,6 @@ test*/
 fap/
 .mpl/
 *.sif
+frontnet/
+yolov5/
+temp_pid*

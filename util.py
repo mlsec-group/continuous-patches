@@ -1,7 +1,13 @@
 import torch
 import sys
+import os
 
-sys.path.insert(0,'pulp-frontnet/PyTorch/')
+# Resolve repo-relative path to pulp-frontnet PyTorch so imports work regardless of cwd
+project_root = os.path.dirname(os.path.abspath(__file__))  # /home/piha/continous-patches
+frontnet_dir = os.path.join(project_root, 'pulp-frontnet', 'PyTorch')
+if frontnet_dir not in sys.path:
+    sys.path.insert(0, frontnet_dir)
+
 from Frontnet.Frontnet import FrontnetModel
 
 from Frontnet.DataProcessor import DataProcessor
@@ -27,6 +33,16 @@ import glob
 
 DEBUG_GRAD = False
 
+def normalize_yaw_t(yaw):
+    return torch.atan2(torch.sin(yaw), torch.cos(yaw))
+
+def normalize_yaw(yaw):
+    return np.atan2(np.sin(yaw), np.cos(yaw))
+
+def dist(c1, c2):
+    elementwise = torch.square(c1 - c2)
+    # elementwise * torch.tensor([1, 1, 2, 2/.4, 2, 2])
+    return torch.sqrt(torch.sum(elementwise, axis=-1))
 
 
 def bb2camera(bbox, intrinsic, dist_coeffs):
@@ -77,6 +93,177 @@ def scale_tx_ty(sf, tx, ty, patch_size=80, image_size=(96, 160)):
 def printd(*args, **kwargs):
     if DEBUG_GRAD:
         print(*args, **kwargs)
+
+# Helper to interpolate exactly N points evenly along a path of corners
+def interpolate_path(corners, n_points):
+    # Calculate lengths of each segment
+    dists = np.sqrt(np.sum(np.diff(corners, axis=0)**2, axis=1))
+    # Cumulative distance (0, d1, d1+d2, ...)
+    cumulative_dist = np.insert(np.cumsum(dists), 0, 0)
+    total_dist = cumulative_dist[-1]
+    
+    # We want n_points distributed evenly from 0 to total_dist
+    even_dists = np.linspace(0, total_dist, n_points)
+    
+    # Interpolate X and Y based on distance
+    x = np.interp(even_dists, cumulative_dist, corners[:, 0])
+    y = np.interp(even_dists, cumulative_dist, corners[:, 1])
+    
+    return np.column_stack([x, y])
+
+def gen_target_trajectory(trajectory, num_steps=25):
+    """
+    Generates a trajectory with EXACTLY num_steps points.
+    Bounds: x in [-0.6, 0.6], y in [-1.0, 1.0].
+    """
+    z_val = 1.0
+    yaw_val = 0.0
+    xy_points = None
+
+    if trajectory == 'square':
+        # Define the corners of the path
+        corners = np.array([
+            [0.6, 0.5],     # Top-Right
+            [-0.6, 0.5],    # Top-Left
+            [-0.6, -0.5],   # Bottom-Left
+            [0.6, -0.5],    # Bottom-Right
+            [0.6, 0.5],     # Top-Right
+            
+        ])
+        xy_points = interpolate_path(corners, num_steps)
+
+    elif trajectory == 'circle':
+        # Parametric generation naturally supports exact counts
+        t = np.linspace(0, 2 * np.pi, num_steps)
+        x = 0.5 * np.cos(t) # Radius 0.5 fits in [-0.6, 0.6]
+        y = 0.5 * np.sin(t)
+        xy_points = np.column_stack([x, y])
+
+    elif trajectory == 'line_x':
+        # Center -> Right -> Left -> Center
+        corners = np.array([
+            [0., 0.],
+            [0.6, 0.],
+            [-0.6, 0.],
+            [0., 0.]
+        ])
+        xy_points = interpolate_path(corners, num_steps)
+
+    elif trajectory == 'line_y':
+        # Center -> Up -> Down -> Center
+        corners = np.array([
+            [0., 0.],
+            [0., 1.0],
+            [0., -1.0],
+            [0., 0.]
+        ])
+        xy_points = interpolate_path(corners, num_steps)
+
+    elif trajectory == 'figure8':
+        t = np.linspace(0, 2 * np.pi, num_steps)
+        x = 0.5 * np.sin(2 * t) # Width 1.0 (fits -0.6 to 0.6)
+        y = 0.9 * np.sin(t)     # Height 1.8 (fits -1.0 to 1.0)
+        xy_points = np.column_stack([x, y])
+
+    elif trajectory == 'diagonal_line':
+        # Top-Right -> Bottom-Left -> Center
+        corners = np.array([
+            [0., 0.],
+            [0.6, 0.8],
+            [-0.6, -0.8],
+            [0., 0.]
+        ])
+        xy_points = interpolate_path(corners, num_steps)
+
+    elif trajectory == 'triangle':
+        # Triangle shape adjusted to fit bounds
+        corners = np.array([
+            [0.6, 0.],    # Start Right
+            [-0.2, 0.8],    # top
+            [-0.2, -0.8],   # bottom
+            [0.6, 0.0]     # Close loop
+        ])
+        
+        # Add initial hover at center to match previous logic safely
+        # Note: This adds distance from center to start point
+        # full_path = np.vstack([
+        #     np.array([0., 0.]), # Start at center (0,0)
+        #     corners
+        # ])
+        xy_points = interpolate_path(corners, num_steps)
+
+    elif trajectory == 's':
+        # Scaling parameters
+        rx = 0.6  # Horizontal radius
+        ry = 0.5  # Vertical radius for each half
+
+        # Top arc: Center (0, 0.5)
+        t1 = np.linspace(0.1 * np.pi, 1.5 * np.pi, num_steps // 2)
+        x1 = rx * np.cos(t1)
+        y1 = ry * np.sin(t1) + 0.5
+
+        # Bottom arc: Center (0, -0.5)
+        t2 = np.linspace(0.5 * np.pi, -0.9 * np.pi, num_steps // 2 + num_steps % 2)
+        x2 = rx * np.cos(t2)
+        y2 = ry * np.sin(t2) - 0.5
+
+        # Combine
+        x = np.concatenate([x1, x2])
+        y = np.concatenate([y1, y2])
+        xy_points = np.column_stack([x, y])
+
+
+    elif trajectory == 'c':
+        # Elliptical Arc opening to the Right
+        # t goes from 45 degrees to 315 degrees
+        t = np.linspace(np.pi/4, 7*np.pi/4, num_steps)
+        x = 0.5 * np.cos(t) # x > 0 at start/end, x < 0 in middle (Back of C)
+        y = 0.8 * np.sin(t) # Stretched vertically to fill y bounds
+        
+        # Current logic creates a C opening to the LEFT (x is neg in middle). 
+        # Flip x to open RIGHT:
+        x = x + 0.2 # Shift slightly right so it centers better
+        
+        xy_points = np.column_stack([x, y])
+    
+    elif trajectory == 'u':
+        # U shape: Semi-ellipse opening upwards
+        t = np.linspace(np.pi, 2 * np.pi, num_steps)
+        x = 0.5 * np.cos(t) # x in [-0.5, 0.5]
+        y = 0.8 * np.sin(t) - 0.2 # Shift down to fit better in bounds
+        
+        xy_points = np.column_stack([x, y])
+
+    elif trajectory == 'slingshot_left':
+        point = np.array([0., 3.0])
+        xy_points = point.reshape(1, 2).repeat(num_steps, axis=0)
+    elif trajectory == 'slingshot_right':
+        point = np.array([0., -3.0])
+        xy_points = point.reshape(1, 2).repeat(num_steps, axis=0)
+    elif trajectory == 'slingshot_forward':
+        point = np.array([3.0, 0.])
+        xy_points = point.reshape(1, 2).repeat(num_steps, axis=0)
+
+
+    else:
+        raise ValueError(f"Unknown trajectory type: {trajectory}")
+
+    # Combine with Z and Yaw
+    z = np.ones((num_steps, 1)) * z_val
+    yaw = np.zeros((num_steps, 1)) * yaw_val
+    
+    # Result shape: (num_steps, 4)
+    waypoints = np.hstack([xy_points, z, yaw])
+
+    # --- SAFETY PADDING ---
+    # Because your loop runs until `len - 1`, we append the final point 5 times.
+    # This ensures the drone stays at the final goal for a few frames 
+    # instead of cutting off early.
+    last_point = waypoints[-1]
+    padding = np.tile(last_point, (5, 1))
+    waypoints = np.vstack((waypoints, padding))
+
+    return torch.tensor(waypoints, dtype=torch.float32)        
 
 def load_model(path, device, config):
     """
@@ -254,7 +441,7 @@ def load_dataset(path, batch_size = 32, shuffle = False, drop_last = True, num_w
     # if training data should be extended by our custom dataset, set IMRC to True
     if IMRC:
         import pickle
-        with open("misc/IMRC_images.pickle", "rb") as f:
+        with open(f"{project_root}/misc/IMRC_images.pickle", "rb") as f:
             imrc_data = pickle.load(f)
 
         imrc_images = imrc_data['x']
@@ -276,7 +463,7 @@ def load_dataset(path, batch_size = 32, shuffle = False, drop_last = True, num_w
         dataset = Dataset(images[indices[split_idx:]], labels[split_idx:])
 
     # for quick and convinient access, create a torch DataLoader with the given parameters
-    data_params = {'batch_size': batch_size, 'shuffle': shuffle, 'drop_last':drop_last, 'num_workers': num_workers}
+    data_params = {'batch_size': batch_size, 'shuffle': shuffle, 'drop_last':drop_last, 'num_workers': 0, 'pin_memory': False}
     data_loader = data.DataLoader(dataset, **data_params)
     
     return data_loader
