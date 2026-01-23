@@ -15,6 +15,7 @@ import argparse
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
 from util import load_model, load_dataset, normalize_yaw_t
+from simulation_refactor import T_matrix
 
 def _perspective_grid(
 coeffs: list[float], 
@@ -339,14 +340,14 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
             
             manipulated_images = torch.stack(manipulated_images, dim=0)  # (B, C, 1, H, W)
             manipulated_images = manipulated_images.squeeze(2)  # (B, C, H, W)
-            if model_name == 'yolov5':
-                manipulated_images = manipulated_images.repeat_interleave(3, dim=1)  # (B, 3, H, W)
-            manipulated_images = torch.clamp(manipulated_images, 0., 1.)
             # add gaussian noise to manipulated images
             manipulated_images = manipulated_images + torch.randn_like(manipulated_images) * 0.01
+            manipulated_images = torch.clamp(manipulated_images, 0., 1.)
+            if model_name == 'yolov5':
+                manipulated_images = manipulated_images.repeat_interleave(3, dim=1)  # (B, 3, H, W)
+            
             # print("Manipulated images min/max:", manipulated_images.min().item(), manipulated_images.max().item(), manipulated_images.shape) # (B, C, H, W)
             
-
             target_positions = batch_conds[:, 3:7]  # (B, 4)
             # E. Frontnet Prediction on Manipulated Images
             if model_name == 'frontnet':
@@ -363,6 +364,11 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
                 control_loss = dist_loss + ang_loss
 
             if model_name == 'yolov5':
+                random_drone_pose = torch.zeros(batch_size, 4, device=device) # pose in world frame
+                random_drone_pose[:, 0] = random_drone_pose[:, 0].uniform_(-1.0, 1.0)  # x
+                random_drone_pose[:, 1] = random_drone_pose[:, 1].uniform_(-1.0, 1.0)  # y
+                random_drone_pose[:, 2] = random_drone_pose[:, 2].uniform_(0.5, 1.5)  # z
+                random_drone_pose[:, 3] = random_drone_pose[:, 3].uniform_(-0.3, 0.3)  # yaw
                 predicted_boxes, _ = yolo(manipulated_images, target_anchor=None)
                 scaled_box = predicted_boxes.clone()
                 # scale back to 160x96
@@ -370,14 +376,29 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
                 scaled_box[:, [1, 3]] *= (96.0 / 320.)   # y coords
 
                 prediction = yolo.cam.batch_xyz_from_boxes(scaled_box)
+                
+                yaw_list = []
+                for pred, drone_pose in zip(prediction, random_drone_pose):
+                    T_pred_drone = T_matrix(pred)
+                    T_drone_world = T_matrix(drone_pose)
+                    T_pred_world = T_drone_world @ T_pred_drone
+                    delta = T_pred_world[:3, 3] - drone_pose[:3]
+                    yaw = torch.atan2(delta[1], delta[0]) * -1.
+                    yaw_list.append(yaw)
+                yaw_tensor = torch.stack(yaw_list).to(device)
+                prediction = torch.cat([prediction[:, :3], yaw_tensor.unsqueeze(1)], dim=1)
+                # print("Prediction:", prediction)
+                
                 control_loss = F.mse_loss(prediction[:, :3], target_positions[:, :3])
-                control_loss = control_loss * 20.
+                angular_loss = (1 - torch.cos(normalize_yaw_t(prediction[:, 3]) - normalize_yaw_t(target_positions[:, 3]))).mean()
+                control_loss = control_loss + angular_loss
+                # control_loss = control_loss * 20.
            
 
             all_control_losses.append(control_loss.item())
             all_recon_losses.append(reconstruction_loss.item())
 
-            loss = reconstruction_loss + control_loss
+            loss = control_loss#reconstruction_loss + control_loss
             
             all_losses.append(loss.item())
             
