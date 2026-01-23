@@ -191,9 +191,20 @@ def worker_mine_batch(args_dict):
                     x, y, z, yaw = model(manipulated_batch * 255.)
                     preds = torch.stack([x, y, z, yaw], dim=1).squeeze(2)
                     targets_batch = target_vec.unsqueeze(0).expand(batch_size, -1)
-                    dist_loss = F.mse_loss(preds[:, :3], targets_batch[:, :3])
+                    # dist_loss = F.mse_loss(preds[:, :3], targets_batch[:, :3])
+                    # New Z-Heavy Weighting
+                    # We punish Z errors 5x or 10x more than X/Y errors.
+                    # This forces the patch to learn specific scale cues.
+                    x_loss = F.mse_loss(preds[:, 0], targets_batch[:, 0])
+                    y_loss = F.mse_loss(preds[:, 1], targets_batch[:, 1])
+                    z_loss = F.mse_loss(preds[:, 2], targets_batch[:, 2])
+
+                    dist_loss = x_loss + y_loss + (5.0 * z_loss)
                     ang_loss = (1 - torch.cos(normalize_yaw_t(preds[:, 3]) - normalize_yaw_t(targets_batch[:, 3]))).mean()
                     total_loss = dist_loss + ang_loss
+                    threshold_loss = (x_loss + y_loss + z_loss).detach()
+                    is_success = (x_loss < 0.05) and (y_loss < 0.05) and (z_loss < 0.05) #and (ang_loss < 0.1)
+                    # print(f"[PID {pid}] Step {step} - x_loss: {x_loss.item():.4f}, y_loss: {y_loss.item():.4f}, z_loss: {z_loss.item():.4f}, ang_loss: {ang_loss.item():.4f}", flush=True)
                 if model_name == 'yolov5':
                     
                     manipulated_rgb = manipulated_batch.repeat_interleave(3, dim=1)
@@ -235,6 +246,13 @@ def worker_mine_batch(args_dict):
                 except Exception:
                     loss_val = float(total_loss)
 
+                if model_name == frontnet:
+                    if threshold_loss < threshold:
+                        success = True
+                    if is_success:
+                        success = True
+                        break
+
                 if loss_val < threshold:
                     success = True
                     break
@@ -248,6 +266,8 @@ def worker_mine_batch(args_dict):
                 if step % 50 == 0:
                     print(f"[PID {pid}] Step {step} - Loss: {loss_val:.4f}", flush=True)
                 
+            if loss_val < 0.05:
+                success = True
             if success:
                 patch_np = patch.detach().cpu().numpy().squeeze()
                 target_np = target_vec.cpu().numpy()
@@ -306,22 +326,22 @@ def run_parallel_mining(total_samples, output_path, threads_per_worker=2, batch_
     
     # Create arguments
     worker_args = []
-    for i in range(num_workers):
+    for i in range(threads_per_worker):
         count = samples_per_worker + (1 if i < remainder else 0)
         worker_args.append({
             'n_samples': count,
             'batch_size': batch_size,
             'threshold': 0.01,
-            'threads': threads_per_worker
+            'threads': num_workers,
         })
         # include model_name in args so workers can load correct model
         worker_args[-1]['model'] = model_name
     
     print("Spawning pool...", flush=True)
     
-    with mp.Pool(processes=num_workers) as pool:
+    with mp.Pool(processes=threads_per_worker) as pool:
         # Tqdm tracks completed WORKERS (lists of patches), not individual patches
-        results = list(tqdm(pool.imap_unordered(worker_mine_batch, worker_args), total=num_workers))
+        results = list(tqdm(pool.imap_unordered(worker_mine_batch, worker_args), total=threads_per_worker))
     
     final_gold_data = []
     for res in results:

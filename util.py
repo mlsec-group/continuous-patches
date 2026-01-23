@@ -225,6 +225,25 @@ def gen_target_trajectory(trajectory, num_steps=25):
         x = x + 0.2 # Shift slightly right so it centers better
         
         xy_points = np.column_stack([x, y])
+    
+    elif trajectory == 'u':
+        # U shape: Semi-ellipse opening upwards
+        t = np.linspace(np.pi, 2 * np.pi, num_steps)
+        x = 0.5 * np.cos(t) # x in [-0.5, 0.5]
+        y = 0.8 * np.sin(t) - 0.2 # Shift down to fit better in bounds
+        
+        xy_points = np.column_stack([x, y])
+
+    elif trajectory == 'slingshot_left':
+        point = np.array([0., 3.0])
+        xy_points = point.reshape(1, 2).repeat(num_steps, axis=0)
+    elif trajectory == 'slingshot_right':
+        point = np.array([0., -3.0])
+        xy_points = point.reshape(1, 2).repeat(num_steps, axis=0)
+    elif trajectory == 'slingshot_forward':
+        point = np.array([3.0, 0.])
+        xy_points = point.reshape(1, 2).repeat(num_steps, axis=0)
+
 
     else:
         raise ValueError(f"Unknown trajectory type: {trajectory}")

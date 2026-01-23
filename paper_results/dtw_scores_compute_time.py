@@ -3,6 +3,7 @@ import pathlib
 import re
 import numpy as np
 from collections import defaultdict
+from tqdm import trange
 
 BASE = pathlib.Path(__file__).parent
 
@@ -17,7 +18,7 @@ ROW_DEFS = [
 ]
 
 TRAJECTORY_ORDER = ["figure8", "triangle", "c", "s"]
-DISPLAY_ORDER = [40, 50, 60, 70, 80, 90, 100]
+DISPLAY_ORDER = [60, 70, 80, 90, 100]
 
 
 def parse_elapsed_file(fp):
@@ -39,13 +40,23 @@ def parse_elapsed_file(fp):
 				out['elapsed'] = float(m2.group(1))
 			except Exception:
 				pass
-	# DTW
-	m = re.search(r"DTW.*?([\d\.eE+-]+)", text, flags=re.IGNORECASE)
+	# DTW: try same-line first, then accept value on the next line (e.g. "DTW distance:\n0.6414")
+	m = re.search(r"DTW.*?:\s*\n\s*([\d\.eE+-]+)", text, flags=re.IGNORECASE)
+	# print(f"Parsing DTW in {fp}: found {m}")
 	if m:
+		print(f"Found DTW match: {m.group(1)}")
 		try:
 			out['dtw'] = float(m.group(1))
 		except Exception:
 			pass
+	# else:
+	# 	m2 =
+	# 	if m2:
+	# 		print(f"Found DTW next-line match: {m2.group(1)}")
+	# 		try:
+	# 			out['dtw'] = float(m2.group(1))
+	# 		except Exception:
+	# 			pass
 	# fallback: any two floats - pick first as elapsed, second as dtw? Avoid guessing.
 	return out
 

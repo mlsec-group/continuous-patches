@@ -49,9 +49,15 @@ def run_experiment(args):
     sim.pose = target_traj[0].clone().detach()
     
     if args.pic_mode == 'idx':
-        output_dir = Path(f'{project_root}/paper_results/{args.model}/{args.patch_mode}/{args.trajectory}/{args.display_size}/image_{args.img_idx}/{args.seed}')
+        if args.temperature != 'none':
+            output_dir = Path(f'{project_root}/paper_results/{args.model}/{args.patch_mode}/{args.temperature}/{args.trajectory}/{args.display_size}/image_{args.img_idx}/{args.seed}')
+        else:
+            output_dir = Path(f'{project_root}/paper_results/{args.model}/{args.patch_mode}/{args.trajectory}/{args.display_size}/image_{args.img_idx}/{args.seed}')
     else: # random
-        output_dir = Path(f'{project_root}/paper_results/{args.model}/{args.patch_mode}/{args.trajectory}/{args.display_size}/random/{args.seed}')
+        if args.temperature != 'none':
+            output_dir = Path(f'{project_root}/paper_results/{args.model}/{args.patch_mode}/{args.temperature}/{args.trajectory}/{args.display_size}/random/{args.seed}')
+        else:
+            output_dir = Path(f'{project_root}/paper_results/{args.model}/{args.patch_mode}/{args.trajectory}/{args.display_size}/random/{args.seed}')
     output_dir.mkdir(parents=True, exist_ok=True)
     
     history_pose = []
@@ -64,12 +70,20 @@ def run_experiment(args):
     img_size = (320, 640) if args.model == 'yolov5' else (96, 160)
 
     optim_step = 0
-
+    max_retries = 10
+    retry = 0
     # 2. Main Loop
     with tqdm(total=len(target_traj)) as pbar:
         while target_idx < len(target_traj) - 1:
             step_start = time.time()
             target_pose = target_traj[target_idx]
+            retry += 1
+            if retry > max_retries:
+                # print("Max retries reached, moving to next target.\n")
+                target_idx += 1
+                pbar.update(1)
+                retry = 0
+                continue
             
             # A. Check Target Status
             dist = torch.dist(sim.pose[:3], target_pose[:3])
@@ -179,7 +193,7 @@ if __name__ == "__main__":
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
     parser.add_argument('--pic_mode', type=str, choices=['random', 'idx'], default='idx', help='Mode to select image: random or specific index')
     parser.add_argument('--img_idx', type=int, default=0, help='Index of the image to use from the dataset')
-    parser.add_argument('--temperature', type=str, choices=['warm', 'cold', 'none'], default='cold', help='Either restart from random patch (cold) or from the last patch (warm)')
+    parser.add_argument('--temperature', type=str, choices=['warm', 'cold', 'none'], default='none', help='Either restart from random patch (cold) or from the last patch (warm)')
     parser.add_argument('--corpus_size', type=int, choices=[1000, 2000, 3000], default=1000, help='Number of patches in the corpus (only for corpus/interpolation/diffusion patch mode)')
     parser.add_argument('--timeout', type=int, default=None)
     
