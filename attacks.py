@@ -127,12 +127,19 @@ class Attacker:
             self.diff_model.model.eval()
             
         if self.mode in ['corpus', 'interpolation']:
-            with open(f"{project_root}/diffusion/{args.model}{args.corpus_size//1000}k.pickle", "rb") as f:
-                data = pickle.load(f)
-            self.corpus_patches = torch.tensor([d[0] for d in data], device=device, dtype=torch.float32)
-            self.corpus_conds = torch.tensor([np.concatenate([d[2], d[1]]) for d in data], device=device, dtype=torch.float32)
-            self.corpus_patches = (self.corpus_patches - self.corpus_patches.min()) / (self.corpus_patches.max() - self.corpus_patches.min())
+            data = np.load(f"{project_root}/{self.model.name}/corpus_{self.model.name}.npz")
+            patches_np = data['patches'].astype(np.float32)[:self.args.corpus_size]
+            targets_np = data['targets'].astype(np.float32)[:self.args.corpus_size]
+            conds_np = data['conds'].astype(np.float32)[:self.args.corpus_size]
+            cond_vector = np.concatenate([conds_np, targets_np], axis=1) 
+            patch_h, patch_w = patches_np.shape[1], patches_np.shape[2]
+            assert (patch_h, patch_w) == self.patch_size, "Corpus patch size mismatch."
 
+            self.corpus_patches = torch.tensor(patches_np, device=device, dtype=torch.float32).unsqueeze(1)  # (N, 1, H, W)
+            self.corpus_conds = torch.tensor(cond_vector, device=device, dtype=torch.float32)  # (N, 7)
+
+            # print(self.corpus_patches.shape, self.corpus_conds.shape)
+            
     def generate(self, base_img, T, drone_pose, target_pose):
         """
         Generates and returns the patch.
@@ -164,7 +171,7 @@ class Attacker:
                     return self.diff_model.sample(1, cond, self.device, n_steps=50)
             if self.mode == 'corpus':
                 dists = torch.norm(self.corpus_conds - cond, dim=1)
-                return self.corpus_patches[torch.argmin(dists)].unsqueeze(0).unsqueeze(0)
+                return self.corpus_patches[torch.argmin(dists)].unsqueeze(0)
 
         return torch.rand((1, 1, *self.patch_size), device=self.device)
 

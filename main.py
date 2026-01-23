@@ -129,7 +129,18 @@ def run_experiment(args):
                 pass 
             else:
                 # Generate Patch (Optimization or Diffusion happens inside here)
-                patch = attacker.generate(base_img, T, sim.pose, target_pose)
+                if args.patch_mode in ['diffusion', 'interpolation', 'corpus']:
+                    patch_width = monitor_corners[1, 0] - monitor_corners[0, 0]
+                    patch_height = monitor_corners[2, 1] - monitor_corners[0, 1]
+                    sf = min(patch_width / patch_size[1], patch_height / patch_size[0])
+                    T_gen = T.clone()
+                    # print("sf before modification:", T_gen[0,0])
+                    T_gen[0,0] = sf
+                    T_gen[1,1] = sf
+                    # print("sf after modification:", T_gen[0,0])
+                    patch = attacker.generate(base_img, T_gen, sim.pose, target_pose)
+                else:
+                    patch = attacker.generate(base_img, T, sim.pose, target_pose)
                 if args.model == 'yolov5':
                     base_img = F.interpolate(base_img, size=(320, 640), mode='bilinear', align_corners=False)
                     manipulated_img = base_img.clone()
