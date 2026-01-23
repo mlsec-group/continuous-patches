@@ -190,3 +190,10 @@ fap/
 frontnet/
 yolov5/
 temp_pid*
+*results*
+*.txt
+*.npz
+*.npy
+*.tsv
+*.tex
+*.pth
