@@ -9,8 +9,8 @@ from tqdm import tqdm
 from matplotlib import pyplot as plt
 
 # Local Imports
-from simulation_refactor import DroneSimulation
-from attacks_refactor import Attacker, project_patch, get_pose_from_prediction
+from simulation import DroneSimulation
+from attacks import Attacker, project_patch, get_pose_from_prediction
 from util import load_dataset, load_model, gen_target_trajectory 
 from yolo_bounding import YOLOBox 
 

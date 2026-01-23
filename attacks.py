@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import numpy as np
 import time
 import pickle
-from simulation_refactor import T_matrix, normalize_yaw, calc_heading_vec
+from simulation import T_matrix, normalize_yaw, calc_heading_vec
 import os
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '.'))
