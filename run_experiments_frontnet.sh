@@ -4,7 +4,7 @@ set -euo pipefail
 #MODELS=("frontnet" "yolov5")
 MODELS=("frontnet")
 # PATCH_MODES=("optimal" "timeout" "random" "black" "white" "fap" "diffusion" "interpolation" "corpus")
-PATCH_MODES=("none" "black" "random" "diffusion" "timeout" "optimal" "velo")
+PATCH_MODES=("velo")
 TEMPERATURES=("warm" "cold")
 TRAJECTORIES=("figure8" "triangle" "u" "s" "slingshot_left")
 DISPLAY_SIZES=(40 50 60 70 80 90 100 110 120)
@@ -19,8 +19,8 @@ PARAMS_FILE="${LOG_DIR}/params.tsv"
 # Do not overwrite existing params file. Create only if missing.
 if [ ! -f "${PARAMS_FILE}" ]; then
   : > "${PARAMS_FILE}"
-else
-  echo "Using existing ${PARAMS_FILE}; not regenerating to avoid overwrite."
+# else
+#   echo "Using existing ${PARAMS_FILE}; not regenerating to avoid overwrite."
 fi
 
 # Build params list (one line per job)
@@ -30,7 +30,11 @@ for MODEL in "${MODELS[@]}"; do
     if [ "${PATCH_MODE}" = "timeout" ]; then
       TIMEOUT_LIST=("${TIMEOUT_VALUES[@]}")
     else
-      TIMEOUT_LIST=("10")
+      TIMEOUT_LIST=("0")
+    fi
+
+    if [ "${PATCH_MODE}" = "none" ]; then
+      DISPLAY_SIZES=(60)
     fi
 
     # TEMPERATURES based on PATCH_MODE
