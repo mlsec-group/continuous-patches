@@ -11,7 +11,7 @@ from matplotlib import pyplot as plt
 # Local Imports
 from simulation import DroneSimulation
 from attacks import Attacker, project_patch, get_pose_from_prediction
-from util_copy import load_dataset, load_model, gen_target_trajectory 
+from util import load_dataset, load_model, gen_target_trajectory 
 from yolo_bounding import YOLOBox 
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '.'))
