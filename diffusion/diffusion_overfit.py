@@ -14,8 +14,9 @@ import argparse
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
-from util import load_model, load_dataset, normalize_yaw_t
+from util import load_model, load_dataset
 from simulation import T_matrix
+from simulation import normalize_yaw as normalize_yaw_t
 
 def _perspective_grid(
 coeffs: list[float], 
@@ -260,7 +261,7 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
         patch_size=(patch_h, patch_w),
         prediction_model_name=model_name
     )
-    optimizer = torch.optim.Adam(model_wrapper.model.parameters(), lr=1e-3)
+    optimizer = torch.optim.Adam(model_wrapper.model.parameters(), lr=1e-4)
 
     # ==========================================================================
     # 4. TRAINING LOOP WITH DATALOADER
@@ -301,6 +302,16 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
             noisy_patches = batch_patches + noise * sigmas
             
             # C. Predict Clean Patch (Batch Denoising)
+            if model_name == 'yolov5':
+                random_sf = torch.zeros(batch_size, 1, device=device).uniform_(0.5, 1.5)
+                random_tx = torch.zeros(batch_size, 1, device=device).uniform_(-40., 320.)
+                random_ty = torch.zeros(batch_size, 1, device=device).uniform_(-20., 160.)
+                random_x = torch.zeros(batch_size, 1, device=device).uniform_(-1.5, 1.5)
+                random_y = torch.zeros(batch_size, 1, device=device).uniform_(-1.5, 1.5)
+                random_z = torch.zeros(batch_size, 1, device=device).uniform_(0.1, 2.0)
+                random_yaw = torch.zeros(batch_size, 1, device=device).uniform_(-0.3, 0.3)
+                batch_conds = torch.cat([random_sf, random_tx, random_ty, random_x, random_y, random_z, random_yaw], dim=1)
+
             denoised_guess = model_wrapper.denoised_prediction(noisy_patches, batch_conds, sigmas)
             
             # D. Loss (MSE over entire batch)
@@ -316,13 +327,18 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
                 patch = denoised_guess[i].unsqueeze(0)  # (1, 1, H_p, W_p), between -1 and 1
                 # print("Patch min/max:", patch.min().item(), patch.max().item())
                 
-                patch_normalized = (patch + 1.0) / 2.0  # Normalize patch to [0, 1] for projection
+                patch_normalized = ((patch + 1.0) / 2.0).clamp_(0.0, 1.0)  # Normalize patch to [0, 1] for projection
                 # print("Patch normalized min/max:", patch_normalized.min().item(), patch_normalized.max().item(), patch_normalized.shape)
 
-                sf = batch_conds[i, 0].item() + torch.randn(1).item() * 0.05  # slight noise to scale factor
-                tx = batch_conds[i, 1].item() + torch.randn(1).item() * 2.0   # slight noise to translation x
-                ty = batch_conds[i, 2].item() + torch.randn(1).item() * 2.0   # slight noise to translation y
-                
+                if model_name == 'frontnet':
+                    sf = batch_conds[i, 0].item() + torch.randn(1).item() * 0.05  # slight noise to scale factor
+                    tx = batch_conds[i, 1].item() + torch.randn(1).item() * 2.0   # slight noise to translation x
+                    ty = batch_conds[i, 2].item() + torch.randn(1).item() * 2.0   # slight noise to translation y
+                if model_name == 'yolov5':
+                    sf = batch_conds[i, 0].item() + torch.randn(1).item() * 0.1  # more noise to scale factor
+                    tx = batch_conds[i, 1].item() + torch.randn(1).item() * 10.0   # more noise to translation x
+                    ty = batch_conds[i, 2].item() + torch.randn(1).item() * 10.0   # more noise to translation y
+                    
                 # Construct Transformation Matrix T
                 T = torch.tensor([
                     [sf, 0., tx],
