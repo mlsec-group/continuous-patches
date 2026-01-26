@@ -189,8 +189,7 @@ class Attacker:
         opt = torch.optim.Adam([patch], lr=0.03)
         scheduler = torch.optim.lr_scheduler.LinearLR(opt, start_factor=1e-2, end_factor=1., total_iters=max_iters//10)
 
-        
-        timeout = 1.0 / self.args.timeout if self.args.timeout else 1e10
+        timeout = 1.0 / self.args.timeout if self.args.timeout != 0 else 1e10
         # print("Time limit for optimization (s):", timeout)
         start_t = time.time()
         

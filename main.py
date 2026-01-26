@@ -11,7 +11,7 @@ from matplotlib import pyplot as plt
 # Local Imports
 from simulation import DroneSimulation
 from attacks import Attacker, project_patch, get_pose_from_prediction
-from util import load_dataset, load_model, gen_target_trajectory 
+from util_copy import load_dataset, load_model, gen_target_trajectory 
 from yolo_bounding import YOLOBox 
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '.'))
@@ -65,7 +65,7 @@ def run_experiment(args):
     time_per_step = []
     history_vel_cmd = []
     target_idx = 1
-    dt = 1.0 / args.timeout if args.timeout else 1/10.0
+    dt = 1.0 / args.timeout if args.timeout != 0 else 1/10.0
     print(f"Using dt={dt:.4f}s based on timeout={args.timeout}")
 
     patch_size = (150, 320) if args.model == 'yolov5' else (45, 80)
@@ -222,7 +222,7 @@ if __name__ == "__main__":
     parser.add_argument('--img_idx', type=int, default=0, help='Index of the image to use from the dataset')
     parser.add_argument('--temperature', type=str, choices=['warm', 'cold', 'none'], default='none', help='Either restart from random patch (cold) or from the last patch (warm)')
     parser.add_argument('--corpus_size', type=int, choices=[1000, 2000, 3000], default=1000, help='Number of patches in the corpus (only for corpus/interpolation/diffusion patch mode)')
-    parser.add_argument('--timeout', type=int, default=None)
+    parser.add_argument('--timeout', type=int, default=0)
     
     args = parser.parse_args()
     run_experiment(args)
