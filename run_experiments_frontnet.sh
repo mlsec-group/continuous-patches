@@ -4,12 +4,13 @@ set -euo pipefail
 #MODELS=("frontnet" "yolov5")
 MODELS=("frontnet")
 # PATCH_MODES=("optimal" "timeout" "random" "black" "white" "fap" "diffusion" "interpolation" "corpus")
-PATCH_MODES=("velo")
+PATCH_MODES=("none" "timeout" "random" "black" "diffusion" "optimal" "corpus" "velo")
 TEMPERATURES=("warm" "cold")
 TRAJECTORIES=("figure8" "triangle" "u" "s" "slingshot_left")
-DISPLAY_SIZES=(40 50 60 70 80 90 100 110 120)
+DISPLAY_SIZES=(40 50 70 80 90 100 110 120)
 CORPUS_SIZES=(1000)
 PIC_MODES=("idx" "random")
+SEED_VALUES=(0 1 2)
 LOG_DIR="logs_frontnet"
 TIMEOUT_VALUES=(10)
 
@@ -42,7 +43,9 @@ for MODEL in "${MODELS[@]}"; do
     fi
 
     if [ "${PATCH_MODE}" = "none" ]; then
-      DISPLAY_SIZES=(60)
+      DISPLAY_LIST=(60)
+    else
+      DISPLAY_LIST=("${DISPLAY_SIZES[@]}")
     fi
 
     # TEMPERATURES based on PATCH_MODE
@@ -67,7 +70,7 @@ for MODEL in "${MODELS[@]}"; do
 
     for TRAJ in "${TRAJECTORIES[@]}"; do
       for CORPUS_SIZE in "${CORPUS_SIZE_LIST[@]}"; do
-        for DISPLAY_SIZE in "${DISPLAY_SIZES[@]}"; do
+        for DISPLAY_SIZE in "${DISPLAY_LIST[@]}"; do
           for PIC_MODE in "${PIC_MODES[@]}"; do
             for TIMEOUT in "${TIMEOUT_LIST[@]}"; do
               for TEMP in "${TEMP_LIST[@]}"; do
