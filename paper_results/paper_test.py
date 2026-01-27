@@ -119,7 +119,7 @@ base_path = f"{project_root}/paper_results"
 print("Base path: ", base_path)
 
 MODELS = ("frontnet", )
-PATCH_MODES = ("random", "black", "timeout", "velo", "diffusion", "optimal", "corpus")
+PATCH_MODES = ("random", "black", "timeout", "velo", "diffusion", "optimal", "corpus", "none")
 TEMPERATURES = ("warm", "cold")
 TRAJECTORIES = ("figure8", "triangle", "u", "s", "slingshot_left")
 DISPLAY_SIZES = (40, 50, 60, 70, 80, 90, 100, 110, 120)
@@ -197,10 +197,7 @@ for model in MODELS:
 print(f"Found {len(found_files)} existing result files.")
 print(f"Missing {len(missing_combinations)} result files.")
 
-# save missing combinations to a csv for reference
-missing_df = pd.DataFrame(missing_combinations, columns=["model", "patch_mode", "temperature", "trajectory", "display_size", "pic_mode_image", "seed"])
-missing_df.to_csv(os.path.join(base_path, "missing_combinations_frontnet.csv"), index=False)
-print(f"Wrote missing combinations to CSV: {os.path.join(base_path, 'missing_combinations_frontnet.csv')}")
+
 
 
 # print("found_files examples: ", found_files[:5])
@@ -293,7 +290,7 @@ for file_info in tqdm(found_files):
     rows.append({
         "model": model,
         "patch_mode": patch_mode,
-        "temperature": temperature if temp_in_path else "",
+        "temperature": temperature if temp_in_path else "cold",
         "trajectory": trajectory,
         "display_size": int(display_size) if str(display_size).isdigit() else display_size,
         "pic_mode": pic_mode,
@@ -306,6 +303,12 @@ for file_info in tqdm(found_files):
     })
 
     # print("Saved scores for file: ", file_path)
+
+
+ # save missing combinations to a csv for reference
+missing_df = pd.DataFrame(missing_combinations, columns=["model", "patch_mode", "temperature", "trajectory", "display_size", "pic_mode_image", "seed"])
+missing_df.to_csv(os.path.join(base_path, "missing_combinations_frontnet.csv"), index=False)
+print(f"Wrote missing combinations to CSV: {os.path.join(base_path, 'missing_combinations_frontnet.csv')}")
 
 # Build DataFrame and persist
 df = pd.DataFrame(rows)
