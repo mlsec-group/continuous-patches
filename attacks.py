@@ -125,6 +125,10 @@ class Attacker:
             weight_path = f"{project_root}/overfit_results/diffusion_model_{args.model}_1000.pth"
             self.diff_model.load(weight_path)
             self.diff_model.model.eval()
+            if self.model.name == "frontnet":
+                self.num_denoising_steps = 2
+            elif self.model.name == "yolov5":
+                num_denoising_steps = 50
             
         if self.mode in ['corpus', 'interpolation']:
             data = np.load(f"{project_root}/{self.model.name}/corpus_{self.model.name}.npz")
@@ -168,7 +172,7 @@ class Attacker:
             
             if self.mode == 'diffusion':
                 with torch.no_grad(): 
-                    return self.diff_model.sample(1, cond, self.device, n_steps=50)
+                    return self.diff_model.sample(1, cond, self.device, n_steps=self.num_denoising_steps)
             if self.mode == 'corpus':
                 dists = torch.norm(self.corpus_conds - cond, dim=1)
                 return self.corpus_patches[torch.argmin(dists)].unsqueeze(0)
