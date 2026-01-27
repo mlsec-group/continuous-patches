@@ -31,7 +31,8 @@ def check_generalization(prediction_model_name='frontnet'):
     print(f"Testing Unseen Condition: {new_cond.cpu().numpy()}")
 
     # 3. Generate Patch
-    patch = model.sample(n_samples=1, targets=new_cond, device=device, n_steps=50)
+    with torch.no_grad():
+        patch = model.sample(n_samples=1, targets=new_cond, device=device, n_steps=2)
     
     # 4. Validate with Frontnet
     # Load Victim
