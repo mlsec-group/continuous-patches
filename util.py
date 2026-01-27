@@ -234,22 +234,24 @@ def gen_target_trajectory(trajectory, monitor_center=[2., 0., 1.], num_steps=25)
         y_transition = -0.4 # y-coordinate where lines meet the curve (-1 + 0.6)
 
         # 1. Left Vertical Line: From top left (-0.6, 1) down to (-0.6, -0.4)
-        y1 = np.linspace(1, y_transition, 50)
+        y1 = np.linspace(1, y_transition, num_steps // 3)
         x1 = np.full_like(y1, -rx)
 
         # 2. Bottom Arc: Semi-ellipse centered at (0, -0.4)
         # Angle ranges from pi (left) to 2pi (right) to sweep the bottom
-        t = np.linspace(np.pi, 2 * np.pi, 50)
+        t = np.linspace(np.pi, 2 * np.pi, num_steps // 3 + num_steps % 3)
         x2 = rx * np.cos(t)
         y2 = ry * np.sin(t) + y_transition
 
         # 3. Right Vertical Line: From (0.6, -0.4) up to top right (0.6, 1)
-        y3 = np.linspace(y_transition, 1, 50)
+        y3 = np.linspace(y_transition, 1, num_steps // 3 )
         x3 = np.full_like(y3, rx)
 
         # Combine
         x = np.concatenate([x1, x2, x3])
         y = np.concatenate([y1, y2, y3])
+
+        # print(x.shape, y.shape)
         xy_points = np.column_stack([x, y])
 
     elif trajectory == 'slingshot_left':
@@ -274,8 +276,7 @@ def gen_target_trajectory(trajectory, monitor_center=[2., 0., 1.], num_steps=25)
     # Combine with Z and Yaw
     z = np.ones((num_steps, 1)) * z_val
     # calculate yaw to always face monitor center
-    yaw = np.arctan2(monitor_center[1] - xy_points[:,1], monitor_center[0] - xy_points[:,0]).reshape(-1, 1)
-    
+    yaw = np.arctan2(monitor_center[1] - xy_points[:,1], monitor_center[0] - xy_points[:,0]).reshape(-1, 1)    
     # Result shape: (num_steps, 4)
     waypoints = np.hstack([xy_points, z, yaw])
 
