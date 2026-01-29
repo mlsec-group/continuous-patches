@@ -269,6 +269,11 @@ def gen_target_trajectory(trajectory, monitor_center=[2., 0., 1.], num_steps=25)
         point = np.array([3.0, 0.])
         xy_points = point.reshape(1, 2).repeat(num_steps, axis=0)
         xy_points[0] = start
+    elif trajectory == 'slingshot_backward':
+        start = np.array([0., 0.])
+        point = np.array([-3.0, 0.])
+        xy_points = point.reshape(1, 2).repeat(num_steps, axis=0)
+        xy_points[0] = start
 
     else:
         raise ValueError(f"Unknown trajectory type: {trajectory}")
