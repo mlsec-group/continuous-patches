@@ -4,10 +4,10 @@ set -euo pipefail
 #MODELS=("frontnet" "yolov5")
 MODELS=("frontnet")
 # PATCH_MODES=("optimal" "timeout" "random" "black" "white" "fap" "diffusion" "interpolation" "corpus")
-PATCH_MODES=("none" "timeout" "random" "black" "diffusion" "optimal" "corpus" "velo")
+PATCH_MODES=("interpolation")
 TEMPERATURES=("warm" "cold")
 TRAJECTORIES=("figure8" "triangle" "u" "s" "slingshot_left")
-DISPLAY_SIZES=(40 50 70 80 90 100 110 120)
+DISPLAY_SIZES=(40 50 60 70 80 90 100 110 120)
 CORPUS_SIZES=(1000)
 PIC_MODES=("idx" "random")
 SEED_VALUES=(0 1 2)
@@ -42,7 +42,7 @@ for MODEL in "${MODELS[@]}"; do
       TIMEOUT_LIST=("0")
     fi
 
-    if [ "${PATCH_MODE}" = "none" ]; then
+    if [ "${PATCH_MODE}" = "none" ] || [ "${PATCH_MODE}" = "optimal" ]; then
       DISPLAY_LIST=(60)
     else
       DISPLAY_LIST=("${DISPLAY_SIZES[@]}")

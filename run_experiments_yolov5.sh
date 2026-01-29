@@ -3,8 +3,8 @@ set -euo pipefail
 
 #MODELS=("frontnet" "yolov5")
 MODELS=("yolov5")
-PATCH_MODES=("optimal" "timeout" "random" "black" "diffusion" "corpus" "optimal")
-# PATCH_MODES=("velo")
+# PATCH_MODES=("optimal" "timeout" "random" "black" "corpus" "optimal")
+PATCH_MODES=("interpolation")
 TEMPERATURES=("warm" "cold")
 TRAJECTORIES=("figure8" "triangle" "u" "s" "slingshot_left")
 DISPLAY_SIZES=(60 80 100 120)
@@ -42,7 +42,7 @@ for MODEL in "${MODELS[@]}"; do
       TIMEOUT_LIST=("0")
     fi
 
-    if [ "${PATCH_MODE}" = "none" ]; then
+    if [ "${PATCH_MODE}" = "none" ] || [ "${PATCH_MODE}" = "optimal" ] ; then
       DISPLAY_LIST=(60)
     else
       DISPLAY_LIST=("${DISPLAY_SIZES[@]}")
@@ -111,7 +111,7 @@ SUBMIT_DIR="$(pwd)"
 sbatch <<EOF
 #!/bin/bash
 #SBATCH --job-name=usenix_yolov5
-#SBATCH --partition=gpu-2h
+#SBATCH --partition=gpu-9m
 #SBATCH --gpus-per-node=1
 #SBATCH --constraint="80gb"
 #SBATCH --array=0-$((TOTAL_JOBS-1))
