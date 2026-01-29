@@ -512,6 +512,7 @@ class DiffusionModel():
 
         F_x = self.model(c_in * x, conditioning, c_noise)
         D_x = c_skip * x + c_out * F_x
+        D_x = torch.tanh(D_x)  # Ensure output is in [-1, 1]
         return D_x
     
     def train(self, patch, target, conditioning, device: torch.device, nepochs: int = 10):
