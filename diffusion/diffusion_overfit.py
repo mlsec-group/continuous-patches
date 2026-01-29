@@ -116,12 +116,51 @@ def project_patch(patches, T_matrices, images):
 
     return manipulated_images
 
+def normalize_condition(cond_vector, model='frontnet'):
+    """
+    cond_vector: [sf, tx, ty, x, y, z, yaw]
+    """
+    c = cond_vector.clone()
+    
+    # 1. Normalize Scale (assuming range 0.5 to 1.3)
+    # c[:, 0] = (c[:, 0] - 0.5) / (1.3 - 0.5)
+    
+    # 2. Normalize Translation (Crucial!)
+    # Assuming img size (320, 640) for YOLO
+    # base_tx = np.random.uniform(-40., 640.)
+    # base_ty = np.random.uniform(-20., 320.)
+    if model == 'frontnet':
+        # base_tx = np.random.uniform(-20., 160.)
+        # base_ty = np.random.uniform(-10., 96.)
+        c[:, 1] = (c[:, 1]- -20.0) / (160.0 + 20.0)  # tx
+        c[:, 2] = (c[:, 2]- -10.0) / (96.0 + 10.0)   # ty
+    elif model == 'yolov5':
+        c[:, 1] = (c[:, 1]- -40.0) / (640.0 + 40.0)  # tx
+        c[:, 2] = (c[:, 2]- -20.0) / (320.0 + 20.0)  # ty
+
+
+    
+    # 3. Normalize Pose (x, y, z, yaw)
+    # Assuming relative coordinates usually within [-1, 1]
+    #  x_t = np.random.uniform(0., 1.5)
+    # y_t = np.random.uniform(-1, 1)
+    # z_t = np.random.uniform(-0.5, 0.5)
+    # yaw_t = np.random.uniform(-0.1, 0.1)
+    # c[:, 3] = [c:, 3] / 1.5  # x [0, 1.5]
+    # c[:, 4] = (c[:, 4] + 1.0) / 2.0  # y [-1, 1] -> [0, 1]
+    # c[:, 5] = (c[:, 5] + 0.5) / 1.0  # z [-0.5, 0.5] -> [0, 1]
+    # c[:, 6] = (c[:, 6] + 0.3) / 0.6  # yaw [-0.3, 0.3] -> [0, 1]
+
+    
+    return c
+
 class PatchDataset(Dataset):
     """Custom Dataset for patches and conditioning"""
     def __init__(self, patches_np, targets_np, conds_np):
         self.patches = torch.tensor(patches_np, dtype=torch.float32).unsqueeze(1)  # (B, 1, H, W)
         self.patches = self.patches * 2.0 - 1.0  # Normalize to [-1, 1]
-        
+        print("Patch Dataset - patches range: ", torch.min(self.patches).item(), torch.max(self.patches).item())
+
         # Create Conditioning Vectors: [sf, tx, ty, x, y, z, yaw]
         cond_vector = np.concatenate([conds_np, targets_np], axis=1)  # (B, 7)
         self.conds = torch.tensor(cond_vector, dtype=torch.float32)
@@ -227,6 +266,72 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
     # ==========================================================================
     # 2. CREATE DATALOADER
     # ==========================================================================
+    print("Ranges dataset:")
+    # print("Patch min/max: ", np.min(patches_np), np.max(patches_np))
+    # print("Scale Factor: ", np.min(conds_np[:,0]), np.max(conds_np[:,0]))
+    # print("Translation X: ", np.min(conds_np[:,1]), np.max(conds_np[:,1]))
+    # print("Translation Y: ", np.min(conds_np[:,2]), np.max(conds_np[:,2]))
+    # print("Target X: ", np.min(targets_np[:,0]), np.max(targets_np[:,0]))
+    # print("Target Y: ", np.min(targets_np[:,1]), np.max(targets_np[:,1]))
+    # print("Target Z: ", np.min(targets_np[:,2]), np.max(targets_np[:,2]))
+    # print("Target Yaw: ", np.min(targets_np[:,3]), np.max(targets_np[:,3]))
+
+    # DEBUGGING
+    # replace patches with random noise
+    # patches_np = np.random.uniform(0., 1.0, size=patches_np.shape).astype(np.float32)
+    # replace target sf with values within range [0.1, 1.5]
+    # conds_np[:,0] = np.random.uniform(0.1, 1.5, size=conds_np.shape[0])
+    # print("Target sf: ", np.min(conds_np[:,0]), np.max(conds_np[:,0]))
+    # # replace target tx with values within range [-40, 640] for yolov5 and [-20, 160] for frontnet
+    # # replace target ty with values within range [-20, 320] for yolov5 and [-10, 96] for frontnet
+    # if model_name == 'frontnet':
+    #     conds_np[:,1] = np.random.uniform(-20., 160., size=conds_np.shape[0])
+    #     conds_np[:,2] = np.random.uniform(-10., 96., size=conds_np.shape[0])
+    # elif model_name == 'yolov5':
+    #     conds_np[:,1] = np.random.uniform(-40., 640., size=conds_np.shape[0])
+    #     conds_np[:,2] = np.random.uniform(-20., 320., size=conds_np.shape[0])
+
+    # print("Target tx: ", np.min(conds_np[:,1]), np.max(conds_np[:,1]))
+    # print("Target ty: ", np.min(conds_np[:,2]), np.max(conds_np[:,2]))
+
+    # # replace target x with values within range [0., 2.]
+    # targets_np[:,0] = np.random.uniform(0., 2.0, size=targets_np.shape[0])
+    # print("Target X: ", np.min(targets_np[:,0]), np.max(targets_np[:,0]))
+    # # replace target y with values within range [-1.5, 1.5]
+    # targets_np[:,1] = np.random.uniform(-1.5, 1.5, size=targets_np.shape[0])
+    # print("Target Y: ", np.min(targets_np[:,1]), np.max(targets_np[:,1]))
+    # # replace target z with values within range [-0.5, 0.5]
+    # targets_np[:,2] = np.random.uniform(-0.5, 0.5, size=targets_np.shape[0])
+    # print("Target Z: ", np.min(targets_np[:,2]), np.max(targets_np[:,2]))
+
+    # # replace target yaw with values within range [-np.pi, np.pi]
+    # targets_np[:,3] = np.random.uniform(-np.pi, np.pi, size=targets_np.shape[0])
+    # print("Target Yaw: ", np.min(targets_np[:,3]), np.max(targets_np[:,3]))
+
+    # shift patches to [-1, 1]
+    # patches_np = patches_np * 2.0 - 1.0
+
+    # random_patches = np.random.uniform(-1.0, 1.0, size=patches_np.shape).astype(np.float32)
+    # random_sf = np.random.uniform(0.5, 1.5, size=(patches_np.shape[0], 1)).astype(np.float32)
+    # if model_name == 'frontnet':
+    #     random_tx = np.random.uniform(-20., 160., size=(patches_np.shape[0], 1)).astype(np.float32)
+    #     random_ty = np.random.uniform(-10., 96., size=(patches_np.shape[0], 1)).astype(np.float32)
+    # elif model_name == 'yolov5':
+    #     random_tx = np.random.uniform(-40., 640., size=(patches_np.shape[0], 1)).astype(np.float32)
+    #     random_ty = np.random.uniform(-20., 320., size=(patches_np.shape[0], 1)).astype(np.float32)
+    # random_conds = np.concatenate([random_sf, random_tx, random_ty], axis=1)
+
+    # random_x = np.random.uniform(0., 1.5, size=(patches_np.shape[0], 1)).astype(np.float32)
+    # random_y = np.random.uniform(-1.5, 1.5, size=(patches_np.shape[0], 1)).astype(np.float32)
+    # random_z = np.random.uniform(-0.5, 0.5, size=(patches_np.shape[0], 1)).astype(np.float32)
+    # random_yaw = np.random.uniform(-np.pi, np.pi, size=(patches_np.shape[0], 1)).astype(np.float32)
+    # random_targets = np.concatenate([random_x, random_y, random_z, random_yaw], axis=1)
+
+    # new_patch_dataset = np.concatenate([random_patches, patches_np], axis=0)
+    # new_target_dataset = np.concatenate([random_targets, targets_np], axis=0)
+    # new_cond_dataset = np.concatenate([random_conds, conds_np], axis=0)
+
+    # dataset = PatchDataset(new_patch_dataset, new_target_dataset, new_cond_dataset)
     dataset = PatchDataset(patches_np, targets_np, conds_np)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
     
@@ -261,7 +366,7 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
         patch_size=(patch_h, patch_w),
         prediction_model_name=model_name
     )
-    optimizer = torch.optim.Adam(model_wrapper.model.parameters(), lr=1e-4)
+    optimizer = torch.optim.Adam(model_wrapper.model.parameters(), lr=1e-3)
 
     # ==========================================================================
     # 4. TRAINING LOOP WITH DATALOADER
@@ -302,17 +407,25 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
             noisy_patches = batch_patches + noise * sigmas
             
             # C. Predict Clean Patch (Batch Denoising)
-            if model_name == 'yolov5':
-                random_sf = torch.zeros(batch_size, 1, device=device).uniform_(0.5, 1.5)
-                random_tx = torch.zeros(batch_size, 1, device=device).uniform_(-40., 320.)
-                random_ty = torch.zeros(batch_size, 1, device=device).uniform_(-20., 160.)
-                random_x = torch.zeros(batch_size, 1, device=device).uniform_(-1.5, 1.5)
-                random_y = torch.zeros(batch_size, 1, device=device).uniform_(-1.5, 1.5)
-                random_z = torch.zeros(batch_size, 1, device=device).uniform_(0.1, 2.0)
-                random_yaw = torch.zeros(batch_size, 1, device=device).uniform_(-0.3, 0.3)
-                batch_conds = torch.cat([random_sf, random_tx, random_ty, random_x, random_y, random_z, random_yaw], dim=1)
+            # if model_name == 'yolov5':
+            #     random_sf = torch.zeros(batch_size, 1, device=device).uniform_(0.5, 1.5)
+            #     random_tx = torch.zeros(batch_size, 1, device=device).uniform_(-40., 320.)
+            #     random_ty = torch.zeros(batch_size, 1, device=device).uniform_(-20., 160.)
+            #     random_x = torch.zeros(batch_size, 1, device=device).uniform_(-1.5, 1.5)
+            #     random_y = torch.zeros(batch_size, 1, device=device).uniform_(-1.5, 1.5)
+            #     random_z = torch.zeros(batch_size, 1, device=device).uniform_(0.1, 2.0)
+            #     random_yaw = torch.zeros(batch_size, 1, device=device).uniform_(-0.3, 0.3)
+            #     batch_conds = torch.cat([random_sf, random_tx, random_ty, random_x, random_y, random_z, random_yaw], dim=1)
+            #     if np.random.rand() < 0.1:
+            #         # 10% of the time, use the actual batch conditions
+            #         batch_conds_n = torch.zeros_like(batch_conds).to(device)
+            #     else:
+            #         batch_conds_n = normalize_condition(batch_conds) 
 
-            denoised_guess = model_wrapper.denoised_prediction(noisy_patches, batch_conds, sigmas)
+            batch_conds_n = normalize_condition(batch_conds, model=model_name)
+
+
+            denoised_guess = model_wrapper.denoised_prediction(noisy_patches, batch_conds_n, sigmas)
             
             # D. Loss (MSE over entire batch)
             reconstruction_loss = F.mse_loss(denoised_guess, batch_patches)
@@ -371,12 +484,15 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
                 # print("x, y, z, yaw:", x, y, z, yaw)
                 prediction = torch.stack([x, y, z, yaw])
                 prediction = prediction.squeeze(2).mT
-                x_loss = F.mse_loss(prediction[:, 0], target_positions[:, 0])
-                y_loss = F.mse_loss(prediction[:, 1], target_positions[:, 1])
-                z_loss = F.mse_loss(prediction[:, 2], target_positions[:, 2])
+                # x_loss = F.mse_loss(prediction[:, 0], target_positions[:, 0])
+                # y_loss = F.mse_loss(prediction[:, 1], target_positions[:, 1])
+                # z_loss = F.mse_loss(prediction[:, 2], target_positions[:, 2])
 
-                dist_loss = x_loss + y_loss + (10.0 * z_loss)
-                ang_loss = (1 - torch.cos(normalize_yaw_t(prediction[:, 3]) - normalize_yaw_t(target_positions[:, 3]))).mean()
+                # dist_loss = x_loss + y_loss +  z_loss
+                # ang_loss = (1 - torch.cos(normalize_yaw_t(prediction[:, 3]) - normalize_yaw_t(target_positions[:, 3]))).mean()
+                # control_loss = dist_loss + ang_loss
+                dist_loss = F.pairwise_distance(prediction[:, :3], target_positions[:, :3])
+                ang_loss = (1 - torch.cos(normalize_yaw_t(prediction[:, 3]) - normalize_yaw_t(target_positions[:, 3])))
                 control_loss = dist_loss + ang_loss
 
             if model_name == 'yolov5':
@@ -405,16 +521,22 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
                 prediction = torch.cat([prediction[:, :3], yaw_tensor.unsqueeze(1)], dim=1)
                 # print("Prediction:", prediction)
                 
-                control_loss = F.mse_loss(prediction[:, :3], target_positions[:, :3])
-                angular_loss = (1 - torch.cos(normalize_yaw_t(prediction[:, 3]) - normalize_yaw_t(target_positions[:, 3]))).mean()
-                control_loss = control_loss + angular_loss
+                # control_loss = F.mse_loss(prediction[:, :3], target_positions[:, :3])
+                # angular_loss = (1 - torch.cos(normalize_yaw_t(prediction[:, 3]) - normalize_yaw_t(target_positions[:, 3]))).mean()
+                # control_loss = control_loss + angular_loss
                 # control_loss = control_loss * 20.
-           
+                control_loss = F.pairwise_distance(prediction[:, :3], target_positions[:, :3])
+                angular_loss = (1 - torch.cos(normalize_yaw_t(prediction[:, 3]) - normalize_yaw_t(target_positions[:, 3])))
+                control_loss = control_loss + angular_loss
 
-            all_control_losses.append(control_loss.item())
+
+            all_control_losses.append(control_loss.mean().item())
             all_recon_losses.append(reconstruction_loss.item())
 
-            loss = control_loss#reconstruction_loss + control_loss
+            # sorted_losses, _ = torch.sort(control_loss, descending=True)
+            # top5_losses = sorted_losses[:5].mean()
+
+            loss = control_loss.mean()
             
             all_losses.append(loss.item())
             
@@ -427,7 +549,7 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
         avg_epoch_loss = epoch_loss / len(dataloader)
         all_avg_losses.append(avg_epoch_loss)
         if epoch % 10 == 0:
-                tqdm.write(f"Step {epoch}, Avg Loss: {avg_epoch_loss:.6f}, Last reconstruction Loss: {reconstruction_loss.item():.6f}, Last Control Loss: {control_loss.item():.6f}")
+            tqdm.write(f"Step {epoch}, Avg Loss: {avg_epoch_loss:.6f}, Last reconstruction Loss: {reconstruction_loss.item():.6f}, Last Control Loss: {control_loss.mean().item():.6f}")
         
         # print(f"Epoch {epoch+1} completed. Average Loss: {avg_epoch_loss:.6f}")
 

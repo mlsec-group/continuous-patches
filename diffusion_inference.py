@@ -6,8 +6,10 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), 'diffusion'))
 from diffusion_model import DiffusionModel, construct_T_matrix
+from diffusion_overfit import normalize_condition
 from attacks import project_patch
 from util import load_model, normalize_yaw_t, load_dataset
+from simulation import T_matrix, calc_heading_vec
 
 import argparse
 
@@ -26,13 +28,18 @@ def check_generalization(prediction_model_name='frontnet'):
     # 2. Define a "New" Condition (Arbitrary values inside valid range)
     # sf=0.8, tx=50, ty=30 (Patch Position)
     # x=1.0, y=0.0, z=0.0, yaw=0.0 (Drone Target)
-    new_cond = torch.tensor([[0.8, 50.0, 30.0, 1.0, 0.0, 0.0, 0.0]], device=device)
-    
+    # new_cond = torch.tensor([[0.8, 50.0, 30.0, 1.0, 0.0, 0.0, 0.0]], device=device)
+    # condition from experiment:
+    base_cond = torch.tensor([[ 0.76900554, 45.857277, 47.99321, 0.95535207, -0.09457839, -0.0215925, -0.29849893]], device=device)
+    print("Original Condition: ", base_cond.cpu().numpy())
+    new_cond = normalize_condition(base_cond, model=prediction_model_name)
+
+
     print(f"Testing Unseen Condition: {new_cond.cpu().numpy()}")
 
     # 3. Generate Patch
     with torch.no_grad():
-        patch = model.sample(n_samples=1, targets=new_cond, device=device, n_steps=2)
+        patches = model.sample(n_samples=5, targets=new_cond, device=device, n_steps=20)
     
     # 4. Validate with Frontnet
     # Load Victim
@@ -53,42 +60,45 @@ def check_generalization(prediction_model_name='frontnet'):
     if prediction_model_name == 'yolov5':
         bg = torch.nn.functional.interpolate(bg, size=(320, 640), mode='bilinear', align_corners=False)
     # Project
-    T = construct_T_matrix(new_cond[:,0], new_cond[:,1], new_cond[:,2])
+    T = construct_T_matrix(base_cond[:,0], base_cond[:,1], base_cond[:,2])
+
+    print("T matrix:\n", T.cpu().numpy())
 
     # print(bg.requires_grad)
     # print(patch.requires_grad)
     # print(T.requires_grad)
-    manipulated = project_patch(patch, T, bg).clamp(0, 1)
-    # print(manipulated.requires_grad)
-    
-    # Predict
-    if prediction_model_name == 'frontnet':
-        x, y, z, yaw = frontnet(manipulated * 255.)
-        pred = torch.stack([x, y, z, yaw]).squeeze(2).mT.detach().cpu().numpy()
-    elif prediction_model_name == 'yolov5':
-        manipulated = manipulated.repeat_interleave(3, dim=1)
-        predicted_boxes, _ = yolo(manipulated, target_anchor=None)
-        scaled_box = predicted_boxes.clone()
-        # scale back to 160x96
-        scaled_box[:, [0, 2]] *= (160.0 / 640.)  # x coords
-        scaled_box[:, [1, 3]] *= (96.0 / 320.)   # y coords
-        pred = yolo.cam.batch_xyz_from_boxes(scaled_box).detach().cpu().numpy()
-        print(pred.shape, pred)
+    for i, patch in enumerate(patches):
+        manipulated = project_patch(patch.unsqueeze(0), T, bg).clamp(0, 1)
+        # print(manipulated.requires_grad)
+        
+        # Predict
+        if prediction_model_name == 'frontnet':
+            x, y, z, yaw = frontnet(manipulated * 255.)
+            pred = torch.stack([x, y, z, yaw]).squeeze(2).mT.detach().cpu().numpy()
+        elif prediction_model_name == 'yolov5':
+            manipulated = manipulated.repeat_interleave(3, dim=1)
+            predicted_boxes, _ = yolo(manipulated, target_anchor=None)
+            scaled_box = predicted_boxes.clone()
+            # scale back to 160x96
+            scaled_box[:, [0, 2]] *= (160.0 / 640.)  # x coords
+            scaled_box[:, [1, 3]] *= (96.0 / 320.)   # y coords
+            pred = yolo.cam.batch_xyz_from_boxes(scaled_box).detach().cpu().numpy()
+            print(pred.shape, pred)
 
 
-    
-    print(f"Goal: [1.00, 0.00, 0.00, 0.00]")
-    print(f"Pred: {pred}")
+        
+        print(f"Goal: {base_cond[0,3:].cpu().numpy()}")
+        print(f"Pred: {pred}")
 
-    error = np.abs(pred - np.array([1.0, 0.0, 0.0, 0.0]))
-    print(f"Error: {error}")
-    
-    # Plot
-    plt.imshow(manipulated[0, 0].detach().cpu().numpy(), cmap='gray')
-    plt.title(f"Generalization Test\nErr : {error}")
-    # plt.show()
-    plt.savefig("generalization_test.png")
-    plt.close()
+        error = np.abs(pred - base_cond[0,3:].cpu().numpy())
+        print(f"Error: {error}")
+        
+        # Plot
+        plt.imshow(manipulated[0, 0].detach().cpu().numpy(), cmap='gray')
+        plt.title(f"Generalization Test\nErr : {error}")
+        # plt.show()
+        plt.savefig(f"generalization_test_{i}.png")
+        plt.close()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Diffusion Model Inference for Drone Patch Generation')
