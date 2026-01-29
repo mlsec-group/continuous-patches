@@ -51,50 +51,118 @@ agg['patch_mode'] = agg.apply(combine_patch_mode, axis=1)
 agg = agg.drop(columns=['temperature'])
 print(agg.head())
 # for patch_mode 'optimal', display_size is only 60, so for all other display sizes, add placeholder rows
-optimal_rows = agg[agg['patch_mode'] == 'optimal']
-optimal_display_sizes = set(optimal_rows['display_size'].unique())
-all_display_sizes = set(agg['display_size'].unique())
-missing_display_sizes = all_display_sizes - optimal_display_sizes
-for ds in missing_display_sizes:
-    new_row = {
-        'model': 'frontnet',
-        'patch_mode': 'optimal',
-        'temperature': 'cold',
-        'trajectory': 'all',
-        'display_size': ds,
-        'mean': np.nan,
-        'std': np.nan,
-        'fmt': np.nan,
-    }
-    agg = pd.concat([agg, pd.DataFrame([new_row])], ignore_index=True)
+# optimal_rows = agg[agg['patch_mode'] == 'optimal']
+# optimal_display_sizes = set(optimal_rows['display_size'].unique())
+# all_display_sizes = set(agg['display_size'].unique())
+# missing_display_sizes = all_display_sizes - optimal_display_sizes
+# for ds in missing_display_sizes:
+#     new_row = {
+#         'model': 'frontnet',
+#         'patch_mode': 'optimal',
+#         'temperature': 'cold',
+#         'trajectory': 'all',
+#         'display_size': ds,
+#         'mean': np.nan,
+#         'std': np.nan,
+#         'fmt': np.nan,
+#     }
+#     agg = pd.concat([agg, pd.DataFrame([new_row])], ignore_index=True)
 
-none_rows = agg[agg['patch_mode'] == 'none']
-print(none_rows.head())
-none_display_sizes = set(none_rows['display_size'].unique())
-all_display_sizes = set(agg['display_size'].unique())
-missing_display_sizes = all_display_sizes - none_display_sizes
-for ds in missing_display_sizes:
-    new_row = {
-        'model': 'frontnet',
-        'patch_mode': 'none',
-        'temperature': 'cold',
-        'trajectory': 'all',
-        'display_size': ds,
-        'mean': np.nan,
-        'std': np.nan,
-        'fmt': np.nan,
-    }
-    agg = pd.concat([agg, pd.DataFrame([new_row])], ignore_index=True)
+# none_rows = agg[agg['patch_mode'] == 'none']
+# print(none_rows.head())
+# none_display_sizes = set(none_rows['display_size'].unique())
+# all_display_sizes = set(agg['display_size'].unique())
+# missing_display_sizes = all_display_sizes - none_display_sizes
+# for ds in missing_display_sizes:
+#     new_row = {
+#         'model': 'frontnet',
+#         'patch_mode': 'none',
+#         'temperature': 'cold',
+#         'trajectory': '',
+#         'display_size': ds,
+#         'mean': np.nan,
+#         'std': np.nan,
+#         'fmt': np.nan,
+#     }
+#     agg = pd.concat([agg, pd.DataFrame([new_row])], ignore_index=True)
 
 # create latex table with row patch_mode, columns display_size, values frechet
-for trajectory in agg['trajectory'].unique():
-    traj_data = agg[agg['trajectory'] == trajectory]
-    table = traj_data.pivot(index='patch_mode', columns='display_size', values='fmt')
-    # replace NaN with '-' for missing cells and allow LaTeX \pm to be preserved
-    table = table.fillna('-')
-    print(f"Trajectory: {trajectory}")
-    print(table.to_latex(escape=False))
-    print("\n")
+# save to paper_results/tables/frechet_frontnet.txt
+os.makedirs('paper_results/tables', exist_ok=True)
+with open('paper_results/tables/frechet_frontnet.txt', 'w') as f:
+    for trajectory in agg['trajectory'].unique():
+        traj_data = agg[agg['trajectory'] == trajectory]
+        table = traj_data.pivot(index='patch_mode', columns='display_size', values='fmt')
+        # replace NaN with '-' for missing cells and allow LaTeX \pm to be preserved
+        table = table.fillna('-')
+        f.write(f"Trajectory: {trajectory}\n")
+        f.write(table.to_latex(escape=False))
+        f.write("\n\n")
+
+# --- Computation time saved table (mean_time_per_step) ---
+# aggregate mean and std for mean_time_per_step per grouping (same grouping as frechet)
+time_df = df.copy()
+time_df['temperature'] = time_df['temperature'].fillna('cold')
+time_agg = time_df.groupby(['model', 'patch_mode', 'temperature', 'trajectory', 'display_size'])['mean_time_per_step'].agg(['mean', 'std']).reset_index()
+
+# normalize std NaNs to 0.0 for formatting, but keep NaN means as-is
+time_agg['std'] = time_agg['std'].fillna(0.0)
+def _fmt_time(row):
+    if pd.isna(row['mean']):
+        return np.nan
+    return f"{row['mean']:.2f}\\pm{row['std']:.2f}"
+
+time_agg['fmt'] = time_agg.apply(_fmt_time, axis=1)
+
+# combine temperature into patch_mode for timeout/velo as done for frechet
+time_agg['patch_mode'] = time_agg.apply(combine_patch_mode, axis=1)
+time_agg = time_agg.drop(columns=['temperature'])
+
+# # ensure 'optimal' has placeholder rows for missing display sizes
+# optimal_rows_time = time_agg[time_agg['patch_mode'] == 'optimal']
+# optimal_display_sizes_time = set(optimal_rows_time['display_size'].unique())
+# all_display_sizes_time = set(time_agg['display_size'].unique())
+# missing_display_sizes_time = all_display_sizes_time - optimal_display_sizes_time
+# for ds in missing_display_sizes_time:
+#     new_row = {
+#         'model': 'frontnet',
+#         'patch_mode': 'optimal',
+#         'temperature': 'cold',
+#         'trajectory': 'all',
+#         'display_size': ds,
+#         'mean': np.nan,
+#         'std': np.nan,
+#         'fmt': np.nan,
+#     }
+#     time_agg = pd.concat([time_agg, pd.DataFrame([new_row])], ignore_index=True)
+
+# # ensure 'none' has placeholder rows for missing display sizes
+# none_rows_time = time_agg[time_agg['patch_mode'] == 'none']
+# none_display_sizes_time = set(none_rows_time['display_size'].unique())
+# all_display_sizes_time = set(time_agg['display_size'].unique())
+# missing_display_sizes_time = all_display_sizes_time - none_display_sizes_time
+# for ds in missing_display_sizes_time:
+#     new_row = {
+#         'model': 'frontnet',
+#         'patch_mode': 'none',
+#         'temperature': 'cold',
+#         'trajectory': 'all',
+#         'display_size': ds,
+#         'mean': np.nan,
+#         'std': np.nan,
+#         'fmt': np.nan,
+#     }
+#     time_agg = pd.concat([time_agg, pd.DataFrame([new_row])], ignore_index=True)
+
+# write time table to paper_results/tables/time_saved_frontnet.txt
+with open('paper_results/tables/computation_time_frontnet.txt', 'w') as f:
+    for trajectory in time_agg['trajectory'].unique():
+        traj_data = time_agg[time_agg['trajectory'] == trajectory]
+        table = traj_data.pivot(index='patch_mode', columns='display_size', values='fmt')
+        table = table.fillna('-')
+        f.write(f"Trajectory: {trajectory}\n")
+        f.write(table.to_latex(escape=False))
+        f.write("\n\n")
 
 
 target_trajectories = {"figure8": gen_target_trajectory("figure8"),
@@ -154,48 +222,94 @@ for trajectory in agg['trajectory'].unique():
     plt.close()
 
 
-# create plots for each trajectory showing mean trajectory for velo warm for each display size
-for trajectory in agg['trajectory'].unique():
-    traj_df = df[(df['trajectory'] == trajectory) & (df['patch_mode'] == 'velo') & (df['temperature'] == 'warm')]
-    plt.figure(figsize=(8, 8))
-    for display_size in sorted(traj_df['display_size'].unique()):
-        size_df = traj_df[traj_df['display_size'] == display_size]
-        all_poses = []
-        for fp in size_df['file_path'].unique():
-            try:
-                poses = np.load(fp)  # (n_steps, 4)
-            except Exception:
+# create plots for each trajectory showing mean trajectory for velo/timeout warm and cold per display size
+for mode in ['velo', 'timeout']:
+    for temperature in ['warm', 'cold']:
+        for trajectory in agg['trajectory'].unique():
+            traj_df = df[(df['trajectory'] == trajectory) & (df['patch_mode'] == mode) & (df['temperature'] == temperature)]
+            plt.figure(figsize=(8, 8))
+            for display_size in sorted(traj_df['display_size'].unique()):
+                size_df = traj_df[traj_df['display_size'] == display_size]
+                all_poses = []
+                for fp in size_df['file_path'].unique():
+                    try:
+                        poses = np.load(fp)  # (n_steps, 4)
+                    except Exception:
+                        continue
+                    all_poses.append(poses)
+                if not all_poses:
+                    continue
+                # find max length
+                max_len = max(p.shape[0] for p in all_poses)
+                # pad each to max length
+                padded = []
+                for p in all_poses:
+                    if p.shape[0] < max_len:
+                        last = p[-1:]
+                        reps = max_len - p.shape[0]
+                        pad = np.vstack([p, np.repeat(last, reps, axis=0)])
+                        padded.append(pad)
+                    else:
+                        padded.append(p[:max_len])
+                stacked = np.stack(padded, axis=0)
+                mean_traj = np.mean(stacked, axis=0)  # (max_len, 4)
+                plt.plot(mean_traj[:, 0], mean_traj[:, 1], label=f'{display_size}z')
+            # plot target trajectory
+            target_traj = target_trajectories[trajectory]
+            plt.plot(target_traj[:, 0], target_traj[:, 1], 'r--', label='Target Trajectory')
+            plt.title(f'Trajectory: {trajectory} - {mode} {temperature} by Display Size')
+            plt.xlabel('X Position')
+            plt.ylabel('Y Position')
+            plt.xlim([-1., 1.])
+            plt.ylim([-1., 1.])
+            plt.legend()
+            plt.grid()
+            plt.savefig(f'paper_results/plots/trajectory_{trajectory}_{mode}_{temperature}_by_display_size_frontnet.png')
+            plt.close()
+
+for mode in ['diffusion', 'corpus']:
+    for trajectory in agg['trajectory'].unique():
+        traj_df = df[(df['trajectory'] == trajectory) & (df['patch_mode'] == mode)]
+        plt.figure(figsize=(8, 8))
+        for display_size in sorted(traj_df['display_size'].unique()):
+            size_df = traj_df[traj_df['display_size'] == display_size]
+            all_poses = []
+            for fp in size_df['file_path'].unique():
+                try:
+                    poses = np.load(fp)  # (n_steps, 4)
+                except Exception:
+                    continue
+                all_poses.append(poses)
+            if not all_poses:
                 continue
-            all_poses.append(poses)
-        if not all_poses:
-            continue
-        # find max length
-        max_len = max(p.shape[0] for p in all_poses)
-        # pad each to max length
-        padded = []
-        for p in all_poses:
-            if p.shape[0] < max_len:
-                last = p[-1:]
-                reps = max_len - p.shape[0]
-                pad = np.vstack([p, np.repeat(last, reps, axis=0)])
-                padded.append(pad)
-            else:
-                padded.append(p[:max_len])
-        stacked = np.stack(padded, axis=0)
-        mean_traj = np.mean(stacked, axis=0)  # (max_len, 4)
-        plt.plot(mean_traj[:, 0], mean_traj[:, 1], label=f'{display_size}z')
-    # plot target trajectory
-    target_traj = target_trajectories[trajectory]
-    plt.plot(target_traj[:, 0], target_traj[:, 1], 'r--', label='Target Trajectory')
-    plt.title(f'Trajectory: {trajectory} - Velo Warm by Display Size')
-    plt.xlabel('X Position')
-    plt.ylabel('Y Position')
-    plt.xlim([-1., 1.])
-    plt.ylim([-1., 1.])
-    plt.legend()
-    plt.grid()
-    plt.savefig(f'paper_results/plots/trajectory_{trajectory}_velo_warm_by_display_size_frontnet.png')
-    plt.close()
+            # find max length
+            max_len = max(p.shape[0] for p in all_poses)
+            # pad each to max length
+            padded = []
+            for p in all_poses:
+                if p.shape[0] < max_len:
+                    last = p[-1:]
+                    reps = max_len - p.shape[0]
+                    pad = np.vstack([p, np.repeat(last, reps, axis=0)])
+                    padded.append(pad)
+                else:
+                    padded.append(p[:max_len])
+            stacked = np.stack(padded, axis=0)
+            mean_traj = np.mean(stacked, axis=0)  # (max_len, 4)
+            plt.plot(mean_traj[:, 0], mean_traj[:, 1], label=f'{display_size}z')
+        # plot target trajectory
+        target_traj = target_trajectories[trajectory]
+        plt.plot(target_traj[:, 0], target_traj[:, 1], 'r--', label='Target Trajectory')
+        plt.title(f'Trajectory: {trajectory} - {mode} by Display Size')
+        plt.xlabel('X Position')
+        plt.ylabel('Y Position')
+        plt.xlim([-1., 1.])
+        plt.ylim([-1., 1.])
+        plt.legend()
+        plt.grid()
+        plt.savefig(f'paper_results/plots/trajectory_{trajectory}_{mode}_by_display_size.png')
+        plt.close()
+
 
 
 # # replace all NaN temperatures with 'cold' for frontnet
