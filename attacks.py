@@ -121,14 +121,15 @@ class Attacker:
         # Load Diffusion/Corpus models
         if self.mode == 'diffusion':
             from diffusion.diffusion_model import DiffusionModel
+            # from diffusion.diffusion_overfit import normalize_condition
             self.diff_model = DiffusionModel(device=device, patch_size=self.patch_size, prediction_model_name=args.model)
             weight_path = f"{project_root}/overfit_results/diffusion_model_{args.model}_1000.pth"
             self.diff_model.load(weight_path)
             self.diff_model.model.eval()
             if self.model.name == "frontnet":
-                self.num_denoising_steps = 20
+                self.num_denoising_steps = 3
             elif self.model.name == "yolov5":
-                self.num_denoising_steps = 50
+                self.num_denoising_steps = 3
             
         if self.mode in ['corpus', 'interpolation']:
             data = np.load(f"{project_root}/{self.model.name}/corpus_{self.model.name}.npz")
@@ -170,6 +171,7 @@ class Attacker:
         T_pred_world = torch.inverse(T_dir) @ T_setpoint_world
         T_pred_drone = torch.inverse(T_drone_world) @ T_pred_world
         target_pose = torch.cat([T_pred_drone[:3, 3], target_yaw.unsqueeze(0)])
+        # print("Target Pose in Drone Frame: ", target_pose.detach().cpu().numpy())
         patch = self._get_static_patch(T, target_pose)
         return patch
 
@@ -183,9 +185,14 @@ class Attacker:
             # print("target pose in drone frame: ", target_pose.detach().cpu().numpy())
             cond = torch.tensor([[sf, tx, ty, *target_pose]], device=self.device) 
             # print(f"Generating Patch with Condition: {cond.cpu().numpy()}")
-            # print("Number denoising steps:", self.num_denoising_steps)
-            
+            # print("Number denoising steps:", self.num_denoising_steps)            
             if self.mode == 'diffusion':
+                if self.model.name == 'frontnet':
+                    cond[:, 1] = (cond[:, 1]- -20.0) / (160.0 + 20.0)  # tx
+                    cond[:, 2] = (cond[:, 2]- -10.0) / (96.0 + 10.0)   # ty
+                elif self.model.name == 'yolov5':
+                    cond[:, 1] = (cond[:, 1]- -40.0) / (640.0 + 40.0)  # tx
+                    cond[:, 2] = (cond[:, 2]- -20.0) / (320.0 + 20.0)  # ty
                 with torch.no_grad(): 
                     return self.diff_model.sample(1, cond, self.device, n_steps=self.num_denoising_steps)
             if self.mode == 'corpus':

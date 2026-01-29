@@ -144,7 +144,17 @@ def run_experiment(args):
                     T_gen[0,0] = sf
                     T_gen[1,1] = sf
                     # print("sf after modification:", T_gen[0,0])
+                    # dists = []
+                    # patches = []
+                    # for _ in range(20):  # Try up to 20 times to generate a valid patch
                     patch = attacker.generate(base_img, T_gen, sim.pose, target_pose)
+                    # for patch in patches:
+                    #     perceived_pose = get_pose_from_prediction(model, manipulated_img, sim.pose, sim.cam)
+                    #     # patches.append(patch)
+                    #     dists.append(torch.dist(perceived_pose[:3], target_pose[:3]).item())
+                    # patch = patches[np.argmin(dists)].unsqueeze(0)
+                    # print(patch.shape)
+                    # print(f"Selected patch with min distance {min(dists):.4f}m to target pose.")
                 else:
                     patch = attacker.generate(base_img, T, sim.pose, target_pose)
                 if args.model == 'yolov5':
@@ -162,6 +172,8 @@ def run_experiment(args):
                 # print("Optimal attack: perceived pose set to target pose: ", perceived_pose.cpu().numpy())
             else:
                 perceived_pose = get_pose_from_prediction(model, manipulated_img, sim.pose, sim.cam)
+                # print("Perceived Pose: ", perceived_pose.detach().cpu().numpy())
+                # print("Error to Target: ", (perceived_pose[:3] - target_pose[:3]).detach().cpu().numpy())
             
             # print("Main loop current pose: ", sim.pose.detach().cpu().numpy())
             # print("Perceived pose: ", perceived_pose.detach().cpu().numpy())
