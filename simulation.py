@@ -137,7 +137,9 @@ class DroneSimulation:
         pts_img_h = self.cam.camera_intrinsic_tens @ pts_cam[:3, :]
         
         # Check Visibility
-        if torch.any(pts_img_h[2, :] <= 0.1): return None, None, False
+        # As long as one point is within view, we consider it visible
+        if torch.all(pts_img_h[2, :] < 0) or torch.all(pts_img_h[2, :] > img_size_px[1]) or torch.all(pts_img_h[2, :] > img_size_px[0]): return None, None, False
+        # if torch.any(pts_img_h[2, :] <= 0.1): return None, None, False
 
         pts_img = pts_img_h[:2, :] / pts_img_h[2, :]
         monitor_corners = pts_img.T # (4, 2)
@@ -165,8 +167,8 @@ class DroneSimulation:
         # Validity Checks
         is_valid = True
         if T[0,0] < 0.1: is_valid = False 
-        if T[0,2] < -10 or T[1,2] < -10: is_valid = False
-        if T[0,2] > img_size_px[1] + 10 or T[1,2] > img_size_px[0] + 10: is_valid = False
+        # if T[0,2] < -10 or T[1,2] < -10: is_valid = False
+        # if T[0,2] > img_size_px[1] + 10 or T[1,2] > img_size_px[0] + 10: is_valid = False
         
         return T, monitor_corners, is_valid
 

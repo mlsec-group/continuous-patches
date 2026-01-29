@@ -122,17 +122,23 @@ def run_experiment(args):
             
             # 'none' mode: skip all generation logic, just use base image
             if args.patch_mode == 'none' or args.patch_mode == 'optimal':
+                if args.model == 'yolov5':
+                    base_img = F.interpolate(base_img, size=(320, 640), mode='bilinear', align_corners=False)
+                    manipulated_img = base_img.clone()
                 pass
             # standard modes: check visibility first
             elif not is_visible:
                 # Monitor not visible, cannot attack -> fly on clean image
+                if args.model == 'yolov5':
+                    base_img = F.interpolate(base_img, size=(320, 640), mode='bilinear', align_corners=False)
+                    manipulated_img = base_img.clone()
                 pass 
             else:
                 # Generate Patch (Optimization or Diffusion happens inside here)
                 if args.patch_mode in ['diffusion', 'interpolation', 'corpus']:
                     patch_width = monitor_corners[1, 0] - monitor_corners[0, 0]
                     patch_height = monitor_corners[2, 1] - monitor_corners[0, 1]
-                    sf = min(patch_width / patch_size[1], patch_height / patch_size[0])
+                    sf = max(patch_width / patch_size[1], patch_height / patch_size[0])
                     T_gen = T.clone()
                     # print("sf before modification:", T_gen[0,0])
                     T_gen[0,0] = sf
@@ -152,18 +158,27 @@ def run_experiment(args):
             if args.patch_mode == 'optimal':
                 # Simulating attacker 'predicts' the optimal == target pose
                 perceived_pose = target_pose
+                # perceived_pose[3] = perceived_pose[3] *-1.0  # Invert yaw for perceived pose
+                # print("Optimal attack: perceived pose set to target pose: ", perceived_pose.cpu().numpy())
             else:
                 perceived_pose = get_pose_from_prediction(model, manipulated_img, sim.pose, sim.cam)
             
+            # print("Main loop current pose: ", sim.pose.detach().cpu().numpy())
+            # print("Perceived pose: ", perceived_pose.detach().cpu().numpy())
+            # print("Error to target: ", (perceived_pose - target_pose).detach().cpu().numpy())
             # F. Control (Fly based on Perceived Pose vs Target Pose)
             # Construct state vector for controller (XYZ + Yaw)
-            current_state_for_control = torch.cat([sim.pose[:3], perceived_pose[3].unsqueeze(0)])
+            # current_state_for_control = torch.cat([sim.pose[:3], perceived_pose[3].unsqueeze(0)])
+            # print(f"Current State for Control: {current_state_for_control.cpu().numpy()}")
             
             # Step Controller
-            _, vel_cmd = sim.controller.step(current_state_for_control, perceived_pose, dt=dt)
+            _, vel_cmd = sim.controller.step(sim.pose, perceived_pose, dt=dt)
+            # print(f"Velocity Command: {vel_cmd.cpu().numpy()}\n")
             
             # Update Real Physics
             sim.update_physics(vel_cmd, dt=dt)
+
+            # print(f"New Pose: {sim.pose.cpu().numpy()}\n")
             
             # G. Log
             step_end = time.time()

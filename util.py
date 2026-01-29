@@ -276,7 +276,7 @@ def gen_target_trajectory(trajectory, monitor_center=[2., 0., 1.], num_steps=25)
     # Combine with Z and Yaw
     z = np.ones((num_steps, 1)) * z_val
     # calculate yaw to always face monitor center
-    yaw = np.arctan2(monitor_center[1] - xy_points[:,1], monitor_center[0] - xy_points[:,0]).reshape(-1, 1)    
+    yaw = np.arctan2(monitor_center[1] - xy_points[:,1], monitor_center[0] - xy_points[:,0]).reshape(-1, 1)
     # Result shape: (num_steps, 4)
     waypoints = np.hstack([xy_points, z, yaw])
 

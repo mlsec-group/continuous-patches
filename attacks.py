@@ -126,9 +126,9 @@ class Attacker:
             self.diff_model.load(weight_path)
             self.diff_model.model.eval()
             if self.model.name == "frontnet":
-                self.num_denoising_steps = 2
+                self.num_denoising_steps = 20
             elif self.model.name == "yolov5":
-                num_denoising_steps = 50
+                self.num_denoising_steps = 50
             
         if self.mode in ['corpus', 'interpolation']:
             data = np.load(f"{project_root}/{self.model.name}/corpus_{self.model.name}.npz")
@@ -158,6 +158,18 @@ class Attacker:
             return self._optimize(base_img, T, drone_pose, target_pose)
 
         # 3. Generative / Baseline (Single Step)
+        T_drone_world = T_matrix(drone_pose)
+        T_setpoint_world = T_matrix(target_pose)
+        # print("Target Yaw in World Frame: ", target_pose[3].item())
+        # print("Drone Yaw in World Frame: ", drone_pose[3].item())
+        target_yaw = target_pose[3]
+        #target_yaw = torch.atan2((target_pose[1] - drone_pose[1]), (target_pose[0] - drone_pose[0]))
+        # target_yaw = normalize_yaw(target_yaw)
+        T_dir = torch.eye(4, device=self.device)
+        T_dir[:3, 3] = calc_heading_vec(1.0, normalize_yaw(target_yaw - torch.pi), device=self.device).squeeze()
+        T_pred_world = torch.inverse(T_dir) @ T_setpoint_world
+        T_pred_drone = torch.inverse(T_drone_world) @ T_pred_world
+        target_pose = torch.cat([T_pred_drone[:3, 3], target_yaw.unsqueeze(0)])
         patch = self._get_static_patch(T, target_pose)
         return patch
 
@@ -168,7 +180,10 @@ class Attacker:
 
         if self.mode in ['diffusion', 'corpus', 'interpolation']:
             sf, tx, ty = T[0,0], T[0,2], T[1,2]
+            # print("target pose in drone frame: ", target_pose.detach().cpu().numpy())
             cond = torch.tensor([[sf, tx, ty, *target_pose]], device=self.device) 
+            # print(f"Generating Patch with Condition: {cond.cpu().numpy()}")
+            # print("Number denoising steps:", self.num_denoising_steps)
             
             if self.mode == 'diffusion':
                 with torch.no_grad(): 
@@ -176,6 +191,15 @@ class Attacker:
             if self.mode == 'corpus':
                 dists = torch.norm(self.corpus_conds - cond, dim=1)
                 return self.corpus_patches[torch.argmin(dists)].unsqueeze(0)
+            if self.mode == 'interpolation':
+                dists = torch.norm(self.corpus_conds - cond, dim=1)
+                topk = torch.topk(dists, k=2, largest=False)
+                patch1 = self.corpus_patches[topk.indices[0]].unsqueeze(0)
+                patch2 = self.corpus_patches[topk.indices[1]].unsqueeze(0)
+                w1 = 1.0 / (topk.values[0] + 1e-6)
+                w2 = 1.0 / (topk.values[1] + 1e-6)
+                patch = (patch1 * w1 + patch2 * w2) / (w1 + w2)
+                return patch
 
         return torch.rand((1, 1, *self.patch_size), device=self.device)
 
