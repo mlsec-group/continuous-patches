@@ -3,7 +3,7 @@ import sys
 import os
 
 # Resolve repo-relative path to pulp-frontnet PyTorch so imports work regardless of cwd
-project_root = os.path.dirname(os.path.abspath(__file__))  # /home/piha/continous-patches
+project_root = os.path.dirname(os.path.abspath(__file__))
 frontnet_dir = os.path.join(project_root, 'pulp-frontnet', 'PyTorch')
 if frontnet_dir not in sys.path:
     sys.path.insert(0, frontnet_dir)

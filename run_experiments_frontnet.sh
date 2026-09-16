@@ -140,7 +140,7 @@ exec > "\${OUT_BASE}.out" 2> "\${OUT_BASE}.err"
 echo "Starting task \${SLURM_ARRAY_JOB_ID}_\${SLURM_ARRAY_TASK_ID}"
 echo "Params: \${LINE}"
 
-apptainer run --nv /home/piha/container.sif \
+apptainer run --nv container.sif \
   bash -c "python main.py \
     -m "\${MODEL}" \
     -t "\${TRAJ}" \

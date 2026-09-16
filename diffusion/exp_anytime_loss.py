@@ -38,8 +38,8 @@ def run_attack(settings_path, model='frontnet'):
         fh.writelines('#SBATCH --time=01:00:00\n\n')
         fh.writelines(f"#SBATCH --output={log_file}\n")
         fh.writelines(f"#SBATCH --error={error_file}\n\n")
-        fh.writelines("source /home/hanfeld/.yolopatches/bin/activate\n")
-        fh.writelines(f"python /home/hanfeld/flying_adversarial_patch/src/attacks.py --file {settings_path} --model {model}")
+        fh.writelines("source .venv/bin/activate\n")
+        fh.writelines(f"python flying_adversarial_patch/src/attacks.py --file {settings_path} --model {model}")
 
     os.system("sbatch %s" %job_file)
     # sleep(0.2)
@@ -78,24 +78,6 @@ def main():
     base_settings['targets']['x'] = random_target_x.tolist()
     base_settings['targets']['y'] = random_target_y.tolist()
     base_settings['targets']['z'] = random_target_z.tolist()
-
-    # deprecated - generation now included in the attack script
-    # if args.diffusion:
-    #     # load all modules for calculating anytime loss directly after sampling the patch
-    #     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        # from util import load_dataset
-        # dataset_path = 'pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle'
-        # test_set = load_dataset(path=dataset_path, batch_size=base_settings['batch_size'], shuffle=True, drop_last=False, train=False, num_workers=0)
-        # from util import load_model
-        # model_path = 'pulp-frontnet/PyTorch/Models/Frontnet160x32.pt'
-        # model_config = '160x32'
-        # model = load_model(path=model_path, device=device, config=model_config)
-        
-        # from attacks import calc_anytime_loss
-    
-        # # import sys
-        # # sys.path.insert(0,'/home/hanfeld/bb_FAP/')
-        # from diffusion.diffusion_model import DiffusionModel
         
     # load_time = time()-time_start
     # print(f"took {load_time} s!")

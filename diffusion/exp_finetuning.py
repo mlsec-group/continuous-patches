@@ -37,8 +37,8 @@ def run_attack(settings_path, model='frontnet'):
         fh.writelines(f"#SBATCH --output={log_file}\n")
         fh.writelines(f"#SBATCH --error={error_file}\n\n")
         fh.writelines('#SBATCH --time=01:00:00\n\n')
-        fh.writelines("source /home/hanfeld/.yolopatches/bin/activate\n")
-        fh.writelines(f"python /home/hanfeld/flying_adversarial_patch/src/attacks.py --file {settings_path} --model {model}")
+        fh.writelines("source .venv/bin/activate\n")
+        fh.writelines(f"python flying_adversarial_patch/src/attacks.py --file {settings_path} --model {model}")
 
     os.system("sbatch %s" %job_file)
     sleep(0.2)
