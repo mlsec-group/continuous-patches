@@ -248,7 +248,7 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
         plt.hist(sf_tx_ty[:,2], bins=20)
         plt.title("Translation Y Histogram")
         plt.tight_layout()
-        plt.savefig(f"{project_root}/overfit_results/{model_name}__{corpus_size}_overfit_data_histograms.png")
+        plt.savefig(f"{project_root}/flipped_diffusion/{model_name}/{model_name}_{corpus_size}_overfit_data_histograms.png")
         plt.close()
 
         # create 3d scatter plot for target positions
@@ -260,7 +260,7 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
         ax.set_ylabel('Y')
         ax.set_zlabel('Z')
         ax.set_title('Target Position Scatter Plot')
-        plt.savefig(f"{project_root}/overfit_results/{model_name}__{corpus_size}_overfit_data_scatter.png")
+        plt.savefig(f"{project_root}/flipped_diffusion/{model_name}/{model_name}_{corpus_size}_overfit_data_scatter.png")
         plt.close()
 
     # ==========================================================================
@@ -374,7 +374,7 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
     print("Starting training with DataLoader...")
     model_wrapper.model.train()
     
-    num_epochs = 1000  # Multiple epochs to process 1000 samples
+    num_epochs = 2_000  # Multiple epochs to process 1000 samples
     step_count = 0
 
     # book keeping
@@ -382,6 +382,9 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
     all_avg_losses = []
     all_recon_losses = []
     all_control_losses = []
+    recon_weight = 0.1
+
+    bg_iter = iter(bg_dataset)
     
     for epoch in tqdm(range(num_epochs), desc="Training"):
         epoch_loss = 0.0
@@ -431,7 +434,11 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
             reconstruction_loss = F.mse_loss(denoised_guess, batch_patches)
             # print("Reconstruction loss:", reconstruction_loss.item())
 
-            bg_imgs, _ = next(iter(bg_dataset))
+            try:
+                bg_imgs, _ = next(bg_iter)
+            except StopIteration:
+                bg_iter = iter(bg_dataset)
+                bg_imgs, _ = next(bg_iter)
             bg_imgs = bg_imgs.to(device)
             manipulated_images = []
             for i in range(batch_size):
@@ -536,6 +543,7 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
             # sorted_losses, _ = torch.sort(control_loss, descending=True)
             # top5_losses = sorted_losses[:5].mean()
 
+            # loss = control_loss.mean() + recon_weight * reconstruction_loss
             loss = control_loss.mean()
             
             all_losses.append(loss.item())
@@ -562,16 +570,17 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
     plt.plot(all_losses, label='Total Loss', alpha=0.5)
     plt.plot(all_recon_losses, label='Reconstruction Loss', alpha=0.5)
     plt.plot(all_control_losses, label='Control Loss', alpha=0.5)
-    plt.plot(all_avg_losses, label='Avg Epoch Loss', color='blue', linewidth=2)
+    x_avg_losses = np.linspace(0, (len(all_avg_losses) - 1) * (len(all_losses) / len(all_avg_losses)), len(all_avg_losses))
+    plt.plot(x_avg_losses, all_avg_losses, label='Avg Epoch Loss', color='blue', linewidth=2)
 
     plt.xlabel('Iteration')
     plt.ylabel('Loss')
     plt.legend()
     plt.tight_layout()
-    plt.savefig(f"{project_root}/overfit_results/loss_curves_{model_name}_{corpus_size}.png")
+    plt.savefig(f"{project_root}/flipped_diffusion/{model_name}/loss_curves_{model_name}_{corpus_size}.png")
     plt.close()
 
-    np.savez(f"{project_root}/overfit_results/loss_values_{model_name}_{corpus_size}.npz",
+    np.savez(f"{project_root}/flipped_diffusion/{model_name}/loss_values_{model_name}_{corpus_size}.npz",
              total_loss=np.array(all_losses),
              recon_loss=np.array(all_recon_losses),
              control_loss=np.array(all_control_losses),
@@ -584,22 +593,23 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
     # ==========================================================================
     print("Training done. Generating samples...")
     model_wrapper.model.eval()
-    os.makedirs(f"{project_root}/overfit_results", exist_ok=True)
-    torch.save(model_wrapper.model.state_dict(), f"{project_root}/overfit_results/diffusion_model_{model_name}_{corpus_size}.pth")
+    os.makedirs(f"{project_root}/flipped_diffusion/{model_name}", exist_ok=True)
+    torch.save(model_wrapper.model.state_dict(), f"{project_root}/flipped_diffusion/{model_name}/diffusion_model_{model_name}_{corpus_size}.pth")
 
     all_psnr = []
     
     # Generate samples for evaluation
     n_samples = 10
-    total_samples = len(dataset)
+    total_samples = 100  # Evaluate on 1000 samples (or corpus_size if smaller)
     
     with torch.no_grad():
         for idx in tqdm(range(total_samples), desc="Sampling"):
             # Prepare batch of n_samples identical conditions
             test_cond = dataset.conds[idx].unsqueeze(0).repeat(n_samples, 1)  # (n_samples, 7)
+            test_cond_n = normalize_condition(test_cond, model=model_name)
             
             # Sample (n_samples, 1, 45, 80)
-            samples = model_wrapper.sample(n_samples=n_samples, targets=test_cond, device=device, n_steps=25)
+            samples = model_wrapper.sample(n_samples=n_samples, targets=test_cond_n, device=device, n_steps=5)
             samples_np = samples.detach().cpu().numpy() # [0, 1] range
             # print(samples_np.shape, samples_np.min(), samples_np.max())
 
@@ -621,12 +631,12 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
             all_psnr.append(mean_psnr)
             
             plt.tight_layout()
-            plt.savefig(f"{project_root}/overfit_results/result_{model_name}_{corpus_size}_{idx}.png")
+            plt.savefig(f"{project_root}/flipped_diffusion/{model_name}/result_{model_name}_{corpus_size}_{idx}.png")
             plt.close()
 
     all_psnr = np.array(all_psnr)
     print(f"Overall Mean PSNR: {all_psnr.mean():.2f} dB")
-    np.save(f"{project_root}/overfit_results/psnr_scores_{model_name}_{corpus_size}.npy", all_psnr)
+    np.save(f"{project_root}/flipped_diffusion/{model_name}/psnr_scores_{model_name}_{corpus_size}.npy", all_psnr)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -636,5 +646,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     model_name = args.model
+
+    os.makedirs(f"{project_root}/flipped_diffusion/{model_name}", exist_ok=True)
 
     train_batch_overfit(model_name=model_name, corpus_size=args.corpus_size, batch_size=args.batch_size)

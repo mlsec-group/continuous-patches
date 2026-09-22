@@ -1008,6 +1008,8 @@ class DiffusionModel():
 
         # x_t is now [-1, 1], convert to [0, 1]
         x_t = torch.stack([(x + 1) / 2 for x in x_t]).clamp(min=0,max=1) # normalize
+        #x_t is somewhere between [-1, 1], first normalize to [-1, 1], then to [0, 1], and clamp to [0, 1]
+        # x_t = torch.stack([(x - torch.min(x)) / (torch.max(x) - torch.min(x)) for x in x_t]).clamp(min=0, max=1)
         return x_t
 
 

@@ -105,7 +105,7 @@ class DroneSimulation:
     def __init__(self, device, display_size_inch=60, start_pose=[0., 0., 1., 0.]):
         self.device = device
         self.cam = Camera(f'{project_root}/camera_calibration.yaml', device=device)
-        self.controller = PController()
+        self.controller = PController(max_vel=15.0, max_yaw_rate=3.0, kp_pos=1.5, kp_yaw=3.0)
         self.pose = torch.tensor(start_pose, device=device, dtype=torch.float32)
         self._setup_monitor(display_size_inch)
         

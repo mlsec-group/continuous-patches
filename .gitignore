@@ -190,7 +190,12 @@ fap/
 frontnet/
 yolov5/
 temp_pid*
-*results*
+overfit_results/
+raid_results/
+paper_results/**
+!paper_results/*.py
+flipped_diffusion/
+misc/
 *.txt
 *.npz
 *.npy

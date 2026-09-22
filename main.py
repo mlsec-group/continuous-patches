@@ -65,7 +65,7 @@ def run_experiment(args):
     time_per_step = []
     history_vel_cmd = []
     target_idx = 1
-    dt = 1.0 / args.timeout if args.timeout != 0 else 1/10.0
+    dt = 1.0 / args.timeout if args.timeout != 0 else 1/30.0
     print(f"Using dt={dt:.4f}s based on timeout={args.timeout}")
 
     patch_size = (150, 320) if args.model == 'yolov5' else (45, 80)
@@ -97,7 +97,7 @@ def run_experiment(args):
                 pbar.update(1)
                 sim.update_physics(vel_cmd, dt=dt)
                 continue
-            if dist > 1.5 and args.trajectory not in ['slingshot_left', 'slingshot_right', 'slingshot_forward']:
+            if dist > 1.5 and args.trajectory not in ['slingshot_left', 'slingshot_right', 'slingshot_forward', 'slingshot_backward']:
                 target_idx += 1
                 pbar.update(1)
                 sim.update_physics(vel_cmd, dt=dt)
@@ -135,7 +135,7 @@ def run_experiment(args):
                 pass 
             else:
                 # Generate Patch (Optimization or Diffusion happens inside here)
-                if args.patch_mode in ['diffusion', 'interpolation', 'corpus']:
+                if args.patch_mode in ['diffusion', 'interpolation', 'corpus', 'fap']:
                     patch_width = monitor_corners[1, 0] - monitor_corners[0, 0]
                     patch_height = monitor_corners[2, 1] - monitor_corners[0, 1]
                     sf = max(patch_width / patch_size[1], patch_height / patch_size[0])
@@ -241,7 +241,7 @@ def run_experiment(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-m', '--model', type=str, choices=['frontnet', 'yolov5'], default='frontnet', help='Model to use for prediction')
-    parser.add_argument('-t', '--trajectory', type=str, choices=['figure8', 'square', 'circle', 'line_x', 'line_y', 'diagonal_line', 'triangle', 'c', 's', 'u', 'slingshot_left', 'slingshot_right', 'slingshot_forward'], default='figure8', help='Target Trajectory')
+    parser.add_argument('-t', '--trajectory', type=str, choices=['figure8', 'square', 'circle', 'line_x', 'line_y', 'diagonal_line', 'triangle', 'c', 's', 'u', 'slingshot_left', 'slingshot_right', 'slingshot_forward', 'slingshot_backward'], default='figure8', help='Target Trajectory')
     parser.add_argument('--display_size', type=int, default=60, help='Size of the display in pixels (default: 60")')
     parser.add_argument('--patch_mode', type=str, choices=['none', 'optimal', 'velo', 'timeout', 'black', 'white', 'random', 'fap', 'diffusion', 'interpolation', 'corpus'], default='none', help='Mode to initialize the patch: optimal, timeout, black, white, random')
     parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')

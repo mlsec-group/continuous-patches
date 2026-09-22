@@ -123,7 +123,13 @@ class Attacker:
             from diffusion.diffusion_model import DiffusionModel
             # from diffusion.diffusion_overfit import normalize_condition
             self.diff_model = DiffusionModel(device=device, patch_size=self.patch_size, prediction_model_name=args.model)
-            weight_path = f"{project_root}/overfit_results/diffusion_model_{args.model}_1000.pth"
+            requested_corpus = getattr(args, 'corpus_size', 1000)
+            weight_path = f"{project_root}/flipped_diffusion/{args.model}/diffusion_model_{args.model}_{requested_corpus}.pth"
+            if not os.path.exists(weight_path):
+                fallback_path = f"{project_root}/flipped_diffusion/{args.model}/diffusion_model_{args.model}_1000.pth"
+                if os.path.exists(fallback_path):
+                    print(f"Warning: diffusion checkpoint not found at {weight_path}, falling back to {fallback_path}")
+                    weight_path = fallback_path
             self.diff_model.load(weight_path)
             self.diff_model.model.eval()
             if self.model.name == "frontnet":
@@ -142,6 +148,43 @@ class Attacker:
 
             self.corpus_patches = torch.tensor(patches_np, device=device, dtype=torch.float32).unsqueeze(1)  # (N, 1, H, W)
             self.corpus_conds = torch.tensor(cond_vector, device=device, dtype=torch.float32)  # (N, 7)
+
+        if self.mode == 'fap':
+            import yaml
+            self.fap_patches = torch.tensor(np.load(f'{self.model.name}/fap/last_patch.npy')).to(device).unsqueeze(1)
+            probabilities_per_patch = np.load(f'{self.model.name}/fap/stats_p.npy')[-1]
+
+            # print("FAP probabilities per patch:", probabilities_per_patch)
+
+            self.assignment = {'forward': None, 'backward': None, 'stay': None, 'left': None, 'right': None}
+
+            # SETTINGS
+            with open(f'{self.model.name}/fap/settings.yaml') as f:
+                settings = yaml.load(f, Loader=yaml.FullLoader)
+
+            print("FAP settings loaded:", settings)
+
+            optim_targets = [values for _, values in settings['targets'].items()]
+            optim_targets = np.array(optim_targets, dtype=float).T
+
+            print("FAP optimization targets:", optim_targets)
+
+            for i, target in enumerate(optim_targets):
+                print("Processing FAP target:", target)
+                if np.array_equal(target[:3], np.array([1., 0., 0.])):
+                    self.assignment['stay'] = np.argmax(probabilities_per_patch[:, i])
+                elif np.array_equal(target[:3], np.array([1.5, 0., 0.])):
+                    self.assignment['forward'] = np.argmax(probabilities_per_patch[:, i])
+                elif np.array_equal(target[:3] , np.array([0.5, 0., 0.])):
+                    self.assignment['backward'] = np.argmax(probabilities_per_patch[:, i])
+                elif np.array_equal(target[:3], np.array([1., 1., 0.])):
+                    self.assignment['left'] = np.argmax(probabilities_per_patch[:, i])
+                elif np.array_equal(target[:3], np.array([1., -1., 0.])):
+                    self.assignment['right'] = np.argmax(probabilities_per_patch[:, i])
+                else:
+                    print("Unknown target:", target)
+
+            print("FAP patch assignment:", self.assignment)
 
             # print(self.corpus_patches.shape, self.corpus_conds.shape)
             
@@ -164,8 +207,19 @@ class Attacker:
         # print("Target Yaw in World Frame: ", target_pose[3].item())
         # print("Drone Yaw in World Frame: ", drone_pose[3].item())
         target_yaw = target_pose[3]
-        #target_yaw = torch.atan2((target_pose[1] - drone_pose[1]), (target_pose[0] - drone_pose[0]))
+
+        # direction = torch.argmax(torch.abs(target_pose[:2]))  # 0 for x, 1 for y
+        # sign = torch.sign(target_pose[direction])
+
+        # target_pose = torch.tensor([0., 0., target_pose[2].item(), target_yaw.item()], device=self.device)
+
+        # target_pose[direction] = sign * 1.0  # 1 meter in the dominant direction, 0 in the other
+        
+        # if direction == 0:  # x direction dominant
+        #     target_pose[direction] -= 1.
+        # target_yaw = torch.atan2((target_pose[1] - drone_pose[1]), (target_pose[0] - drone_pose[0]))
         # target_yaw = normalize_yaw(target_yaw)
+        # if self.mode == 'diffusion':
         T_dir = torch.eye(4, device=self.device)
         T_dir[:3, 3] = calc_heading_vec(1.0, normalize_yaw(target_yaw - torch.pi), device=self.device).squeeze()
         T_pred_world = torch.inverse(T_dir) @ T_setpoint_world
@@ -207,6 +261,33 @@ class Attacker:
                 w2 = 1.0 / (topk.values[1] + 1e-6)
                 patch = (patch1 * w1 + patch2 * w2) / (w1 + w2)
                 return patch
+
+        if self.mode == 'fap':
+            # Determine direction
+            # print("FAP target pose in drone frame: ", target_pose.detach().cpu().numpy())
+            print("FAP target position (x, y): ", target_pose[0].item(), target_pose[1].item())
+            delta_x = target_pose[0]  # x in drone frame
+            delta_y = target_pose[1]  # y in drone frame
+            print(f"FAP delta_x: {delta_x:.2f}, delta_y: {delta_y:.2f}")
+            direction = 'stay'
+            if abs(delta_x) > abs(delta_y):
+                if delta_x > 1.1:
+                    direction = 'forward'
+                elif delta_x < 0.9:
+                    direction = 'backward'
+            else:
+                if delta_y > 0.1:
+                    direction = 'left'
+                elif delta_y < -0.1:
+                    direction = 'right'
+
+            patch_idx = self.assignment[direction]
+            print(f"FAP selected direction: {direction}, patch shape: {self.fap_patches[patch_idx].shape}")
+            
+            return self.fap_patches[patch_idx]
+
+            # print(f"FAP selected direction: {direction}, patch index: {patch_idx}")
+
 
         return torch.rand((1, 1, *self.patch_size), device=self.device)
 

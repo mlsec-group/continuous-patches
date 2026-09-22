@@ -257,23 +257,23 @@ def gen_target_trajectory(trajectory, monitor_center=[2., 0., 1.], num_steps=25)
     elif trajectory == 'slingshot_left':
         start = np.array([0., 0.])
         point = np.array([0., 3.0])
-        xy_points = point.reshape(1, 2).repeat(num_steps, axis=0)
-        xy_points[0] = start
+        t = np.linspace(0.0, 1.0, num_steps)
+        xy_points = start + np.outer(t, (point - start))
     elif trajectory == 'slingshot_right':
         start = np.array([0., 0.])
         point = np.array([0., -3.0])
-        xy_points = point.reshape(1, 2).repeat(num_steps, axis=0)
-        xy_points[0] = start
+        t = np.linspace(0.0, 1.0, num_steps)
+        xy_points = start + np.outer(t, (point - start))
     elif trajectory == 'slingshot_forward':
         start = np.array([0., 0.])
         point = np.array([3.0, 0.])
-        xy_points = point.reshape(1, 2).repeat(num_steps, axis=0)
-        xy_points[0] = start
+        t = np.linspace(0.0, 1.0, num_steps)
+        xy_points = start + np.outer(t, (point - start))
     elif trajectory == 'slingshot_backward':
         start = np.array([0., 0.])
         point = np.array([-3.0, 0.])
-        xy_points = point.reshape(1, 2).repeat(num_steps, axis=0)
-        xy_points[0] = start
+        t = np.linspace(0.0, 1.0, num_steps)
+        xy_points = start + np.outer(t, (point - start))
 
     else:
         raise ValueError(f"Unknown trajectory type: {trajectory}")
@@ -439,7 +439,7 @@ class FrontnetQuantizedModel(torch.nn.Module):
 
     #     return [torch.cat(batch_x), torch.cat(batch_y), torch.cat(batch_z), torch.cat(batch_phi)]
 
-def load_dataset(path, batch_size = 32, shuffle = False, drop_last = True, num_workers = 1, train=True, train_set_size=0.9, IMRC=True):
+def load_dataset(path, batch_size = 32, shuffle = False, drop_last = True, num_workers = 1, train=True, train_set_size=0.9, IMRC=True, mirror=True):
     """
     Loads a dataset from the given path. 
     Parameters
@@ -477,8 +477,16 @@ def load_dataset(path, batch_size = 32, shuffle = False, drop_last = True, num_w
         imrc_images = imrc_data['x']
         imrc_labels = imrc_data['y']
 
-        images = np.concatenate([images, imrc_images])
+        images = np.concatenate([images, imrc_images]) # n, 96, 160
         labels = np.concatenate([labels, imrc_labels])
+
+    if mirror:
+        # Duplicate dataset with horizontally mirrored copies.
+        mirrored_images = images[..., ::-1]
+        images = np.concatenate([images, mirrored_images], axis=0)
+        labels = np.concatenate([labels, labels], axis=0)
+
+    print(f"Loaded {len(images), images.shape} images and labels from the dataset.")
 
     rng = np.random.default_rng(1749)
 
@@ -490,10 +498,10 @@ def load_dataset(path, batch_size = 32, shuffle = False, drop_last = True, num_w
         # create a torch dataset from the loaded data
         dataset = Dataset(images[indices[:split_idx]], labels[indices[:split_idx]])
     else:
-        dataset = Dataset(images[indices[split_idx:]], labels[split_idx:])
+        dataset = Dataset(images[indices[split_idx:]], labels[indices[split_idx:]])
 
     # for quick and convinient access, create a torch DataLoader with the given parameters
-    data_params = {'batch_size': batch_size, 'shuffle': shuffle, 'drop_last':drop_last, 'num_workers': 0, 'pin_memory': False}
+    data_params = {'batch_size': batch_size, 'shuffle': shuffle, 'drop_last':drop_last, 'num_workers': num_workers}
     data_loader = data.DataLoader(dataset, **data_params)
     
     return data_loader
