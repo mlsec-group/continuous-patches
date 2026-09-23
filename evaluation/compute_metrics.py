@@ -121,7 +121,9 @@ print("Base path: ", base_path)
 MODELS = ("frontnet", "yolov5")
 PATCH_MODES = ("random", "black", "timeout", "velo", "diffusion", "optimal", "corpus", "none", "interpolation", "fap")
 TEMPERATURES = ("warm", "cold")
-TRAJECTORIES = ("figure8", "triangle", "u", "s", "slingshot_left")
+# Only these patch modes are run with a temperature directory (warm/cold) in the path
+TEMPERATURE_MODES = ("velo", "timeout")
+TRAJECTORIES = ("figure8", "triangle", "u", "s", "slingshot_left", "slingshot_right", "slingshot_forward", "slingshot_backward")
 DISPLAY_SIZES = (40, 50, 60, 70, 80, 90, 100, 110, 120)
 SEEDS = (0, 1, 2)
 PIC_MODES = ("image", "random")
@@ -133,44 +135,35 @@ missing_combinations = []
 
 for model in MODELS:
     for patch_mode in PATCH_MODES:
-        for temperature in TEMPERATURES:
+        uses_temp = patch_mode in TEMPERATURE_MODES
+        for temperature in (TEMPERATURES if uses_temp else ("",)):
             for trajectory in TRAJECTORIES:
                 for display_size in DISPLAY_SIZES:
                     for pic_mode in PIC_MODES:
                         if pic_mode == "image":
                             for image_index in IMAGE_IDX:
                                 for seed in SEEDS:
-                                    file_path = os.path.join(base_path, model, f"{patch_mode}", temperature, trajectory, f"{display_size}", f"{pic_mode}_{image_index}", str(seed), "all_drone_poses.npy")
-                                    if os.path.isfile(file_path):
-                                        found_files.append((model, f"{patch_mode}", temperature, trajectory, f"{display_size}", f"{pic_mode}_{image_index}", seed))
+                                    pic_dir = f"{pic_mode}_{image_index}"
+                                    if uses_temp:
+                                        file_path = os.path.join(base_path, model, patch_mode, temperature, trajectory, f"{display_size}", pic_dir, str(seed), "all_drone_poses.npy")
                                     else:
-                                        missing_combinations.append((model, f"{patch_mode}", temperature, trajectory, f"{display_size}", f"{pic_mode}_{image_index}", seed))
+                                        file_path = os.path.join(base_path, model, patch_mode, trajectory, f"{display_size}", pic_dir, str(seed), "all_drone_poses.npy")
+                                    combo = (model, patch_mode, temperature, trajectory, f"{display_size}", pic_dir, seed)
+                                    if os.path.isfile(file_path):
+                                        found_files.append(combo)
+                                    else:
+                                        missing_combinations.append(combo)
                         else:  # random pic_mode
                             for seed in SEEDS:
-                                file_path = os.path.join(base_path, model, f"{patch_mode}", temperature, trajectory, f"{display_size}", pic_mode, str(seed), "all_drone_poses.npy")
-                                if os.path.isfile(file_path):
-                                    found_files.append((model, f"{patch_mode}", temperature, trajectory, f"{display_size}", pic_mode, seed))
+                                if uses_temp:
+                                    file_path = os.path.join(base_path, model, patch_mode, temperature, trajectory, f"{display_size}", pic_mode, str(seed), "all_drone_poses.npy")
                                 else:
-                                    missing_combinations.append((model, f"{patch_mode}", temperature, trajectory, f"{display_size}", pic_mode, seed))
-        else:  # random and black patch modes
-            for trajectory in TRAJECTORIES:
-                for display_size in DISPLAY_SIZES:
-                    for pic_mode in PIC_MODES:
-                        if pic_mode == "image":
-                            for image_index in IMAGE_IDX:
-                                for seed in SEEDS:
-                                    file_path = os.path.join(base_path, model, patch_mode, trajectory, f"{display_size}", f"{pic_mode}_{image_index}", str(seed), "all_drone_poses.npy")
-                                    if os.path.isfile(file_path):
-                                        found_files.append((model, patch_mode, trajectory, f"{display_size}", f"{pic_mode}_{image_index}", seed))
-                                    else:
-                                        missing_combinations.append((model, patch_mode, trajectory, f"{display_size}", f"{pic_mode}_{image_index}", seed))
-                        else:  # random pic_mode
-                            for seed in SEEDS:
-                                file_path = os.path.join(base_path, model, patch_mode, trajectory, f"{display_size}", pic_mode, str(seed), "all_drone_poses.npy")
+                                    file_path = os.path.join(base_path, model, patch_mode, trajectory, f"{display_size}", pic_mode, str(seed), "all_drone_poses.npy")
+                                combo = (model, patch_mode, temperature, trajectory, f"{display_size}", pic_mode, seed)
                                 if os.path.isfile(file_path):
-                                    found_files.append((model, patch_mode, trajectory, f"{display_size}", pic_mode, seed))
+                                    found_files.append(combo)
                                 else:
-                                    missing_combinations.append((model, patch_mode, trajectory, f"{display_size}", pic_mode, seed))
+                                    missing_combinations.append(combo)
 
 
 
@@ -185,11 +178,7 @@ print(f"Missing {len(missing_combinations)} result files.")
 # print("missing_combinations examples: ", missing_combinations[:5])
 
 
-target_trajectories = {"figure8": gen_target_trajectory("figure8"),
-                       "triangle": gen_target_trajectory("triangle"),
-                       "u": gen_target_trajectory("u"),
-                       "s": gen_target_trajectory("s"),
-                       "slingshot_left": gen_target_trajectory("slingshot_left")}
+target_trajectories = {traj: gen_target_trajectory(traj) for traj in TRAJECTORIES}
 
 
 # check if .csv and .pkl already exist for each model
@@ -218,15 +207,26 @@ for f in found_files:
             files_per_model[model].append(f)
 
 # Filter out already processed files per model
+def _canonical_temp(patch_mode, temperature):
+    # Non-temperature modes use "" as the canonical key (old CSVs may store "cold")
+    if patch_mode not in TEMPERATURE_MODES:
+        return ""
+    return "" if temperature is None or pd.isna(temperature) else temperature
+
+def _row_key(row):
+    pic_mode = row['pic_mode']
+    image_index = row.get('image_index')
+    if pic_mode == "image" and image_index is not None and not pd.isna(image_index):
+        pic_mode_image = f"image_{int(image_index)}"
+    else:
+        pic_mode_image = pic_mode
+    return (row["model"], row["patch_mode"], _canonical_temp(row["patch_mode"], row["temperature"]), row["trajectory"], str(int(row["display_size"])), pic_mode_image, int(row["seed"]))
+
 for model in MODELS:
     if all_rows[model]:
         set_existing_files = set()
         for row in all_rows[model]:
-            pic_mode_image = f"{row['pic_mode']}_{row['image_index']}" if row['pic_mode']=="image" and row.get('image_index') is not None else row['pic_mode']
-            if row["temperature"] != "" and row["temperature"] is not None:
-                set_existing_files.add((row["model"], row["patch_mode"], row["temperature"], row["trajectory"], str(row["display_size"]), pic_mode_image, row["seed"]))
-            else:
-                set_existing_files.add((row["model"], row["patch_mode"], "", row["trajectory"], str(row["display_size"]), pic_mode_image, row["seed"]))
+            set_existing_files.add(_row_key(row))
         files_per_model[model] = [f for f in files_per_model[model] if f not in set_existing_files]
         print(f"{len(files_per_model[model])} files remain to be processed for {model} after filtering existing results.")
 
@@ -303,15 +303,21 @@ missing_df = pd.DataFrame(missing_combinations, columns=["model", "patch_mode", 
 missing_df.to_csv(os.path.join(base_path, "missing_combinations.csv"), index=False)
 print(f"Wrote missing combinations to CSV: {os.path.join(base_path, 'missing_combinations.csv')}")
 
-# Build DataFrame and persist per model
+# Build DataFrame and persist per model (merge existing rows with new rows, deduplicated)
 for model in MODELS:
-    model_rows = [r for r in rows if r["model"] == model]
-    if not model_rows:
-        # If no new rows, check if we have existing rows
-        model_rows = all_rows.get(model, [])
-    
-    if model_rows:
-        df = pd.DataFrame(model_rows)
+    new_rows = [r for r in rows if r["model"] == model]
+    existing_rows = all_rows.get(model, [])
+
+    merged = list(existing_rows)
+    existing_keys = {_row_key(r) for r in existing_rows}
+    for row in new_rows:
+        key = _row_key(row)
+        if key not in existing_keys:
+            merged.append(row)
+            existing_keys.add(key)
+
+    if merged:
+        df = pd.DataFrame(merged)
         csv_fp = os.path.join(base_path, f"all_results_{model}.csv")
         pkl_fp = os.path.join(base_path, f"all_results_{model}.pkl")
         df.to_csv(csv_fp, index=False)

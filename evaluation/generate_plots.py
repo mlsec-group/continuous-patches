@@ -14,7 +14,16 @@ print("Project root: ", project_root)
 from src.util import gen_target_trajectory
 
 
-df = pd.read_csv('paper_results/all_results_frontnet.csv')
+parser = argparse.ArgumentParser(description='Generate evaluation tables and plots for a victim model')
+parser.add_argument('-m', '--model', type=str, choices=['frontnet', 'yolov5'], default='frontnet', help='Victim model to plot')
+args = parser.parse_args()
+
+csv_fp = f'paper_results/all_results_{args.model}.csv'
+if not os.path.isfile(csv_fp):
+    print(f"Error: {csv_fp} not found. Run evaluation/compute_metrics.py first.")
+    sys.exit(1)
+
+df = pd.read_csv(csv_fp)
 # print(df.head())
 
 # header: model,patch_mode,temperature,trajectory,display_size,pic_mode,image_index,seed,file_path,dtw,frechet,mean_time_per_step
@@ -87,9 +96,9 @@ print(agg.head())
 #     agg = pd.concat([agg, pd.DataFrame([new_row])], ignore_index=True)
 
 # create latex table with row patch_mode, columns display_size, values frechet
-# save to paper_results/tables/frechet_frontnet.txt
+# save to paper_results/tables/frechet_{model}.txt
 os.makedirs('paper_results/tables', exist_ok=True)
-with open('paper_results/tables/frechet_frontnet.txt', 'w') as f:
+with open(f'paper_results/tables/frechet_{args.model}.txt', 'w') as f:
     for trajectory in agg['trajectory'].unique():
         traj_data = agg[agg['trajectory'] == trajectory]
         table = traj_data.pivot(index='patch_mode', columns='display_size', values='fmt')
@@ -154,8 +163,8 @@ time_agg = time_agg.drop(columns=['temperature'])
 #     }
 #     time_agg = pd.concat([time_agg, pd.DataFrame([new_row])], ignore_index=True)
 
-# write time table to paper_results/tables/time_saved_frontnet.txt
-with open('paper_results/tables/computation_time_frontnet.txt', 'w') as f:
+# write time table to paper_results/tables/computation_time_{model}.txt
+with open(f'paper_results/tables/computation_time_{args.model}.txt', 'w') as f:
     for trajectory in time_agg['trajectory'].unique():
         traj_data = time_agg[time_agg['trajectory'] == trajectory]
         table = traj_data.pivot(index='patch_mode', columns='display_size', values='fmt')
@@ -166,10 +175,13 @@ with open('paper_results/tables/computation_time_frontnet.txt', 'w') as f:
 
 
 target_trajectories = {"figure8": gen_target_trajectory("figure8"),
-                       "triangle": gen_target_trajectory("triangle"),
-                       "u": gen_target_trajectory("u"),
-                       "s": gen_target_trajectory("s"),
-                       "slingshot_left": gen_target_trajectory("slingshot_left")}
+                        "triangle": gen_target_trajectory("triangle"),
+                        "u": gen_target_trajectory("u"),
+                        "s": gen_target_trajectory("s"),
+                        "slingshot_left": gen_target_trajectory("slingshot_left"),
+                        "slingshot_right": gen_target_trajectory("slingshot_right"),
+                        "slingshot_forward": gen_target_trajectory("slingshot_forward"),
+                        "slingshot_backward": gen_target_trajectory("slingshot_backward")}
 
 # now plot each target trajectory as a 2D plot (ommitting z and yaw) for each patch_mode
 # load all_drone_poses.npy, path stored in file_path column
@@ -218,7 +230,7 @@ for trajectory in agg['trajectory'].unique():
     plt.ylim([-1., 1.])
     plt.legend()
     plt.grid()
-    plt.savefig(f'paper_results/plots/trajectory_{trajectory}_frontnet.png')
+    plt.savefig(f'paper_results/plots/trajectory_{trajectory}_{args.model}.png')
     plt.close()
 
 
@@ -264,7 +276,7 @@ for mode in ['velo', 'timeout']:
             plt.ylim([-1., 1.])
             plt.legend()
             plt.grid()
-            plt.savefig(f'paper_results/plots/trajectory_{trajectory}_{mode}_{temperature}_by_display_size_frontnet.png')
+            plt.savefig(f'paper_results/plots/trajectory_{trajectory}_{mode}_{temperature}_by_display_size_{args.model}.png')
             plt.close()
 
 for mode in ['diffusion', 'corpus']:
@@ -307,7 +319,7 @@ for mode in ['diffusion', 'corpus']:
         plt.ylim([-1., 1.])
         plt.legend()
         plt.grid()
-        plt.savefig(f'paper_results/plots/trajectory_{trajectory}_{mode}_by_display_size.png')
+        plt.savefig(f'paper_results/plots/trajectory_{trajectory}_{mode}_by_display_size_{args.model}.png')
         plt.close()
 
 

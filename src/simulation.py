@@ -137,9 +137,8 @@ class DroneSimulation:
         pts_img_h = self.cam.camera_intrinsic_tens @ pts_cam[:3, :]
         
         # Check Visibility
-        # As long as one point is within view, we consider it visible
-        if torch.all(pts_img_h[2, :] < 0) or torch.all(pts_img_h[2, :] > img_size_px[1]) or torch.all(pts_img_h[2, :] > img_size_px[0]): return None, None, False
-        # if torch.any(pts_img_h[2, :] <= 0.1): return None, None, False
+        # pts_img_h[2] is camera-space depth; all points behind the camera -> not visible
+        if not torch.any(pts_img_h[2, :] > 0): return None, None, False
 
         pts_img = pts_img_h[:2, :] / pts_img_h[2, :]
         monitor_corners = pts_img.T # (4, 2)
@@ -151,6 +150,15 @@ class DroneSimulation:
             monitor_corners[:, 1] *= (320.0 / 96.0)   # y coords
 
         # print("Adjusted monitor_corners: ", monitor_corners)
+
+        # As long as one point is within view, we consider it visible
+        inside = ((monitor_corners[:, 0] >= 0) & (monitor_corners[:, 0] <= img_size_px[1]) &
+                  (monitor_corners[:, 1] >= 0) & (monitor_corners[:, 1] <= img_size_px[0]))
+        if not torch.any(inside): return None, None, False
+
+        # Clamp corners to the image frame so the homography targets the visible region
+        monitor_corners[:, 0] = torch.clamp(monitor_corners[:, 0], 0.0, float(img_size_px[1]))
+        monitor_corners[:, 1] = torch.clamp(monitor_corners[:, 1], 0.0, float(img_size_px[0]))
 
         # Homography
         src_pts = np.array([

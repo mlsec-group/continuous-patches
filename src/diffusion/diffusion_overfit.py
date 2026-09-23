@@ -598,7 +598,9 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
     
     # Generate samples for evaluation
     n_samples = 10
-    total_samples = 100  # Evaluate on 1000 samples (or corpus_size if smaller)
+    total_samples = min(100, len(dataset))  # Evaluate on up to 100 samples (or corpus size if smaller)
+    if total_samples == 0:
+        print("Warning: corpus is empty, skipping evaluation sampling.")
     
     with torch.no_grad():
         for idx in tqdm(range(total_samples), desc="Sampling"):
@@ -633,7 +635,10 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
             plt.close()
 
     all_psnr = np.array(all_psnr)
-    print(f"Overall Mean PSNR: {all_psnr.mean():.2f} dB")
+    if all_psnr.size:
+        print(f"Overall Mean PSNR: {all_psnr.mean():.2f} dB")
+    else:
+        print("Overall Mean PSNR: n/a (empty corpus)")
     np.save(f"{project_root}/flipped_diffusion/{model_name}/psnr_scores_{model_name}_{corpus_size}.npy", all_psnr)
 
 if __name__ == "__main__":

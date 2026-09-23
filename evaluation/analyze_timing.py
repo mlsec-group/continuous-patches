@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import pathlib
-import re
 import numpy as np
 from collections import defaultdict
 from tqdm import trange
@@ -11,91 +10,45 @@ BASE = pathlib.Path(__file__).resolve().parent.parent / "paper_results"
 ROW_DEFS = [
 	("velo", "warm", "Velocity, warm"),
 	("velo", "cold", "Velocity, cold"),
-	("timeout_10hz", "warm", "Timeout 10 Hz, warm"),
-	("timeout_10hz", "cold", "Timeout 10 Hz, cold"),
+	("timeout", "warm", "Timeout 10 Hz, warm"),
+	("timeout", "cold", "Timeout 10 Hz, cold"),
 	("random", None, "Random"),
 	("black", None, "Black"),
 ]
 
-TRAJECTORY_ORDER = ["figure8", "triangle", "c", "s"]
+TRAJECTORY_ORDER = ["figure8", "triangle", "u", "s"]
 DISPLAY_ORDER = [60, 70, 80, 90, 100]
 
 
-def parse_elapsed_file(fp):
-	"""Parse elapsed_time.txt (or similarly formatted) and return dict with keys 'elapsed' and 'dtw' if present."""
-	out = {}
-	text = fp.read_text(errors="ignore")
-	# find lines like 'Elapsed time' followed by number
-	m = re.search(r"Elapsed time.*?([\d\.eE+-]+)", text, flags=re.IGNORECASE)
-	if m:
-		try:
-			out['elapsed'] = float(m.group(1))
-		except Exception:
-			pass
-	# also accept lines like 'Elapsed time (s):\n10.48'
-	if 'elapsed' not in out:
-		m2 = re.search(r"Elapsed time.*?:\s*\n\s*([\d\.eE+-]+)", text, flags=re.IGNORECASE)
-		if m2:
-			try:
-				out['elapsed'] = float(m2.group(1))
-			except Exception:
-				pass
-	# DTW: try same-line first, then accept value on the next line (e.g. "DTW distance:\n0.6414")
-	m = re.search(r"DTW.*?:\s*\n\s*([\d\.eE+-]+)", text, flags=re.IGNORECASE)
-	# print(f"Parsing DTW in {fp}: found {m}")
-	if m:
-		print(f"Found DTW match: {m.group(1)}")
-		try:
-			out['dtw'] = float(m.group(1))
-		except Exception:
-			pass
-	# else:
-	# 	m2 =
-	# 	if m2:
-	# 		print(f"Found DTW next-line match: {m2.group(1)}")
-	# 		try:
-	# 			out['dtw'] = float(m2.group(1))
-	# 		except Exception:
-	# 			pass
-	# fallback: any two floats - pick first as elapsed, second as dtw? Avoid guessing.
-	return out
-
-
 def walk_and_collect(base=BASE):
-	"""Walk `base` for elapsed_time.txt files and collect data keyed by
-	(model, patch_mode, temperature, trajectory, display, pic_mode, seed).
+	"""Walk `base` for time_per_step.npy files and collect data keyed by
+	(model, patch_mode, temperature, trajectory, display, pic_mode).
+
+	Layout: model/patch_mode/[temperature/]trajectory/display/pic_mode/seed/time_per_step.npy
+	DTW values are read from dtw_score.npy written next to the poses by compute_metrics.py.
 	"""
 	results = defaultdict(lambda: defaultdict(list))
-	# results[(model,patch_mode,temperature,trajectory,display,pic_mode)].append({'elapsed':..., 'dtw':...})
 
-	for fp in base.rglob("elapsed_time.txt"):
+	for fp in base.rglob("time_per_step.npy"):
 		try:
 			rel = fp.relative_to(base).parts
 		except Exception:
 			rel = fp.parts
-		if len(rel) < 6:
+		if len(rel) < 7:
 			continue
-		# similar parsing logic as plots.py
+		# model/patch_mode/[temperature/]trajectory/display/pic_mode/seed/file
 		model = rel[0]
-		patch_mode = rel[1] if len(rel) > 1 else ''
-		if patch_mode.startswith('timeout_') or patch_mode == 'velo':
-			if len(rel) >= 7:
-				temperature = rel[2] if rel[2] in ('warm', 'cold') else None
-				trajectory = rel[3]
-				display = rel[4]
-				pic_mode = rel[5]
-				seed = rel[6]
-			else:
-				continue
+		patch_mode = rel[1]
+		if rel[2] in ('warm', 'cold'):
+			temperature = rel[2]
+			trajectory = rel[3]
+			display = rel[4]
+			pic_mode = rel[5]
 		else:
-			if len(rel) >= 6:
-				temperature = None
-				trajectory = rel[2]
-				display = rel[3]
-				pic_mode = rel[4]
-				seed = rel[5]
-			else:
-				continue
+			temperature = None
+			trajectory = rel[2]
+			display = rel[3]
+			pic_mode = rel[4]
 		# normalize display
 		display_str = str(display)
 		if display_str.endswith('z'):
@@ -106,9 +59,20 @@ def walk_and_collect(base=BASE):
 			display_num = int(display_num)
 		except Exception:
 			continue
-		parsed = parse_elapsed_file(fp)
+		try:
+			times = np.load(fp)
+			elapsed = float(np.mean(times))
+		except Exception:
+			continue
+		entry = {'elapsed': elapsed}
+		dtw_fp = fp.parent / "dtw_score.npy"
+		if dtw_fp.is_file():
+			try:
+				entry['dtw'] = float(np.load(dtw_fp))
+			except Exception:
+				pass
 		key = (model, patch_mode, temperature, trajectory, display_num, pic_mode)
-		results[key]['values'].append(parsed)
+		results[key]['values'].append(entry)
 	return results
 
 
