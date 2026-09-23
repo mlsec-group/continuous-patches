@@ -8,15 +8,15 @@ from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
 
 # --- Imports ---
-from diffusion_model import DiffusionModel
+from .diffusion_model import DiffusionModel
 
 import argparse
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from util import load_model, load_dataset
-from simulation import T_matrix
-from simulation import normalize_yaw as normalize_yaw_t
+from ..util import load_model, load_dataset
+from ..simulation import T_matrix
+from ..simulation import normalize_yaw as normalize_yaw_t
 
 def _perspective_grid(
 coeffs: list[float], 
@@ -347,7 +347,7 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
         for p in frontnet.parameters():
             p.requires_grad = False
     if model_name == 'yolov5':
-        from yolo_bounding import YOLOBox
+        from ..yolo_bounding import YOLOBox
         yolo = YOLOBox()
         yolo.model.eval()
         for p in yolo.model.parameters():

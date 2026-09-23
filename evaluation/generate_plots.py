@@ -11,7 +11,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.append(project_root)
 print("Project root: ", project_root)
 
-from util import gen_target_trajectory 
+from src.util import gen_target_trajectory
 
 
 df = pd.read_csv('paper_results/all_results_frontnet.csv')

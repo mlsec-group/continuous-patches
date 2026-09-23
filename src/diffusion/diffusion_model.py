@@ -8,16 +8,10 @@ import torch.nn.functional as F
 from tqdm import trange, tqdm
 
 import os
-import sys
 
-# Ensure parent folder is on sys.path so we can import util from there
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-print("Project root: ", project_root)
-sys.path.insert(0, project_root)
-
-from util import load_model, load_dataset
-from attacks import project_patch
-from simulation import normalize_yaw as normalize_yaw_t
+from ..util import load_model, load_dataset
+from ..attacks import project_patch
+from ..simulation import normalize_yaw as normalize_yaw_t
 
 # source for UNet: https://github.com/jbergq/simple-diffusion-model/
 

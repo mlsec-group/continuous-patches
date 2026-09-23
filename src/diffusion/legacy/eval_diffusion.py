@@ -1,3 +1,10 @@
+"""DEPRECATED: Legacy experiment script from earlier development phases.
+
+This script is not part of the released AISec'26 artifact and is not
+maintained: it references modules or workflows that are no longer present
+in this repository. It is kept for reference only.
+"""
+
 import torch
 import torch.nn as nn
 import numpy as np

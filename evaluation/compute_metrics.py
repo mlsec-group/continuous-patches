@@ -9,7 +9,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.append(project_root)
 print("Project root: ", project_root)
 
-from util import gen_target_trajectory 
+from src.util import gen_target_trajectory
 
 
 def compute_dtw_distance(target_traj: torch.tensor, actual_traj: torch.tensor):

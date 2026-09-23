@@ -3,10 +3,10 @@ import torch.nn.functional as F
 import numpy as np
 import time
 import pickle
-from simulation import T_matrix, normalize_yaw, calc_heading_vec
+from .simulation import T_matrix, normalize_yaw, calc_heading_vec
 import os
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '.'))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
 # --- Differentiable Grid Sample ---
 def _perspective_grid(coeffs, w, h, ow, oh, dtype, device):
@@ -120,7 +120,7 @@ class Attacker:
         
         # Load Diffusion/Corpus models
         if self.mode == 'diffusion':
-            from diffusion.diffusion_model import DiffusionModel
+            from .diffusion.diffusion_model import DiffusionModel
             # from diffusion.diffusion_overfit import normalize_condition
             self.diff_model = DiffusionModel(device=device, patch_size=self.patch_size, prediction_model_name=args.model)
             requested_corpus = getattr(args, 'corpus_size', 1000)

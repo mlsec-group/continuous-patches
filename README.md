@@ -7,7 +7,48 @@ This repository contains the code and artifacts required to reproduce the result
 > In 19th Workshop on Artificial Intelligence and Security (AISec '26), November 15–19, 2026, The Hague, Netherlands.
 > ACM, New York, NY, USA, 12 pages. [https://doi.org/10.1145/3847352.3848104](https://doi.org/10.1145/3847352.3848104)
 
+```bibtex
+@inproceedings{hanfeld2026controlling,
+  author    = {Hanfeld, Pia and Imgrund, Erik and Wei{\ss}berg, Felix and Eisenhofer, Thorsten and H{\"o}nig, Wolfgang and Rieck, Konrad},
+  title     = {Controlling Autonomous Vehicles using Continuous Adversarial Patches},
+  booktitle = {19th Workshop on Artificial Intelligence and Security (AISec '26)},
+  year      = {2026},
+  doi       = {10.1145/3847352.3848104}
+}
+```
+
 A simulated drone follows a target trajectory using only visual pose estimation (PULP-Frontnet or YOLOv5); an attacker renders an adversarial patch — continuously adapted to the drone's state via a diffusion model — onto a wall monitor to hijack the drone's perception and steer it along adversary-defined trajectories (slingshot and freestyle maneuvers). All experiments are conducted in the custom simulation environment released in this repository.
+
+## Repository layout
+
+```
+├── src/                      # Core source code (the `src` package)
+│   ├── main.py               # Experiment entrypoint (python -m src.main)
+│   ├── simulation.py         # Drone physics, monitor geometry, P controller
+│   ├── attacks.py            # Patch projection, pose recovery, attacker
+│   ├── camera.py             # Camera calibration, box -> 3D lifting
+│   ├── yolo_bounding.py      # Differentiable YOLOv5 wrapper
+│   ├── util.py               # Datasets, model loading, trajectories
+│   └── diffusion/            # Diffusion model for patch generation
+│       ├── diffusion_model.py    # UNet + EDM sampling
+│       ├── diffusion_overfit.py  # Training script
+│       └── legacy/           # Deprecated experimental scripts (reference only)
+├── scripts/
+│   ├── run_experiments_frontnet.sh  # SLURM sweep (frontnet)
+│   ├── run_experiments_yolov5.sh    # SLURM sweep (yolov5)
+│   └── diffusion_inference.py       # Diffusion inference sanity check
+├── evaluation/
+│   ├── compute_metrics.py    # Fréchet/DTW scores -> aggregated CSV
+│   ├── generate_plots.py     # LaTeX tables and figures from the CSV
+│   └── analyze_timing.py     # Anytime-loss / compute-time tables
+├── examples/                 # Small standalone examples
+├── configs/                  # Configuration files (camera calibration)
+├── misc/                     # Extra dataset (gitignored, must be supplied)
+├── pulp-frontnet/            # PULP-Frontnet (git submodule)
+└── paper_results/            # Experiment outputs (gitignored)
+```
+
+All commands below are run from the repository root.
 
 ## Quickstart
 
@@ -50,7 +91,7 @@ Each configuration is repeated across three random seeds (`--seed 0 1 2`); resul
 1. Initialize the Frontnet submodule: `git submodule update --init`
 2. Place the dataset files:
    - `pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle` (expected SHA256 in `Data/checksums.txt`)
-   - `misc/IMRC_images.pickle` (dataset extension used by `util.load_dataset`)
+   - `misc/IMRC_images.pickle` (dataset extension used by `src/util.py`)
 3. Train the diffusion model (Step 1 below). Trained weights are **not released** — see Open Science note at the bottom.
 4. Only for the FAP baseline (Table 1): place pre-computed Flying-Adversarial-Patch artifacts in `{frontnet,yolov5}/fap/` (`last_patch.npy`, `stats_p.npy`, `settings.yaml`).
 
@@ -59,19 +100,19 @@ Each configuration is repeated across three random seeds (`--seed 0 1 2`); resul
 The attack model is a diffusion model (EDM-style UNet) conditioned on the display constraint `[sf, tx, ty]` and the target pose `[x, y, z, yaw]`, trained on a corpus of 1000 optimal patches (one per random condition):
 
 ```bash
-python diffusion/diffusion_overfit.py --model frontnet --corpus_size 1000 --batch_size 64
+python -m src.diffusion.diffusion_overfit --model frontnet --corpus_size 1000 --batch_size 64
 # for YOLOv5:
-python diffusion/diffusion_overfit.py --model yolov5 --corpus_size 1000 --batch_size 64
+python -m src.diffusion.diffusion_overfit --model yolov5 --corpus_size 1000 --batch_size 64
 ```
 
 - Output: `flipped_diffusion/{model}/diffusion_model_{model}_1000.pth` (plus loss curves and sample grids in the same directory).
-- The paper reports training on an NVIDIA A100 for under 4 hours (1000 epochs, batch size 32, Adam lr 1e-4). The script currently trains for 2000 epochs with a fixed Adam lr of 1e-3 — adjust in `diffusion/diffusion_overfit.py` if you want the exact paper hyperparameters.
+- The paper reports training on an NVIDIA A100 for under 4 hours (1000 epochs, batch size 32, Adam lr 1e-4). The script currently trains for 2000 epochs with a fixed Adam lr of 1e-3 — adjust in `src/diffusion/diffusion_overfit.py` if you want the exact paper hyperparameters.
 - The script loads `{model}/corpus_{model}.npz` if present, otherwise builds the corpus from `temp_pid_*/sample_*.npz` files left by prior optimization runs.
 - **TODO**: a standalone script to generate the 1000 optimal PGD patches (Eq. 9 in the paper) from scratch; the corpus generation currently relies on the `temp_pid_*` samples.
 
 Sanity-check the trained model:
 ```bash
-python diffusion_inference.py -m frontnet --steps 25 --candidates 5
+python scripts/diffusion_inference.py -m frontnet --steps 25 --candidates 5
 ```
 
 ### Step 2: Run experiments
@@ -79,8 +120,8 @@ python diffusion_inference.py -m frontnet --steps 25 --candidates 5
 #### Full sweep on a SLURM cluster
 
 ```bash
-bash run_experiments_frontnet.sh   # submits a job array to partition gpu-9m (80 GB constraint)
-bash run_experiments_yolov5.sh
+bash scripts/run_experiments_frontnet.sh   # submits a job array to partition gpu-9m (80 GB constraint)
+bash scripts/run_experiments_yolov5.sh
 ```
 
 Edit the parameter arrays at the top of the scripts (`PATCH_MODES`, `TRAJECTORIES`, `DISPLAY_SIZES`, `TIMEOUT_VALUES`, `SEED_VALUES`) to select the sweep. For the paper's grids: `TRAJECTORIES` including `slingshot_backward` (and the other slingshot directions for Fig. 5/7) plus `triangle`/`figure8` for freestyle; `DISPLAY_SIZES=(60 80 100 120)`; `TIMEOUT_VALUES=(10)` for the optimization modes; seeds 0, 1, 2.
@@ -91,12 +132,12 @@ Inside the Apptainer container or an activated venv, from the repository root:
 
 ```bash
 # Slingshot (paper's focus direction), our diffusion attack, 10 Hz control loop
-python main.py -m frontnet -t slingshot_backward --patch_mode diffusion \
+python -m src.main -m frontnet -t slingshot_backward --patch_mode diffusion \
   --display_size 60 --seed 0 --pic_mode idx --img_idx 1860 \
   --corpus_size 1000 --timeout 10 --temperature warm
 
 # Freestyle (infinity symbol), same settings
-python main.py -m frontnet -t figure8 --patch_mode diffusion \
+python -m src.main -m frontnet -t figure8 --patch_mode diffusion \
   --display_size 60 --seed 0 --pic_mode idx --img_idx 1860 \
   --corpus_size 1000 --timeout 10 --temperature warm
 ```
@@ -118,7 +159,7 @@ Each run writes one PNG per step plus `all_drone_poses.npy`, `time_per_step.npy`
 ### Step 3: Compute metrics
 
 ```bash
-python paper_results/paper_test.py
+python evaluation/compute_metrics.py
 ```
 
 The script scans `paper_results/` for `all_drone_poses.npy` files, computes per-run scores against the corresponding target trajectory, and aggregates everything into `paper_results/all_results_frontnet.csv` (plus a pickle). It provides the metrics used in the paper:
@@ -131,8 +172,8 @@ Note the parameter grids (trajectories, display sizes, patch modes) are fixed at
 ### Step 4: Aggregate and plot
 
 ```bash
-python paper_results/plots.py            # LaTeX tables (paper_results/tables/) grouped by trajectory
-python paper_results/dtw_scores_compute_time.py   # anytime-loss / compute-time tables
+python evaluation/generate_plots.py            # LaTeX tables (paper_results/tables/) grouped by trajectory
+python evaluation/analyze_timing.py            # anytime-loss / compute-time tables
 ```
 
 ### Baselines (Tables 1 and 2)
@@ -153,11 +194,11 @@ All baselines share the same trajectory/display/seed settings; only `--patch_mod
 ### Simulation setup (paper Section 4.1)
 
 - Confined 3D space; run aborts when the drone leaves x/y ∈ [-2, 2] m, z ∈ [0.1, 2] m.
-- Proportional controller (DJI-Neo-like): position gain 1.5 with velocity clamped at 15 m/s, yaw-rate gain 3.0 clamped at 3 rad/s — set in `DroneSimulation` (simulation.py).
+- Proportional controller (DJI-Neo-like): position gain 1.5 with velocity clamped at 15 m/s, yaw-rate gain 3.0 clamped at 3 rad/s — set in `DroneSimulation` (`src/simulation.py`).
 - The paper's 10 Hz simulation loop corresponds to `--timeout 10`.
 - Monitor centered 2 m in front of the drone at height 1 m, facing the drone; size via `--display_size`.
 - Camera images drawn from the extended Frontnet indoor dataset; the dataset is mirrored left-to-right at load time (doubled) to correct the original right-side bias.
-- Controller/monitor parameters are defined in `simulation.py` and `camera_calibration.yaml`.
+- Controller/monitor parameters are defined in `src/simulation.py` and `configs/camera_calibration.yaml`.
 
 ## Dependencies
 
@@ -165,10 +206,14 @@ All baselines share the same trajectory/display/seed settings; only `--patch_mod
 
 **Python** (Python 3.12, see `apptainer_requirements.txt`): `torch`, `torchvision`, `torchaudio`, `torchsummary`, `numpy`, `tqdm`, `rowan`, `pandas`, `opencv-python`, `PyYAML`, `scikit-learn`, `setuptools==80.4.0`, `matplotlib`, `requests`, `py-cpuinfo`, `psutil`, `seaborn`, `ultralytics-thop`, `ultralytics`, `gitpython`.
 
+## Legacy code
+
+`src/diffusion/legacy/` contains experimental scripts from earlier development phases that are not part of this artifact and may not run against the current codebase; see the README in that directory.
+
 ## Third-party code
 
 We used the original implementation to train [Flying Adversarial Patches](https://github.com/IMRCLab/flying_adversarial_patch/) (the FAP baseline, Tables 1 and 2) and our own implementation for all other baselines. The PULP-Frontnet model is provided as the `pulp-frontnet/` git submodule.
 
 ## Open Science
 
-In line with the paper, we do **not** release the trained diffusion model weights: they could be readily misused to generate continuous adversarial patches in practice. We instead provide the training script (`diffusion/diffusion_overfit.py`) so the models can be trained given sufficient hardware. All experiments are simulation-only; physical validation is future work.
+In line with the paper, we do **not** release the trained diffusion model weights: they could be readily misused to generate continuous adversarial patches in practice. We instead provide the training script (`src/diffusion/diffusion_overfit.py`) so the models can be trained given sufficient hardware. All experiments are simulation-only; physical validation is future work.

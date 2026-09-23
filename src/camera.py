@@ -11,7 +11,7 @@ import torch
 import cv2
 import csv
 
-from util import opencv2quat, load_dataset, printd
+from .util import opencv2quat, load_dataset, printd
 
 IM_HEIGHT = 96
 IM_WIDTH = 160

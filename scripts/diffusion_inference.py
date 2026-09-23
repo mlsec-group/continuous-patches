@@ -1,15 +1,18 @@
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-# add subfolder diffusion to path
 import sys
 import os
-sys.path.append(os.path.join(os.path.dirname(__file__), 'diffusion'))
-from diffusion_model import DiffusionModel, construct_T_matrix
-from diffusion_overfit import normalize_condition
-from attacks import project_patch
-from util import load_model, normalize_yaw_t, load_dataset
-from simulation import T_matrix, calc_heading_vec
+
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from src.diffusion.diffusion_model import DiffusionModel, construct_T_matrix
+from src.diffusion.diffusion_overfit import normalize_condition
+from src.attacks import project_patch
+from src.util import load_model, normalize_yaw_t, load_dataset
+from src.simulation import T_matrix, calc_heading_vec
 import cv2
 import time
 import glob
@@ -47,7 +50,7 @@ def check_generalization(
 ):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '.'))
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
     patch_size = (45, 80) if prediction_model_name == 'frontnet' else (150, 320)
     
@@ -87,7 +90,7 @@ def check_generalization(
         frontnet = load_model("pulp-frontnet/PyTorch/Models/Frontnet160x32.pt", device, config="160x32")
         frontnet.eval()
     elif prediction_model_name == 'yolov5':
-        from yolo_bounding import YOLOBox
+        from src.yolo_bounding import YOLOBox
         yolo = YOLOBox()
         yolo.model.eval()
         

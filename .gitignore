@@ -192,8 +192,7 @@ yolov5/
 temp_pid*
 overfit_results/
 raid_results/
-paper_results/**
-!paper_results/*.py
+paper_results/
 flipped_diffusion/
 misc/
 *.txt
@@ -202,3 +201,5 @@ misc/
 *.tsv
 *.tex
 *.pth
+# Agent session scaffolding
+opencode_sesh.md

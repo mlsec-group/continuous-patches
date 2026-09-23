@@ -1,19 +1,12 @@
 import torch
 import numpy as np
 import cv2
-import sys
-
-sys.path.append('src/')
-# print(f'sys.path:')
-# print()
-# for string in sys.path:
-#     print(string) 
 
 import torch.nn as nn
-from util import load_dataset, printd
+from .util import load_dataset, printd
 from torchvision.ops import generalized_box_iou_loss
 
-from camera import Camera
+from .camera import Camera
 
 
 USE_TENSOR = True
@@ -30,7 +23,7 @@ SOFTMAX_MULT = 15.
 
 import os
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '.'))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
 # get random coordinates for where patch should be
 def gen_patch_coords(n, size):
@@ -47,7 +40,7 @@ class YOLOBox(nn.Module):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     softmax_mult = 15.
 
-    def __init__(self, cam_config=f'{project_root}/camera_calibration.yaml'):
+    def __init__(self, cam_config=f'{project_root}/configs/camera_calibration.yaml'):
         super().__init__()
 
         # load model

@@ -2,17 +2,17 @@
 set -euo pipefail
 
 #MODELS=("frontnet" "yolov5")
-MODELS=("yolov5")
-# PATCH_MODES=("optimal" "timeout" "random" "black" "corpus" "optimal")
+MODELS=("frontnet")
+# PATCH_MODES=("optimal" "timeout" "random" "black" "white" "fap" "diffusion" "interpolation" "corpus")
 PATCH_MODES=("interpolation")
 TEMPERATURES=("warm" "cold")
 TRAJECTORIES=("figure8" "triangle" "u" "s" "slingshot_left")
-DISPLAY_SIZES=(60 80 100 120)
+DISPLAY_SIZES=(40 50 60 70 80 90 100 110 120)
 CORPUS_SIZES=(1000)
 PIC_MODES=("idx" "random")
-LOG_DIR="logs_yolov5"
-TIMEOUT_VALUES=(10)
 SEED_VALUES=(0 1 2)
+LOG_DIR="logs_frontnet"
+TIMEOUT_VALUES=(10)
 
 mkdir -p "${LOG_DIR}"
 
@@ -42,7 +42,7 @@ for MODEL in "${MODELS[@]}"; do
       TIMEOUT_LIST=("0")
     fi
 
-    if [ "${PATCH_MODE}" = "none" ] || [ "${PATCH_MODE}" = "optimal" ] ; then
+    if [ "${PATCH_MODE}" = "none" ] || [ "${PATCH_MODE}" = "optimal" ]; then
       DISPLAY_LIST=(60)
     else
       DISPLAY_LIST=("${DISPLAY_SIZES[@]}")
@@ -110,11 +110,11 @@ SUBMIT_DIR="$(pwd)"
 # Submit a single job array (limit concurrency with %50)
 sbatch <<EOF
 #!/bin/bash
-#SBATCH --job-name=usenix_yolov5
+#SBATCH --job-name=usenix_frontnet
 #SBATCH --partition=gpu-9m
 #SBATCH --gpus-per-node=1
 #SBATCH --constraint="80gb"
-#SBATCH --array=0-$((TOTAL_JOBS-1))
+#SBATCH --array=0-$((TOTAL_JOBS-1))%50
 #SBATCH --output=${ABS_LOG_DIR}/slurm_%A_%a.out
 #SBATCH --error=${ABS_LOG_DIR}/slurm_%A_%a.err
 #SBATCH --chdir=${SUBMIT_DIR}
@@ -141,7 +141,7 @@ echo "Starting task \${SLURM_ARRAY_JOB_ID}_\${SLURM_ARRAY_TASK_ID}"
 echo "Params: \${LINE}"
 
 apptainer run --nv container.sif \
-  bash -c "python main.py \
+  bash -c "python -m src.main \
     -m "\${MODEL}" \
     -t "\${TRAJ}" \
     --patch_mode "\${PATCH_MODE}" \
