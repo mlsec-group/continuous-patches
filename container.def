@@ -3,7 +3,6 @@ From: python:3.12.3
 
 %files
     $PWD/apptainer_requirements.txt apptainer_requirements.txt
-    ./uav_trajectories /uav_trajectories
 
 %post
     apt-get update && apt-get install -y \
@@ -16,15 +15,6 @@ From: python:3.12.3
     cmake \
     libeigen3-dev \
     libboost-all-dev
-
-    # Build the project
-    mkdir -p /uav_trajectories/build
-    cd /uav_trajectories/build
-    cmake ..
-    make
-
-    cd /
-
 
     pip install --root-user-action=ignore -r apptainer_requirements.txt
 

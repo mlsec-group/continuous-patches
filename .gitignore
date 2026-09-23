@@ -190,3 +190,15 @@ fap/
 frontnet/
 yolov5/
 temp_pid*
+overfit_results/
+raid_results/
+paper_results/
+flipped_diffusion/
+misc/
+*.npz
+*.npy
+*.tsv
+*.tex
+*.pth
+# Agent session scaffolding
+opencode_sesh.md

@@ -1,0 +1,365 @@
+import torch
+import torch.nn.functional as F
+import numpy as np
+import time
+import pickle
+from .simulation import T_matrix, normalize_yaw, calc_heading_vec
+import os
+
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+# --- Differentiable Grid Sample ---
+def _perspective_grid(coeffs, w, h, ow, oh, dtype, device):
+    batch_size = coeffs.shape[0]
+    theta1 = coeffs[..., :6].reshape(batch_size, 2, 3)
+    theta2 = coeffs[..., 6:].repeat_interleave(2, dim=0).reshape(batch_size, 2, 3)
+
+    d = 0.5
+    base_grid = torch.empty(batch_size, oh, ow, 3, dtype=dtype, device=device)
+    x_grid = torch.linspace(d, ow + d - 1.0, steps=ow, device=device, dtype=dtype)
+    base_grid[..., 0].copy_(x_grid)
+    y_grid = torch.linspace(d, oh + d - 1.0, steps=oh, device=device, dtype=dtype).unsqueeze_(-1)
+    base_grid[..., 1].copy_(y_grid)
+    base_grid[..., 2].fill_(1)
+
+    rescaled_theta1 = theta1.transpose(1, 2).div_(torch.tensor([0.5 * w, 0.5 * h], dtype=dtype, device=device))
+    shape = (batch_size, oh * ow, 3)
+    output_grid1 = base_grid.view(shape).bmm(rescaled_theta1)
+    output_grid2 = base_grid.view(shape).bmm(theta2.transpose(1, 2))
+
+    return output_grid1.div_(output_grid2).sub_(1.0).view(batch_size, oh, ow, 2)
+
+def project_patch(patches, T_matrices, images):
+    """Differentiable projection of patches onto images."""
+    device = patches.device
+    batch_size, _, p_height, p_width = patches.shape
+    i_height, i_width = images.shape[-2:]
+    
+    inv_T = torch.inverse(T_matrices)
+    coeffs = inv_T.reshape(batch_size, -1)
+    
+    grids = _perspective_grid(coeffs, p_width, p_height, i_width, i_height, torch.float32, device)
+    
+    transformed_patches = F.grid_sample(patches, grids, align_corners=False, padding_mode='zeros')
+    masks = torch.ones_like(patches)
+    transformed_masks = F.grid_sample(masks, grids, align_corners=False, padding_mode='zeros')
+    
+    return images * (1 - transformed_masks) + transformed_patches
+
+# --- Pose Calculation Helper (Shared) ---
+def get_pose_from_prediction(model_wrapper, image, current_drone_pose, cam_params):
+    """
+    Standardized logic to go from (Image) -> (Model Output) -> (World Pose).
+    Used by BOTH the Optimizer (for loss) and the Simulation Loop (for control).
+    """
+    device = current_drone_pose.device
+    
+    # 1. Frontnet Logic
+    if model_wrapper.name == 'frontnet':
+        # Output: (B, 4) -> x, y, z, yaw
+        pred_raw = model_wrapper.predict(image)
+        
+        T_drone = T_matrix(current_drone_pose)
+        T_pred_drone = T_matrix(pred_raw[0])
+        T_pred_world = T_drone @ T_pred_drone
+        
+        # Yaw logic: Frontnet predicts relative yaw, calculate heading vector
+        target_yaw = normalize_yaw(pred_raw[0, 3])
+        T_dir = torch.eye(4, device=device)
+        T_dir[:3, 3] = calc_heading_vec(1.0, normalize_yaw(target_yaw - torch.pi), device).squeeze()
+        
+        T_setpoint = T_dir @ T_pred_world
+        final_yaw = target_yaw
+        
+    # 2. YOLO Logic
+    elif model_wrapper.name == 'yolov5':
+        # Output: Boxes
+        boxes, _ = model_wrapper.predict(image)
+        
+        if boxes.shape[0] == 0: 
+            # Fallback if detection lost (stay in place)
+            return current_drone_pose 
+
+        # Scale 640 -> 160 metric (Intrinsics match 160x96)
+        scaled_boxes = boxes.clone()
+        scaled_boxes[:, [0, 2]] *= (160.0 / 640.0)
+        scaled_boxes[:, [1, 3]] *= (96.0 / 320.0)
+        
+        # Box -> XYZ (in Drone Frame)
+        xyz_yaw = cam_params.batch_xyz_from_boxes(scaled_boxes)
+        
+        T_drone = T_matrix(current_drone_pose)
+        T_rec_drone = T_matrix(xyz_yaw[0])
+        T_rec_world = T_drone @ T_rec_drone
+        
+        # Calculate Vector from Drone -> Box World Position
+        delta = T_rec_world[:3, 3] - current_drone_pose[:3]
+        
+        # Drone should face the box
+        final_yaw = torch.atan2(delta[1], delta[0]) * -1.0
+        
+        # Heading Vector
+        T_dir = torch.eye(4, device=device)
+        T_dir[:3, 3] = calc_heading_vec(1.0, normalize_yaw(final_yaw - torch.pi), device).squeeze()
+        
+        T_setpoint = T_dir @ T_rec_world
+
+    return torch.cat([T_setpoint[:3, 3], final_yaw.unsqueeze(0)])
+
+# --- Attacker Class ---
+class Attacker:
+    def __init__(self, args, model_wrapper, device, cam_params):
+        self.args = args
+        self.mode = args.patch_mode
+        self.model = model_wrapper
+        self.device = device
+        self.cam_params = cam_params
+        
+        self.patch_size = (150, 320) if args.model == 'yolov5' else (45, 80)
+        self.last_patch = None
+        
+        # Load Diffusion/Corpus models
+        if self.mode == 'diffusion':
+            from .diffusion.diffusion_model import DiffusionModel
+            # from diffusion.diffusion_overfit import normalize_condition
+            self.diff_model = DiffusionModel(device=device, patch_size=self.patch_size, prediction_model_name=args.model)
+            requested_corpus = getattr(args, 'corpus_size', 1000)
+            weight_path = f"{project_root}/flipped_diffusion/{args.model}/diffusion_model_{args.model}_{requested_corpus}.pth"
+            if not os.path.exists(weight_path):
+                fallback_path = f"{project_root}/flipped_diffusion/{args.model}/diffusion_model_{args.model}_1000.pth"
+                if os.path.exists(fallback_path):
+                    print(f"Warning: diffusion checkpoint not found at {weight_path}, falling back to {fallback_path}")
+                    weight_path = fallback_path
+            self.diff_model.load(weight_path)
+            self.diff_model.model.eval()
+            if self.model.name == "frontnet":
+                self.num_denoising_steps = 3
+            elif self.model.name == "yolov5":
+                self.num_denoising_steps = 3
+            
+        if self.mode in ['corpus', 'interpolation']:
+            data = np.load(f"{project_root}/{self.model.name}/corpus_{self.model.name}.npz")
+            patches_np = data['patches'].astype(np.float32)[:self.args.corpus_size]
+            targets_np = data['targets'].astype(np.float32)[:self.args.corpus_size]
+            conds_np = data['conds'].astype(np.float32)[:self.args.corpus_size]
+            cond_vector = np.concatenate([conds_np, targets_np], axis=1) 
+            patch_h, patch_w = patches_np.shape[1], patches_np.shape[2]
+            assert (patch_h, patch_w) == self.patch_size, "Corpus patch size mismatch."
+
+            self.corpus_patches = torch.tensor(patches_np, device=device, dtype=torch.float32).unsqueeze(1)  # (N, 1, H, W)
+            self.corpus_conds = torch.tensor(cond_vector, device=device, dtype=torch.float32)  # (N, 7)
+
+        if self.mode == 'fap':
+            import yaml
+            self.fap_patches = torch.tensor(np.load(f'{self.model.name}/fap/last_patch.npy')).to(device).unsqueeze(1)
+            probabilities_per_patch = np.load(f'{self.model.name}/fap/stats_p.npy')[-1]
+
+            # print("FAP probabilities per patch:", probabilities_per_patch)
+
+            self.assignment = {'forward': None, 'backward': None, 'stay': None, 'left': None, 'right': None}
+
+            # SETTINGS
+            with open(f'{self.model.name}/fap/settings.yaml') as f:
+                settings = yaml.load(f, Loader=yaml.FullLoader)
+
+            print("FAP settings loaded:", settings)
+
+            optim_targets = [values for _, values in settings['targets'].items()]
+            optim_targets = np.array(optim_targets, dtype=float).T
+
+            print("FAP optimization targets:", optim_targets)
+
+            for i, target in enumerate(optim_targets):
+                print("Processing FAP target:", target)
+                if np.array_equal(target[:3], np.array([1., 0., 0.])):
+                    self.assignment['stay'] = np.argmax(probabilities_per_patch[:, i])
+                elif np.array_equal(target[:3], np.array([1.5, 0., 0.])):
+                    self.assignment['forward'] = np.argmax(probabilities_per_patch[:, i])
+                elif np.array_equal(target[:3] , np.array([0.5, 0., 0.])):
+                    self.assignment['backward'] = np.argmax(probabilities_per_patch[:, i])
+                elif np.array_equal(target[:3], np.array([1., 1., 0.])):
+                    self.assignment['left'] = np.argmax(probabilities_per_patch[:, i])
+                elif np.array_equal(target[:3], np.array([1., -1., 0.])):
+                    self.assignment['right'] = np.argmax(probabilities_per_patch[:, i])
+                else:
+                    print("Unknown target:", target)
+
+            print("FAP patch assignment:", self.assignment)
+
+            # print(self.corpus_patches.shape, self.corpus_conds.shape)
+            
+    def generate(self, base_img, T, drone_pose, target_pose):
+        """
+        Generates and returns the patch.
+        If mode is 'optimal', runs the optimization loop here.
+        """
+        # 1. No Patch Mode (Clean)
+        if self.mode == 'none':
+            return None
+
+        # 2. Optimization Loop
+        if self.mode in ['velo', 'timeout']:
+            return self._optimize(base_img, T, drone_pose, target_pose)
+
+        # 3. Generative / Baseline (Single Step)
+        T_drone_world = T_matrix(drone_pose)
+        T_setpoint_world = T_matrix(target_pose)
+        # print("Target Yaw in World Frame: ", target_pose[3].item())
+        # print("Drone Yaw in World Frame: ", drone_pose[3].item())
+        target_yaw = target_pose[3]
+
+        # direction = torch.argmax(torch.abs(target_pose[:2]))  # 0 for x, 1 for y
+        # sign = torch.sign(target_pose[direction])
+
+        # target_pose = torch.tensor([0., 0., target_pose[2].item(), target_yaw.item()], device=self.device)
+
+        # target_pose[direction] = sign * 1.0  # 1 meter in the dominant direction, 0 in the other
+        
+        # if direction == 0:  # x direction dominant
+        #     target_pose[direction] -= 1.
+        # target_yaw = torch.atan2((target_pose[1] - drone_pose[1]), (target_pose[0] - drone_pose[0]))
+        # target_yaw = normalize_yaw(target_yaw)
+        # if self.mode == 'diffusion':
+        T_dir = torch.eye(4, device=self.device)
+        T_dir[:3, 3] = calc_heading_vec(1.0, normalize_yaw(target_yaw - torch.pi), device=self.device).squeeze()
+        T_pred_world = torch.inverse(T_dir) @ T_setpoint_world
+        T_pred_drone = torch.inverse(T_drone_world) @ T_pred_world
+        target_pose = torch.cat([T_pred_drone[:3, 3], target_yaw.unsqueeze(0)])
+        # print("Target Pose in Drone Frame: ", target_pose.detach().cpu().numpy())
+        patch = self._get_static_patch(T, target_pose)
+        return patch
+
+    def _get_static_patch(self, T, target_pose):
+        if self.mode == 'black': return torch.zeros((1, 1, *self.patch_size), device=self.device)
+        if self.mode == 'white': return torch.ones((1, 1, *self.patch_size), device=self.device)
+        if self.mode == 'random': return torch.rand((1, 1, *self.patch_size), device=self.device)
+
+        if self.mode in ['diffusion', 'corpus', 'interpolation']:
+            sf, tx, ty = T[0,0], T[0,2], T[1,2]
+            # print("target pose in drone frame: ", target_pose.detach().cpu().numpy())
+            cond = torch.tensor([[sf, tx, ty, *target_pose]], device=self.device) 
+            # print(f"Generating Patch with Condition: {cond.cpu().numpy()}")
+            # print("Number denoising steps:", self.num_denoising_steps)            
+            if self.mode == 'diffusion':
+                if self.model.name == 'frontnet':
+                    cond[:, 1] = (cond[:, 1]- -20.0) / (160.0 + 20.0)  # tx
+                    cond[:, 2] = (cond[:, 2]- -10.0) / (96.0 + 10.0)   # ty
+                elif self.model.name == 'yolov5':
+                    cond[:, 1] = (cond[:, 1]- -40.0) / (640.0 + 40.0)  # tx
+                    cond[:, 2] = (cond[:, 2]- -20.0) / (320.0 + 20.0)  # ty
+                with torch.no_grad(): 
+                    return self.diff_model.sample(1, cond, self.device, n_steps=self.num_denoising_steps)
+            if self.mode == 'corpus':
+                dists = torch.norm(self.corpus_conds - cond, dim=1)
+                return self.corpus_patches[torch.argmin(dists)].unsqueeze(0)
+            if self.mode == 'interpolation':
+                dists = torch.norm(self.corpus_conds - cond, dim=1)
+                topk = torch.topk(dists, k=2, largest=False)
+                patch1 = self.corpus_patches[topk.indices[0]].unsqueeze(0)
+                patch2 = self.corpus_patches[topk.indices[1]].unsqueeze(0)
+                w1 = 1.0 / (topk.values[0] + 1e-6)
+                w2 = 1.0 / (topk.values[1] + 1e-6)
+                patch = (patch1 * w1 + patch2 * w2) / (w1 + w2)
+                return patch
+
+        if self.mode == 'fap':
+            # Determine direction
+            # print("FAP target pose in drone frame: ", target_pose.detach().cpu().numpy())
+            print("FAP target position (x, y): ", target_pose[0].item(), target_pose[1].item())
+            delta_x = target_pose[0]  # x in drone frame
+            delta_y = target_pose[1]  # y in drone frame
+            print(f"FAP delta_x: {delta_x:.2f}, delta_y: {delta_y:.2f}")
+            direction = 'stay'
+            if abs(delta_x) > abs(delta_y):
+                if delta_x > 1.1:
+                    direction = 'forward'
+                elif delta_x < 0.9:
+                    direction = 'backward'
+            else:
+                if delta_y > 0.1:
+                    direction = 'left'
+                elif delta_y < -0.1:
+                    direction = 'right'
+
+            patch_idx = self.assignment[direction]
+            print(f"FAP selected direction: {direction}, patch shape: {self.fap_patches[patch_idx].shape}")
+            
+            return self.fap_patches[patch_idx]
+
+            # print(f"FAP selected direction: {direction}, patch index: {patch_idx}")
+
+
+        return torch.rand((1, 1, *self.patch_size), device=self.device)
+
+    def _optimize(self, base_img, T, drone_pose, target_pose, max_iters=3000):
+        """
+        The Optimization Loop. 
+        Minimizes distance between (Drone's Perceived Pose) and (Target Pose).
+        """
+        # Initialize patch
+        if self.args.temperature == 'warm' and self.last_patch is not None:
+            patch = self.last_patch.clone().detach().requires_grad_(True)
+        else:
+            patch = torch.rand((1, 1, *self.patch_size), device=self.device, requires_grad=True)
+            
+        opt = torch.optim.Adam([patch], lr=0.03)
+        scheduler = torch.optim.lr_scheduler.LinearLR(opt, start_factor=1e-2, end_factor=1., total_iters=max_iters//10)
+
+        timeout = 1.0 / self.args.timeout if self.args.timeout != 0 else 1e10
+        # print("Time limit for optimization (s):", timeout)
+        start_t = time.time()
+        
+        best_patch = patch.detach().clone()
+        best_dist = float('inf')
+
+        # Optimization Loop
+        for _ in range(max_iters): 
+            if time.time() - start_t > timeout: break
+            opt.zero_grad()
+
+            if self.model.name == 'yolov5':
+                base_img = torch.nn.functional.interpolate(base_img, size=(320, 640), mode='bilinear', align_corners=False)
+            
+            # print("base_img shape: ", base_img.shape, base_img.min(), base_img.max())
+            # print("patch shape: ", patch.shape, patch.min(), patch.max())
+            # print("T shape: ", T)
+
+
+            # 1. Project
+            manipulated = project_patch(patch, T.unsqueeze(0), base_img).clamp(0, 1)
+            
+            # 2. Predict (Get World Pose)
+            # We use the SHARED logic so the optimizer minimizes the EXACT metric used for control
+            pred_pose = get_pose_from_prediction(self.model, manipulated, drone_pose, self.cam_params)
+            # print("pred_pose: ", pred_pose)
+
+            # 3. Loss (Targeting)
+            # We want the drone to think it is at 'target_pose' (Kidnapping)
+            # or we want it to think it is somewhere else? 
+            # In 'optimal' mode as requested: "current point of target_trajectory is predicted"
+            # This implies Loss = Dist(Predicted, Target)
+            
+            dist = torch.dist(pred_pose[:3], target_pose[:3])
+            ang_loss = 1 - torch.cos(normalize_yaw(pred_pose[3]) - normalize_yaw(target_pose[3]))
+            
+            loss = dist + ang_loss
+            
+            if dist < best_dist:
+                best_dist = dist.item()
+                best_patch = patch.detach().clone()
+
+            if dist < 0.01:
+                best_dist = dist.item()
+                best_patch = patch.detach().clone()
+                break
+                
+            loss.backward()
+            patch.grad = patch.grad.sign()
+            opt.step()
+            patch.data.clamp_(0., 1.)
+            scheduler.step()
+
+            print(f"Optimization Step: Loss={loss.item():.4f}, Pos Error={dist.item():.4f}, Ang Error={ang_loss.item():.4f}", end='\r')
+            
+        self.last_patch = best_patch
+        return best_patch

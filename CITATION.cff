@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Controlling Autonomous Vehicles using Continuous Adversarial Patches"
+type: software
+authors:
+  - family-names: "Hanfeld"
+    given-names: "Pia"
+  - family-names: "Imgrund"
+    given-names: "Erik"
+  - family-names: "Weissberg"
+    given-names: "Felix"
+  - family-names: "Eisenhofer"
+    given-names: "Thorsten"
+  - family-names: "Hönig"
+    given-names: "Wolfgang"
+  - family-names: "Rieck"
+    given-names: "Konrad"
+year: 2026
+doi: "10.1145/3847352.3848104"
+keywords:
+  - "adversarial patches"
+  - "autonomous vehicles"
+  - "drone hijacking"
+  - "diffusion models"
+  - "adversarial attacks"
+license: MIT
