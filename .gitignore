@@ -195,7 +195,6 @@ raid_results/
 paper_results/
 flipped_diffusion/
 misc/
-*.txt
 *.npz
 *.npy
 *.tsv

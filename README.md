@@ -93,7 +93,7 @@ Each configuration is repeated across three random seeds (`--seed 0 1 2`); resul
    - `pulp-frontnet/PyTorch/Data/160x96StrangersTestset.pickle` (expected SHA256 in `Data/checksums.txt`)
    - `misc/IMRC_images.pickle` (dataset extension used by `src/util.py`)
 3. Train the diffusion model (Step 1 below). Trained weights are **not released** — see Open Science note at the bottom.
-4. Only for the FAP baseline (Table 1): place pre-computed Flying-Adversarial-Patch artifacts in `{frontnet,yolov5}/fap/` (`last_patch.npy`, `stats_p.npy`, `settings.yaml`).
+4. FAP baseline: TODO docu
 
 ### Step 1: Train the diffusion model
 
@@ -107,8 +107,8 @@ python -m src.diffusion.diffusion_overfit --model yolov5 --corpus_size 1000 --ba
 
 - Output: `flipped_diffusion/{model}/diffusion_model_{model}_1000.pth` (plus loss curves and sample grids in the same directory).
 - The paper reports training on an NVIDIA A100 for under 4 hours (1000 epochs, batch size 32, Adam lr 1e-4). The script currently trains for 2000 epochs with a fixed Adam lr of 1e-3 — adjust in `src/diffusion/diffusion_overfit.py` if you want the exact paper hyperparameters.
-- The script loads `{model}/corpus_{model}.npz` if present, otherwise builds the corpus from `temp_pid_*/sample_*.npz` files left by prior optimization runs.
-- **TODO**: a standalone script to generate the 1000 optimal PGD patches (Eq. 9 in the paper) from scratch; the corpus generation currently relies on the `temp_pid_*` samples.
+- The script loads `{model}/corpus_{model}.npz` if present
+- **TODO**: FAP integration documentation to generate `{model}/corpus_{model}.npz`
 
 Sanity-check the trained model:
 ```bash
@@ -208,7 +208,7 @@ All baselines share the same trajectory/display/seed settings; only `--patch_mod
 
 ## Legacy code
 
-`src/diffusion/legacy/` contains experimental scripts from earlier development phases that are not part of this artifact and may not run against the current codebase; see the README in that directory.
+`src/diffusion/legacy/` contains experimental scripts from earlier development phases that are not part of the main code and may not run against the current codebase; see the README in that directory.
 
 ## Third-party code
 

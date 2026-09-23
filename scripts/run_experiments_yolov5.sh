@@ -114,7 +114,7 @@ sbatch <<EOF
 #SBATCH --partition=gpu-9m
 #SBATCH --gpus-per-node=1
 #SBATCH --constraint="80gb"
-#SBATCH --array=0-$((TOTAL_JOBS-1))
+#SBATCH --array=0-$((TOTAL_JOBS-1))%50
 #SBATCH --output=${ABS_LOG_DIR}/slurm_%A_%a.out
 #SBATCH --error=${ABS_LOG_DIR}/slurm_%A_%a.err
 #SBATCH --chdir=${SUBMIT_DIR}

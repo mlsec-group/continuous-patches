@@ -200,7 +200,7 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
         # ==========================================================================
         sample_paths = sorted(glob.glob(f"{project_root}/{model_name}/temp_pid_*/sample_*.npz"))
         if not sample_paths:
-            print("Error: no samples found in temp_pid_* folders.")
+            print(f"Error: No corpus found and no temp samples available. Please provide corpus at {project_root}/{model_name}/corpus_{model_name}.npz")
             return
 
         
@@ -528,10 +528,8 @@ def train_batch_overfit(model_name='frontnet', corpus_size=1000, batch_size=64):
                 prediction = torch.cat([prediction[:, :3], yaw_tensor.unsqueeze(1)], dim=1)
                 # print("Prediction:", prediction)
                 
-                # control_loss = F.mse_loss(prediction[:, :3], target_positions[:, :3])
-                # angular_loss = (1 - torch.cos(normalize_yaw_t(prediction[:, 3]) - normalize_yaw_t(target_positions[:, 3]))).mean()
-                # control_loss = control_loss + angular_loss
-                # control_loss = control_loss * 20.
+                # For YOLO, compare position only (yaw is computed from box position, not target)
+                # This matches the actual output semantics of batch_xyz_from_boxes()
                 control_loss = F.pairwise_distance(prediction[:, :3], target_positions[:, :3])
                 angular_loss = (1 - torch.cos(normalize_yaw_t(prediction[:, 3]) - normalize_yaw_t(target_positions[:, 3])))
                 control_loss = control_loss + angular_loss

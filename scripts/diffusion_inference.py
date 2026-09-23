@@ -61,18 +61,20 @@ def check_generalization(
     model.load(model_path)
     model.model.eval()
 
-    if os.path.exists(f"{project_root}/{prediction_model_name}/corpus_{prediction_model_name}.npz"):
-        # ==========================================================================
-        # 1. LOAD PRE-SAVED CORPUS
-        # ==========================================================================
-        print(f"Loading pre-saved corpus for {prediction_model_name}...")
-        data = np.load(f"{project_root}/{prediction_model_name}/corpus_{prediction_model_name}.npz")
-        patches_np = data['patches'].astype(np.float32)[:]
-        targets_np = data['targets'].astype(np.float32)[:]
-        conds_np = data['conds'].astype(np.float32)[:]
-        patch_h, patch_w = patches_np.shape[1], patches_np.shape[2]
-        print(f"Loaded dataset: {patches_np.shape[0]} samples of size ({patch_h}, {patch_w})")
-
+    if not os.path.exists(f"{project_root}/{prediction_model_name}/corpus_{prediction_model_name}.npz"):
+        print(f"Error: Corpus not found. Please run diffusion training first or provide corpus at {project_root}/{prediction_model_name}/corpus_{prediction_model_name}.npz")
+        sys.exit(1)
+    
+    # ==========================================================================
+    # 1. LOAD PRE-SAVED CORPUS
+    # ==========================================================================
+    print(f"Loading pre-saved corpus for {prediction_model_name}...")
+    data = np.load(f"{project_root}/{prediction_model_name}/corpus_{prediction_model_name}.npz")
+    patches_np = data['patches'].astype(np.float32)[:]
+    targets_np = data['targets'].astype(np.float32)[:]
+    conds_np = data['conds'].astype(np.float32)[:]
+    patch_h, patch_w = patches_np.shape[1], patches_np.shape[2]
+    print(f"Loaded dataset: {patches_np.shape[0]} samples of size ({patch_h}, {patch_w})")
 
     cond_vector = np.concatenate([conds_np, targets_np], axis=1)  # (B, 7)
 

@@ -118,8 +118,8 @@ def compute_frechet_distance(target_traj: torch.tensor, actual_traj: torch.tenso
 base_path = f"{project_root}/paper_results"
 print("Base path: ", base_path)
 
-MODELS = ("frontnet", )
-PATCH_MODES = ("random", "black", "timeout", "velo", "diffusion", "optimal", "corpus", "none")
+MODELS = ("frontnet", "yolov5")
+PATCH_MODES = ("random", "black", "timeout", "velo", "diffusion", "optimal", "corpus", "none", "interpolation", "fap")
 TEMPERATURES = ("warm", "cold")
 TRAJECTORIES = ("figure8", "triangle", "u", "s", "slingshot_left")
 DISPLAY_SIZES = (40, 50, 60, 70, 80, 90, 100, 110, 120)
@@ -152,26 +152,6 @@ for model in MODELS:
                                     found_files.append((model, f"{patch_mode}", temperature, trajectory, f"{display_size}", pic_mode, seed))
                                 else:
                                     missing_combinations.append((model, f"{patch_mode}", temperature, trajectory, f"{display_size}", pic_mode, seed))
-        if patch_mode == "velo":
-            for temperature in TEMPERATURES:
-                for trajectory in TRAJECTORIES:
-                    for display_size in DISPLAY_SIZES:
-                        for pic_mode in PIC_MODES:
-                            if pic_mode == "image":
-                                for image_index in IMAGE_IDX:
-                                    for seed in SEEDS:
-                                        file_path = os.path.join(base_path, model, patch_mode, temperature, trajectory, f"{display_size}", f"{pic_mode}_{image_index}", str(seed), "all_drone_poses.npy")
-                                        if os.path.isfile(file_path):
-                                            found_files.append((model, patch_mode, temperature, trajectory, f"{display_size}", f"{pic_mode}_{image_index}", seed))
-                                        else:
-                                            missing_combinations.append((model, patch_mode, temperature, trajectory, f"{display_size}", f"{pic_mode}_{image_index}", seed))
-                            else:  # random pic_mode
-                                for seed in SEEDS:
-                                    file_path = os.path.join(base_path, model, patch_mode, temperature, trajectory, f"{display_size}", pic_mode, str(seed), "all_drone_poses.npy")
-                                    if os.path.isfile(file_path):
-                                        found_files.append((model, patch_mode, temperature, trajectory, f"{display_size}", pic_mode, seed))
-                                    else:
-                                        missing_combinations.append((model, patch_mode, temperature, trajectory, f"{display_size}", pic_mode, seed))
         else:  # random and black patch modes
             for trajectory in TRAJECTORIES:
                 for display_size in DISPLAY_SIZES:
@@ -212,109 +192,130 @@ target_trajectories = {"figure8": gen_target_trajectory("figure8"),
                        "slingshot_left": gen_target_trajectory("slingshot_left")}
 
 
-# check if .csv and .pkl already exist
+# check if .csv and .pkl already exist for each model
 # if so, load rows from there to avoid recomputation
-if os.path.isfile(os.path.join(base_path, "all_results_frontnet.csv")) and os.path.isfile(os.path.join(base_path, "all_results_frontnet.pkl")):
-    print("Loading existing results from CSV and PKL...")
-    df_existing = pd.read_csv(os.path.join(base_path, "all_results_frontnet.csv"))
-    rows = df_existing.to_dict('records')
-    print(f"Loaded {len(rows)} existing result rows.")
+all_rows = {}
+for model in MODELS:
+    csv_path = os.path.join(base_path, f"all_results_{model}.csv")
+    pkl_path = os.path.join(base_path, f"all_results_{model}.pkl")
+    if os.path.isfile(csv_path) and os.path.isfile(pkl_path):
+        print(f"Loading existing results for {model} from CSV and PKL...")
+        df_existing = pd.read_csv(csv_path)
+        all_rows[model] = df_existing.to_dict('records')
+        print(f"Loaded {len(all_rows[model])} existing result rows for {model}.")
+    else:
+        all_rows[model] = []
 
-    set_existing_files = set()
-    for row in rows:
-        if row["temperature"] != "":
-            set_existing_files.add((row["model"], row["patch_mode"], row["temperature"], row["trajectory"], str(row["display_size"]), f"{row['pic_mode']}_{row['image_index']}" if row['pic_mode']=="image" else row['pic_mode'], row["seed"]))
+# Process files per model
+files_per_model = {model: [] for model in MODELS}
+for f in found_files:
+    model = f[0]
+    if model in MODELS:
+        # Normalize to 7-tuple format
+        if len(f) == 6:
+            files_per_model[model].append((f[0], f[1], "", f[2], f[3], f[4], f[5]))
         else:
-            set_existing_files.add((row["model"], row["patch_mode"], row["trajectory"], str(row["display_size"]), f"{row['pic_mode']}_{row['image_index']}" if row['pic_mode']=="image" else row['pic_mode'], row["seed"]))
-    # Filter found_files to only those not already in existing results
-    found_files = [f for f in found_files if f not in set_existing_files]
-    print(f"{len(found_files)} files remain to be processed after filtering existing results.")
+            files_per_model[model].append(f)
 
-else:
-    rows = []
+# Filter out already processed files per model
+for model in MODELS:
+    if all_rows[model]:
+        set_existing_files = set()
+        for row in all_rows[model]:
+            pic_mode_image = f"{row['pic_mode']}_{row['image_index']}" if row['pic_mode']=="image" and row.get('image_index') is not None else row['pic_mode']
+            if row["temperature"] != "" and row["temperature"] is not None:
+                set_existing_files.add((row["model"], row["patch_mode"], row["temperature"], row["trajectory"], str(row["display_size"]), pic_mode_image, row["seed"]))
+            else:
+                set_existing_files.add((row["model"], row["patch_mode"], "", row["trajectory"], str(row["display_size"]), pic_mode_image, row["seed"]))
+        files_per_model[model] = [f for f in files_per_model[model] if f not in set_existing_files]
+        print(f"{len(files_per_model[model])} files remain to be processed for {model} after filtering existing results.")
 
-for file_info in tqdm(found_files):
-    # Normalize tuple shapes: with temperature -> len 7, without -> len 6
-    if len(file_info) == 7:
-        model, patch_mode, temperature, trajectory, display_size, pic_mode_image, seed = file_info
-        temp_in_path = True
-    else:
-        model, patch_mode, trajectory, display_size, pic_mode_image, seed = file_info
-        temperature = ""
-        temp_in_path = False
+rows = []
 
+for model in MODELS:
+    for file_info in tqdm(files_per_model[model], desc=f"Processing {model}"):
+        # All tuples are normalized to 7-tuple format
+        model_name, patch_mode, temperature, trajectory, display_size, pic_mode_image, seed = file_info
+        temp_in_path = temperature != ""
 
-
-    # Determine pic_mode and image_index
-    if isinstance(pic_mode_image, str) and pic_mode_image.startswith("image_"):
-        pic_mode = "image"
-        try:
-            image_index = int(pic_mode_image.split("_", 1)[1])
-        except Exception:
+        # Determine pic_mode and image_index
+        if isinstance(pic_mode_image, str) and pic_mode_image.startswith("image_"):
+            pic_mode = "image"
+            try:
+                image_index = int(pic_mode_image.split("_", 1)[1])
+            except Exception:
+                image_index = None
+        else:
+            pic_mode = pic_mode_image if pic_mode_image in ("random", "image") else "random"
             image_index = None
-    else:
-        pic_mode = pic_mode_image if pic_mode_image in ("random", "image") else "random"
-        image_index = None
 
-    # Build file_path depending on whether temperature is part of the path
-    if temp_in_path:
-        file_path = os.path.join(base_path, model, patch_mode, temperature, trajectory, str(display_size), pic_mode_image, str(seed), "all_drone_poses.npy")
-    else:
-        file_path = os.path.join(base_path, model, patch_mode, trajectory, str(display_size), pic_mode_image, str(seed), "all_drone_poses.npy")
+        # Build file_path depending on whether temperature is part of the path
+        if temp_in_path:
+            file_path = os.path.join(base_path, model_name, patch_mode, temperature, trajectory, str(display_size), pic_mode_image, str(seed), "all_drone_poses.npy")
+        else:
+            file_path = os.path.join(base_path, model_name, patch_mode, trajectory, str(display_size), pic_mode_image, str(seed), "all_drone_poses.npy")
 
-    if not os.path.isfile(file_path):
-        # Skip if file unexpectedly missing
-        missing_combinations.append((model, patch_mode, temperature if temp_in_path else None, trajectory, display_size, pic_mode_image, seed))
-        continue
+        if not os.path.isfile(file_path):
+            # Skip if file unexpectedly missing
+            missing_combinations.append((model_name, patch_mode, temperature if temp_in_path else None, trajectory, display_size, pic_mode_image, seed))
+            continue
 
-    try:
-        drone_poses = np.load(file_path)
-    except Exception as e:
-        print("Failed to load:", file_path, "error:", e)
-        missing_combinations.append((model, patch_mode, temperature if temp_in_path else None, trajectory, display_size, pic_mode_image, seed))
-        continue
+        try:
+            drone_poses = np.load(file_path)
+        except Exception as e:
+            print("Failed to load:", file_path, "error:", e)
+            missing_combinations.append((model_name, patch_mode, temperature if temp_in_path else None, trajectory, display_size, pic_mode_image, seed))
+            continue
 
-    drone_poses = torch.tensor(drone_poses, dtype=torch.float32)
-    target_traj = target_trajectories[trajectory]
+        drone_poses = torch.tensor(drone_poses, dtype=torch.float32)
+        target_traj = target_trajectories[trajectory]
 
-    dtw_score = compute_dtw_distance(target_traj[:, :3], drone_poses[:, :3]).item()
-    frechet_score = compute_frechet_distance(target_traj[:, :3], drone_poses[:, :3]).item()
+        dtw_score = compute_dtw_distance(target_traj[:, :3], drone_poses[:, :3]).item()
+        frechet_score = compute_frechet_distance(target_traj[:, :3], drone_poses[:, :3]).item()
 
-    mean_time_per_step = np.mean(np.load(file_path.replace("all_drone_poses.npy", "time_per_step.npy")))
+        mean_time_per_step = np.mean(np.load(file_path.replace("all_drone_poses.npy", "time_per_step.npy")))
 
-    # Save per-file score arrays (preserve existing behavior)
-    np.save(file_path.replace("all_drone_poses.npy", "dtw_score.npy"), np.array(dtw_score))
-    np.save(file_path.replace("all_drone_poses.npy", "frechet_score.npy"), np.array(frechet_score))
+        # Save per-file score arrays (preserve existing behavior)
+        np.save(file_path.replace("all_drone_poses.npy", "dtw_score.npy"), np.array(dtw_score))
+        np.save(file_path.replace("all_drone_poses.npy", "frechet_score.npy"), np.array(frechet_score))
 
-    # Append row
-    rows.append({
-        "model": model,
-        "patch_mode": patch_mode,
-        "temperature": temperature if temp_in_path else "cold",
-        "trajectory": trajectory,
-        "display_size": int(display_size) if str(display_size).isdigit() else display_size,
-        "pic_mode": pic_mode,
-        "image_index": image_index,
-        "seed": int(seed),
-        "file_path": file_path,
-        "dtw": float(dtw_score),
-        "frechet": float(frechet_score),
-        "mean_time_per_step": float(mean_time_per_step)
-    })
+        # Append row
+        rows.append({
+            "model": model_name,
+            "patch_mode": patch_mode,
+            "temperature": temperature if temp_in_path else "cold",
+            "trajectory": trajectory,
+            "display_size": int(display_size) if str(display_size).isdigit() else display_size,
+            "pic_mode": pic_mode,
+            "image_index": image_index,
+            "seed": int(seed),
+            "file_path": file_path,
+            "dtw": float(dtw_score),
+            "frechet": float(frechet_score),
+            "mean_time_per_step": float(mean_time_per_step)
+        })
 
-    # print("Saved scores for file: ", file_path)
+        # print("Saved scores for file: ", file_path)
 
 
- # save missing combinations to a csv for reference
+# save missing combinations to a csv for reference
 missing_df = pd.DataFrame(missing_combinations, columns=["model", "patch_mode", "temperature", "trajectory", "display_size", "pic_mode_image", "seed"])
-missing_df.to_csv(os.path.join(base_path, "missing_combinations_frontnet.csv"), index=False)
-print(f"Wrote missing combinations to CSV: {os.path.join(base_path, 'missing_combinations_frontnet.csv')}")
+missing_df.to_csv(os.path.join(base_path, "missing_combinations.csv"), index=False)
+print(f"Wrote missing combinations to CSV: {os.path.join(base_path, 'missing_combinations.csv')}")
 
-# Build DataFrame and persist
-df = pd.DataFrame(rows)
-csv_fp = os.path.join(base_path, "all_results_frontnet.csv")
-pkl_fp = os.path.join(base_path, "all_results_frontnet.pkl")
-df.to_csv(csv_fp, index=False)
-df.to_pickle(pkl_fp)
-
-print(f"Wrote aggregated results: {csv_fp} ({len(df)} rows)")
+# Build DataFrame and persist per model
+for model in MODELS:
+    model_rows = [r for r in rows if r["model"] == model]
+    if not model_rows:
+        # If no new rows, check if we have existing rows
+        model_rows = all_rows.get(model, [])
+    
+    if model_rows:
+        df = pd.DataFrame(model_rows)
+        csv_fp = os.path.join(base_path, f"all_results_{model}.csv")
+        pkl_fp = os.path.join(base_path, f"all_results_{model}.pkl")
+        df.to_csv(csv_fp, index=False)
+        df.to_pickle(pkl_fp)
+        print(f"Wrote aggregated results for {model}: {csv_fp} ({len(df)} rows)")
+    else:
+        print(f"No results to write for {model}")

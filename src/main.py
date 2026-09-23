@@ -4,6 +4,7 @@ import numpy as np
 import argparse
 import os
 import time
+import random
 from pathlib import Path
 from tqdm import tqdm
 from matplotlib import pyplot as plt
@@ -15,6 +16,14 @@ from .util import load_dataset, load_model, gen_target_trajectory
 from .yolo_bounding import YOLOBox
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+def set_seed(seed: int):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 class ModelWrapper:
     def __init__(self, name, device):
@@ -36,6 +45,7 @@ class ModelWrapper:
             return self.model(img_resize, target_anchor=None) 
 
 def run_experiment(args):
+    set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # 1. Setup
